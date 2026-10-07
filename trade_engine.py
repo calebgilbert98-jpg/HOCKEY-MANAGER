@@ -9,6 +9,21 @@ import random
 from dataclasses import dataclass, field
 from typing import (List, Tuple)
 
+# Hoisted to module level (perf, Bot #20): player_trade_value() is called
+# ~12k times per sim day; function-level imports added measurable overhead
+# per call. None of these modules import trade_engine at top level (only
+# deferred function-level imports), so there is no circularity.
+import reputation_system as _reputation_system
+import rfa_system as _rfa_system
+from game_classes import DraftPick, PlayerPosition
+from salary_cap_system import league_minimum_salary as _league_minimum_salary
+try:
+    from attribute_composites import tier_proxy_overall as _tier_proxy_overall
+    from attribute_composites import talent_tier as _talent_tier
+except Exception:
+    _tier_proxy_overall = None
+    _talent_tier = None
+
 
 # ---------------------------------------------------------------------------
 # Valuation
@@ -1111,8 +1126,7 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     # Expected salary mirrors the market-value curve (100-point scale),
     # floored at the league minimum from the canonical cap system.
     try:
-        from salary_cap_system import league_minimum_salary as _min_fn
-        _MIN_SAL = _min_fn()
+        _MIN_SAL = _league_minimum_salary()
     except Exception:
         _MIN_SAL = 775_000
     expected = max(_MIN_SAL, (ovr - 60) * 250_000)
@@ -1123,14 +1137,12 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
 
     # Volatility tax: hotheads cost less, but a superstar is worth the headache.
     try:
-        import reputation_system as _rs
-        base *= _rs.volatility_trade_discount(player)
+        base *= _reputation_system.volatility_trade_discount(player)
     except Exception:
         pass
 
     # Goalies: fewer roster spots, slight premium for starters (80+ overall).
     try:
-        from game_classes import PlayerPosition
         if player.primary_position == PlayerPosition.GOALIE and ovr >= 80:
             base *= 1.15
     except Exception:
@@ -1167,8 +1179,7 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     # untouched; only impasse RFAs (rfa_system.rfa_rights_at_impasse)
     # see this line.
     try:
-        import rfa_system as _rfa_mod
-        if _rfa_mod.rfa_rights_at_impasse(player):
+        if _rfa_system.rfa_rights_at_impasse(player):
             base *= RFA_IMPASSE_RIGHTS_MULT
     except Exception:
         pass
@@ -1260,8 +1271,7 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
     except Exception:
         salary = 0
     try:
-        from salary_cap_system import league_minimum_salary as _min_fn
-        _MIN_SAL = _min_fn()
+        _MIN_SAL = _league_minimum_salary()
     except Exception:
         _MIN_SAL = 775_000
     try:
@@ -1287,8 +1297,7 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         running = _new
 
     try:
-        import reputation_system as _rs
-        _vol_mult = float(_rs.volatility_trade_discount(player))
+        _vol_mult = float(_reputation_system.volatility_trade_discount(player))
     except Exception:
         _vol_mult = 1.0
     if _vol_mult != 1.0:
@@ -1301,7 +1310,6 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         running = _new
 
     try:
-        from game_classes import PlayerPosition
         _is_goalie = (player.primary_position == PlayerPosition.GOALIE
                       and _ovr >= 80)
     except Exception:
@@ -1345,8 +1353,7 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         running = _new
 
     try:
-        import rfa_system as _rfa_mod
-        _impasse = bool(_rfa_mod.rfa_rights_at_impasse(player))
+        _impasse = bool(_rfa_system.rfa_rights_at_impasse(player))
     except Exception:
         _impasse = False
     if _impasse:
@@ -1553,7 +1560,6 @@ def project_pick_slots(league) -> int:
 
 def asset_label(asset) -> str:
     """Human label for a player or pick asset."""
-    from game_classes import DraftPick
     if isinstance(asset, DraftPick):
         desc = asset.description
         prot = protection_label(getattr(asset, "protection", ""))
@@ -1564,8 +1570,7 @@ def asset_label(asset) -> str:
             _proj = 0
         if _proj:
             try:
-                from attribute_composites import talent_tier as _tier_fn2
-                _ptier = _tier_fn2(_proj)
+                _ptier = _talent_tier(_proj)
             except Exception:
                 _ptier = "Decent"
             label += f" [proj. {_ptier}]"
@@ -1592,7 +1597,6 @@ def asset_label(asset) -> str:
 
 
 def asset_value(asset, perceiver_team=None, trade_context=False) -> int:
-    from game_classes import DraftPick
     if isinstance(asset, DraftPick):
         return pick_trade_value(asset)
     # perceiver_team/trade_context accepted for API compatibility; valuation
@@ -1611,12 +1615,8 @@ def team_needs(team) -> List[str]:
     Tier-based (Muck 2026-10-01): positional strength from tier
     representatives -- the AI reads its own roster the way the human does.
     """
-    from game_classes import PlayerPosition
     groups = {'LW': [], 'C': [], 'RW': [], 'LD': [], 'RD': [], 'G': []}
-    try:
-        from attribute_composites import tier_proxy_overall as _tpo
-    except Exception:
-        _tpo = None
+    _tpo = _tier_proxy_overall
     for p in getattr(team, 'roster', []):
         try:
             pos = p.primary_position.value
@@ -1833,7 +1833,6 @@ def _cap_ok_after(team, outgoing, incoming, retention=None) -> bool:
 
 
 def _is_pick(asset) -> bool:
-    from game_classes import DraftPick
     return isinstance(asset, DraftPick)
 
 
@@ -2214,7 +2213,6 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     terms; the AI's cap check sees the reduced incoming hit, exactly
     like a real GM pricing retained money.
     """
-    from game_classes import DraftPick
     # The AI evaluates through its own eyes: its players truly, the human's
     # fogged (same scouting fog the human gets). Tier-quantized throughout.
     ev = evaluate_trade(user_assets, partner_assets,
@@ -2620,7 +2618,6 @@ def trade_talking_points(team, incoming, outgoing, partner=None,
             needs = []
         _filled = []
         try:
-            from game_classes import DraftPick
             for a in incoming:
                 if isinstance(a, DraftPick):
                     continue
@@ -2828,7 +2825,6 @@ def clause_annual_value(player, kind):
         return 0
     try:
         from salary_cap_system import league_minimum_salary as _min_fn2
-        from attribute_composites import tier_proxy_overall as _tpo2
         _q = _tpo2(player.overall_rating())
         base = max(_min_fn2(), (_q - 60) * 250_000)
     except Exception:
@@ -2904,7 +2900,6 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     asset must actually be owned by the side trading it. Anything illegal
     blocks the whole deal; no assets move.
     """
-    from game_classes import DraftPick
 
     # True-CBA 75-day double-retention clock: regular-season windows from
     # the league schedule (opening night -> last game), so the clock
@@ -3348,11 +3343,8 @@ def _maybe_fire_trade_speculation(league, user_team, partner_team,
 def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                         date_str, league) -> None:
     """One integration point for all post-trade effects. Idempotent."""
-    from game_classes import DraftPick
-    try:
-        import reputation_system as _rs
-    except ImportError:
-        return
+    # (Bot #20: reputation_system import hoisted to module level; the old
+    # try/except ImportError guard is obsolete.)
     teams = []
     try:
         teams = list(getattr(league, "teams", []) or [])
@@ -3380,7 +3372,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
             pass
         # Fresh start: the rescue payoff.
         try:
-            _rs.apply_fresh_start(player, old_team, new_team, teams=teams)
+            _reputation_system.apply_fresh_start(player, old_team, new_team, teams=teams)
         except Exception:
             pass
         # Rivalry lifecycle: a player changes sweaters. Personal bad
@@ -3390,7 +3382,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
         try:
             _rivs = getattr(league, "rivalries", None)
             if isinstance(_rivs, list):
-                _rs.on_player_transfer(_rivs, player, old_team, new_team)
+                _reputation_system.on_player_transfer(_rivs, player, old_team, new_team)
         except Exception:
             pass
         # Dressing-room cascade (module 03): the old room reacts to the
@@ -3412,7 +3404,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                 enriched.setdefault("value_score", 0.0)
                 enriched["selling_team"] = getattr(
                     old_team, "team_name", "")
-                _rs.watch_steal_candidate(player, new_team, enriched,
+                _reputation_system.watch_steal_candidate(player, new_team, enriched,
                                           date_str)
                 # The watch owns this call now: mark the ledger read
                 # acted-on so the monthly grader never grades it twice.
@@ -3434,7 +3426,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
             if stip is not None:
                 senriched = dict(stip)
                 senriched.setdefault("signals", [])
-                _rs.watch_sell_candidate(player, old_team, new_team,
+                _reputation_system.watch_sell_candidate(player, old_team, new_team,
                                          senriched, date_str)
                 try:
                     import analytics_scouting as _as

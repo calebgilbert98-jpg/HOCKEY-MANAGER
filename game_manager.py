@@ -9144,6 +9144,598 @@ NHL League Office""",
             self.open_windows['waivers'].populate_eligible_players()
             self.open_windows['waivers'].populate_waiver_wire()
 
+    def process_scouting_assignments(self):
+        """Process all active scouting assignments for the day.
+
+        Ported from HockeyManagerGUI.process_scouting_assignments (main.py);
+        Tk window refresh replaced with the _ui_notify hook.
+        """
+        import random
+        assignments = getattr(self, "scouting_assignments", None)
+        if not assignments:
+            return  # No assignments to process
+        user_team = getattr(self, "user_team", None)
+        if user_team is None:
+            return
+        if not hasattr(user_team, "scouting_reports"):
+            user_team.scouting_reports = {}
+
+        # Each day, scouts have a chance to watch the players they're assigned to
+        for player, scout in list(assignments.items()):
+            try:
+                pid = getattr(player, "id", None) or getattr(player, "player_id", None)
+                # Check if player already has a scouting report
+                if pid not in user_team.scouting_reports:
+                    # Create new report if none exists
+                    user_team.scouting_reports[pid] = ScoutingReport(
+                        player=player,
+                        scout=scout
+                    )
+
+                # Get the existing report
+                report = user_team.scouting_reports[pid]
+
+                # Determine if scout makes progress today (random chance)
+                # Better scouts work faster
+                scout_efficiency = (getattr(scout, "judging_player_ability", 50)
+                                    + getattr(scout, "judging_player_potential", 50)) / 40
+                viewing_chance = 0.25 * scout_efficiency  # 25% base chance adjusted by scout skill
+
+                if random.random() < viewing_chance:
+                    # Scout viewed the player today, update the report
+                    report.update_report(player, scout)
+
+                    # Once a report reaches 'A' accuracy, remove the assignment
+                    if getattr(report, "accuracy", None) == 'A':
+                        del assignments[player]
+
+                        # Add a news item
+                        news_item = {
+                            'date': self.current_date,
+                            'type': 'scouting',
+                            'story': f"Scouting Report: {getattr(scout, 'full_name', 'A scout')} has completed a comprehensive "
+                            + f"evaluation of {getattr(player, 'full_name', 'a prospect')}. "
+                            + f"Projected potential: {getattr(report, 'scouted_potential', 'unknown')}."
+                        }
+                        self.news_log.append(news_item)
+            except Exception:
+                continue
+
+        # Notify UI (native Qt or Tk) to refresh any open scouting view
+        try:
+            self._ui_notify("scouting_reports_updated", {})
+        except Exception:
+            pass
+
+    def _audit_season_slate(self):
+        """SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005).
+
+        Compare every NHL club's games played against its ACTUALLY
+        SCHEDULED regular-season games (counted from league.schedule).
+        This is version-proof: an 82-game schedule expects 82 even when
+        the code default has moved to 84 (mid-save slate changes must not
+        halt a legitimately completed season). Dropped games are still
+        caught -- played < scheduled flags regardless of slate length.
+        Falls back to season_games_count when the schedule is unavailable.
+        Returns [(team_name, gp, target)] -- [] when the season is whole.
+        A club missing from the standings entirely counts as 0 GP.
+        """
+        shortfalls = []
+        try:
+            _lg = getattr(self, 'league', None)
+            _standings = getattr(_lg, 'standings', None) or {}
+            _nhl_names = {t.team_name
+                          for t in (getattr(_lg, 'teams', None) or [])
+                          if getattr(t, 'league_name', '')
+                          == 'National Hockey League'}
+
+            # Count scheduled regular-season NHL games per team.
+            _scheduled = {}
+            try:
+                for _e in (getattr(_lg, 'schedule', None) or []):
+                    if not isinstance(_e, dict):
+                        continue
+                    if _e.get('preseason'):
+                        continue
+                    # BUG-002 fix (2026-10-03): playoff games are not
+                    # regular-season games; they must not count toward
+                    # the 84-game slate target.
+                    if _e.get('playoff'):
+                        continue
+                    _h = _e.get('home_team')
+                    _a = _e.get('away_team')
+                    _hn = (getattr(_h, 'team_name', None)
+                           or (str(_h) if _h else None))
+                    _an = (getattr(_a, 'team_name', None)
+                           or (str(_a) if _a else None))
+                    for _nm in (_hn, _an):
+                        if _nm in _nhl_names:
+                            _scheduled[_nm] = _scheduled.get(_nm, 0) + 1
+            except Exception:
+                _scheduled = {}
+
+            # Fallback target when the schedule can't be counted.
+            _fallback = getattr(_lg, 'season_games_count', None)
+            if _fallback is None:
+                _fallback = getattr(self, 'season_games_count', 82)
+            _fallback = _fallback or 82
+
+            def _gp(stats):
+                return (stats.get('W', stats.get('Wins', 0))
+                        + stats.get('L', stats.get('Losses', 0))
+                        + stats.get('OTL', 0))
+
+            for _name in sorted(_nhl_names):
+                _played = _gp(_standings.get(_name) or {})
+                _expect = _scheduled.get(_name, _fallback)
+                if _played < _expect:
+                    shortfalls.append((_name, _played, _expect))
+        except Exception as _e:
+            print(f"Season slate audit failed (non-fatal): {_e}")
+        return shortfalls
+
+    def _handle_slate_shortfall(self, shortfalls):
+        """Loud stop for a short season slate. Never silent, never a stall.
+
+        Prints a banner naming every short club and its deficit, writes it
+        to the news log, and creates an inbox item for the user. Then
+        blocks loudly:
+          - headless/bulk mode: raises SeasonIntegrityError with the full
+            shortfall detail (no GUI exists to show a blocker card);
+          - GUI mode: arms the 'season_integrity' day-blocker (picked up by
+            get_continue_state on the next Continue press) and returns, so
+            end_of_season bails BEFORE the season-end guard is set. An
+            exception here would propagate out of end_of_season through
+            simulate_day -- whose outer try has only a `finally`, no
+            `except` -- into tkinter's callback handler: an ugly stderr
+            traceback with no blocking behavior and a re-press loop.
+        """
+        _lines = [f"{_n}: {_gp}/{_t} (short {_t - _gp})"
+                  for _n, _gp, _t in shortfalls]
+        _detail = "; ".join(_lines)
+        _banner = ("\n"
+                   "🚨🚨🚨 SEASON SLATE SHORTFALL -- SEASON HALTED 🚨🚨🚨\n"
+                   "The regular season ended with clubs short of their "
+                   "scheduled games:\n"
+                   + "\n".join(f"  • {_l}" for _l in _lines) + "\n"
+                   "This is a data-integrity stop: awards, playoffs and the "
+                   "offseason will NOT run on a short slate.\n"
+                   "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨\n")
+        print(_banner)
+        try:
+            _nl = getattr(self, 'news_log', None)
+            if isinstance(_nl, list):
+                _nl.append({
+                    'date': getattr(self, 'current_date', None),
+                    'story': (f"🚨 Season integrity stop: slate shortfall -- "
+                              f"{_detail}. The season cannot advance until "
+                              f"the missing games are investigated.")})
+        except Exception:
+            pass
+        try:
+            _ut = getattr(self, 'user_team', None)
+            if _ut is not None and getattr(_ut, 'inbox', None) is not None:
+                from game_classes import EmailMessage
+                _ut.inbox.add_message(EmailMessage(
+                    sender="League Office",
+                    sender_type="League",
+                    subject="🚨 Season integrity stop: season slate shortfall",
+                    content=("Commissioner's Office -- URGENT\n\n"
+                             "The regular season has ended with clubs short "
+                             "of their scheduled games:\n\n"
+                             + "\n".join(f"• {_l}" for _l in _lines) + "\n\n"
+                             "The season is HALTED: no awards, no playoffs, "
+                             "no offseason until this is resolved. This is a "
+                             "data-integrity stop, not a task you can complete "
+                             "in the UI -- report it so the missing games can "
+                             "be investigated and restored."),
+                    date_sent=getattr(self, 'current_date', None) or date.today(),
+                    is_important=True,
+                    is_urgent=True,
+                    category="League",
+                    priority=4,
+                    requires_response=False,
+                ))
+        except Exception:
+            pass
+        if getattr(self, '_bulk_simming', False):
+            raise SeasonIntegrityError(
+                f"Season slate shortfall -- season halted: {_detail}")
+        # GUI mode: arm the day-blocker; the next Continue press shows it
+        # via get_continue_state instead of re-entering end_of_season.
+        try:
+            self._season_integrity_shortfall = [
+                (str(_n), int(_gp), int(_t)) for _n, _gp, _t in shortfalls]
+        except Exception:
+            self._season_integrity_shortfall = True
+
+    def _conduct_vezina_vote(self):
+        """Run the Vezina Trophy GM vote: 31 AI GMs + the human ballot.
+
+        Runs once per season at the end of the regular season, before
+        reputations/trophy cases are banked. The 5-3-1 tally decides the
+        winner; the result is stored on the league (persisted in saves)
+        so the awards calculator, ceremony, and history book all agree.
+        In bulk-sim mode the human ballot auto-fills from the model.
+        """
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        season_year = int(getattr(league, "season_year", 0) or 0)
+        votes = getattr(league, "vezina_votes", None) or {}
+        if str(season_year) in votes:
+            return  # already voted this season
+        try:
+            import awards_race as ar
+        except ImportError:
+            return
+        teams = list(getattr(league, "teams", []) or [])
+        players = [p for t in teams for p in (getattr(t, "roster", None) or [])]
+        goalies = [p for p in players if "GOALIE" in str(
+            getattr(getattr(p, "primary_position", None), "name", ""))]
+        try:
+            candidates = ar.vezina_race(goalies)
+        except Exception:
+            candidates = []
+        if not candidates:
+            return
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (
+                pts / (2 * gp)) if gp else 0.5
+
+        user_team = getattr(self, "user_team", None)
+        user_name = getattr(user_team, "team_name", "") if user_team else ""
+        ballots = []
+        # 31 AI GMs vote their boards.
+        for t in teams:
+            if getattr(t, "team_name", "") == user_name:
+                continue
+            try:
+                b = ar.gm_vezina_ballot(t, candidates, team_pct,
+                                        season_year)
+                if b:
+                    ballots.append(b)
+            except Exception:
+                pass
+        # The human GM's ballot (auto-filled when bulk simming).
+        try:
+            if getattr(self, "_bulk_simming", False):
+                human = [r.get("player") for r in candidates[:3]]
+            else:
+                import awards_ceremony as ac
+                human = ac.collect_human_vezina_ballot(self, candidates)
+            if human:
+                ballots.append(human)
+        except Exception:
+            pass
+        try:
+            winner, results = ar.tally_vezina_ballots(ballots, candidates)
+        except Exception:
+            return
+        if winner is None:
+            return
+        try:
+            wid = int(getattr(winner, "id", -1) or -1)
+        except Exception:
+            wid = -1
+        votes[str(season_year)] = {
+            "winner_id": wid,
+            "winner_name": getattr(winner, "full_name",
+                                   getattr(winner, "name", "?")),
+            "ballots": len(ballots),
+            "runner_up": (getattr(results[1]["player"], "full_name",
+                                         "?") if len(results) > 1 else ""),
+        }
+        try:
+            league.vezina_votes = votes
+        except Exception:
+            pass
+        # News: the vote happened.
+        try:
+            self.add_news(
+                f"Vezina Trophy vote: {votes[str(season_year)]['winner_name']} "
+                f"wins the 5-3-1 ballot of {len(ballots)} GMs.")
+        except Exception:
+            pass
+
+    def _update_player_reputations(self):
+        """End-of-regular-season player reputation update.
+
+        Runs once per season (guarded by _reputation_updated_for_season, since
+        end_of_season can re-fire after the playoffs). Reads p.stats BEFORE
+        league.end_of_season() wipes them -- do not move this call later in
+        the season lifecycle.
+        """
+        if getattr(self, '_reputation_updated_for_season', None) == self.league.season_year:
+            return
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        all_players = [p for t in self.league.teams for p in t.roster]
+        if not all_players:
+            return
+        # Map award display names -> reputation_system award keys
+        awards = self._calculate_season_awards(all_players)
+        award_key_map = {
+            'Hart Trophy (MVP)': 'hart',
+            'Ted Lindsay Award (Most Outstanding Player)': 'ted_lindsay',
+            'Art Ross Trophy (Scoring Leader)': 'art_ross',
+            'Maurice "Rocket" Richard Trophy': 'rocket',
+            'Vezina Trophy (Best Goalie)': 'vezina',
+            'Norris Trophy (Best Defenseman)': 'norris',
+            'Selke Trophy (Defensive Forward)': 'selke',
+            'Lady Byng Trophy (Sportsmanship)': 'lady_byng',
+            'Calder Trophy (Rookie of the Year)': 'calder',
+        }
+        name_to_awards = {}
+        for display, key in award_key_map.items():
+            info = awards.get(display)
+            if info and info.get('name'):
+                name_to_awards.setdefault(info['name'], []).append(key)
+        # League-average points per game (skaters only)
+        skaters = [p for p in all_players
+                   if 'GOALIE' not in getattr(getattr(p, 'primary_position', None), 'name', '')]
+        total_pts = sum(getattr(getattr(p, 'stats', None), 'points', 0) or 0 for p in skaters)
+        total_gp = sum(getattr(getattr(p, 'stats', None), 'games_played', 0) or 0 for p in skaters)
+        league_avg_ppg = (total_pts / total_gp) if total_gp else 0.8
+        for team in self.league.teams:
+            for p in team.roster:
+                pstats = getattr(p, 'stats', None)
+                rs.update_player_reputation(
+                    p,
+                    season_points=getattr(pstats, 'points', 0) or 0,
+                    games_played=getattr(pstats, 'games_played', 0) or 0,
+                    league_avg_ppg=league_avg_ppg,
+                    awards=name_to_awards.get(p.full_name, []),
+                )
+                # Trophy case: bank each season award onto the winner,
+                # labeled by ceremony year (e.g. "2027" for the 2026-27
+                # season). Idempotent -- re-runs never duplicate.
+                for _akey in name_to_awards.get(p.full_name, []):
+                    try:
+                        import accolades as _acc
+                        _acc.bank_accolade(
+                            p, _akey,
+                            str(getattr(self.league, "season_year", 0) + 1))
+                    except Exception:
+                        pass
+                # Award bump: a player still on the development path
+                # (age < 27) who wins a major award proves the ceiling was
+                # wrong -- potential jumps one full letter grade (C+ -> B+).
+                # One bump per season max, no matter how many trophies.
+                _major = {'calder', 'conn_smythe', 'norris', 'rocket',
+                          'art_ross', 'vezina', 'ted_lindsay'}
+                _won = [a for a in name_to_awards.get(p.full_name, [])
+                        if a in _major]
+                # Conn Smythe is decided at Cup time, not in the regular-
+                # season calculator -- check the bracket too.
+                if 'conn_smythe' not in _won:
+                    try:
+                        _br = getattr(self, '_playoff_bracket', None)
+                        _sn = getattr(_br, 'conn_smythe_name', None)
+                        if _sn and _sn == p.full_name:
+                            _won.append('conn_smythe')
+                    except Exception:
+                        pass
+                if _won and getattr(p, 'age', 99) < 27:
+                    try:
+                        _bumped, _old, _new = p.bump_potential_full_grade()
+                        if _bumped:
+                            try:
+                                _anames = {
+                                    'calder': 'Calder Trophy',
+                                    'conn_smythe': 'Conn Smythe Trophy',
+                                    'norris': 'Norris Trophy',
+                                    'rocket': 'Rocket Richard Trophy',
+                                    'art_ross': 'Art Ross Trophy',
+                                    'vezina': 'Vezina Trophy',
+                                    'ted_lindsay': 'Ted Lindsay Award'}
+                                _lbl = _anames.get(_won[0], 'major award')
+                                self.add_news(
+                                    f"🏆 {p.full_name} wins the {_lbl}! "
+                                    f"Potential rises from {_old} to {_new}.")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        self._reputation_updated_for_season = self.league.season_year
+
+    def _quick_sim_playoffs_headless(self):
+        """Sim the entire playoff tournament without opening the window.
+
+        Used when the user declines the interactive playoffs at season's
+        end: every season still decides a Stanley Cup champion.
+        """
+        try:
+            from playoff_system import PlayoffBracket
+            league = getattr(self, 'league', None)
+            if league is None:
+                return
+            bracket = getattr(league, 'playoff_bracket', None)
+            try:
+                _has = bracket is not None and any(
+                    bracket.playoff_series.get(r)
+                    for r in PlayoffBracket.ROUND_ORDER)
+            except Exception:
+                _has = False
+            if not _has:
+                bracket = PlayoffBracket(league)
+                bracket.generate_playoff_bracket()
+                try:
+                    league.playoff_bracket = bracket
+                except Exception:
+                    pass
+            for round_name in PlayoffBracket.ROUND_ORDER:
+                try:
+                    current = bracket.playoff_series.get(round_name) or []
+                except Exception:
+                    current = []
+                for series in current:
+                    while not getattr(series, 'is_complete', True):
+                        bracket.simulate_playoff_game(series)
+                bracket.advance_to_next_round(round_name)
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _playoffs_complete(self) -> bool:
+        """True once a Stanley Cup champion has been decided."""
+        try:
+            w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            if w is not None and w.winfo_exists():
+                bracket = getattr(w, 'playoff_bracket', None)
+                _lb = getattr(getattr(self, 'league', None),
+                              'playoff_bracket', None)
+                # BUG-REVIEW-002: the playoffs view is never torn down, so a
+                # DECIDED bracket from a previous season can linger on it.
+                # Only trust the view's bracket when it IS the league's live
+                # bracket (identity is the invariant _generate_bracket
+                # establishes); otherwise a stale view silently skips the
+                # entire postseason.
+                if (bracket is not None and bracket is _lb
+                        and getattr(bracket, 'stanley_cup_champion', None)):
+                    return True
+            lb = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if lb is not None and getattr(lb, 'stanley_cup_champion', None):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _simulate_playoffs_headless(self):
+        """Generate + simulate the playoff bracket without a GUI window.
+
+        Headless fallback for the bulk-sim season-end path (playthrough
+        B2, 2026-10-01). Mirrors PlayoffView._generate_bracket (bracket
+        attached to the league, app set for date-aware sim paths) and the
+        synchronous _run_games loop from _simulate_all_playoffs; the
+        existing _playoffs_complete() then sees the league bracket's
+        champion. Additive: the windowed path is untouched.
+        """
+        from playoff_system import PlayoffBracket
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        bracket = getattr(league, "playoff_bracket", None)
+        if bracket is None or not getattr(bracket, "playoff_series", None):
+            bracket = PlayoffBracket(league)
+            try:
+                bracket.app = self
+            except Exception:
+                pass
+            bracket.generate_playoff_bracket()
+            try:
+                league.playoff_bracket = bracket
+            except Exception:
+                pass
+        try:
+            rounds = PlayoffBracket.ROUND_ORDER
+        except Exception:
+            rounds = ()
+        for round_name in rounds:
+            try:
+                bracket.current_round = round_name
+                for series in (bracket.playoff_series.get(round_name) or []):
+                    # Guard against a game sim that keeps failing: cap
+                    # attempts, then force-complete the series so the
+                    # postseason can never stall the day loop.
+                    _attempts = 0
+                    while not series.is_complete and _attempts < 14:
+                        _attempts += 1
+                        try:
+                            bracket.simulate_playoff_game(series)
+                        except Exception as _e:
+                            # Last-resort fallback: the full sim failed
+                            # (e.g., a roster edge case). Award the game
+                            # to the home team so the series progresses.
+                            # Rare, logged, and better than a soft-lock.
+                            try:
+                                _home_is_t1 = (
+                                    series.home_team_for_game(
+                                        series.games_played + 1)
+                                    is series.team1)
+                                series.add_game_result(
+                                    _home_is_t1,
+                                    {"fallback": True,
+                                     "reason": str(_e)[:120]})
+                            except Exception:
+                                break
+                bracket.advance_to_next_round(round_name)
+            except Exception:
+                # Don't abort the entire postseason on a round error;
+                # continue to the next round.
+                continue
+        try:
+            import headlines
+            headlines.drain_bracket_headlines(self, bracket)
+        except Exception:
+            pass
+
+    def _show_season_summary(self):
+        """Display end of season summary with stats and awards."""
+        season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
+        
+        # Create a summary window
+        summary_window = InGamePopup(self)
+        summary_window.title(f"{season_str} Season Summary")
+        summary_window.geometry("900x700")
+        summary_window.configure(background=self.BG_COLOR)
+        summary_window.transient(self)
+        summary_window.grab_set()
+        
+        # Main container with scrolling
+        main_frame = ttk.Frame(summary_window, style='Panel.TFrame')
+        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        # Title
+        ttk.Label(main_frame, text=f"{season_str} Season Complete!", 
+                 font=(self.FONT_FAMILY, 20, 'bold'), style='Title.TLabel').pack(pady=(0, 20))
+        
+        # Create notebook for different summary sections
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill='both', expand=True)
+        
+        # Awards Tab
+        awards_frame = ttk.Frame(notebook, style='Panel.TFrame')
+        notebook.add(awards_frame, text="Awards")
+        self._create_awards_section(awards_frame)
+        
+        # League Leaders Tab
+        leaders_frame = ttk.Frame(notebook, style='Panel.TFrame')
+        notebook.add(leaders_frame, text="League Leaders")
+        self._create_leaders_section(leaders_frame)
+        
+        # Your Team Tab
+        team_frame = ttk.Frame(notebook, style='Panel.TFrame')
+        notebook.add(team_frame, text="Your Team")
+        self._create_team_summary_section(team_frame)
+        
+        # Awards ceremony button -- the full reveal experience
+        ttk.Button(main_frame, text="Watch Awards Ceremony",
+                  command=self.open_awards_ceremony,
+                  style='Accent.TButton').pack(pady=(10, 0))
+
+        # Close button
+        ttk.Button(main_frame, text="Continue", 
+                  command=summary_window.destroy, style='TButton').pack(pady=20)
+        
+        # Wait for window to close
+        self.wait_window(summary_window)
+
+    def open_playoffs_window(self):
+        """Open the NHL Playoffs window (UI-safe: routes via _ui_notify)."""
+        self._ui_notify('open_screen', screen='playoffs', title='Playoffs')
+        return None
+
+
+
 
 def launch_game_viewer_with_sim(home_team, away_team):
     """

@@ -42,15 +42,25 @@ def _standings_rows(app):
     return rows
 
 
-def _conference_of(app, team_name):
+def _conference_map(app):
+    """team_name -> conference for the whole league, built in one O(n) pass.
+
+    Perf (Bot #20): _conference_of() used to linear-scan all teams per call;
+    stance() called it once per standings row (O(n^2) per stance, ~37k
+    calls/day in the trade market). Build the map once, O(1) lookups.
+    """
     league = _league(app)
+    conf_of = {}
     try:
         for t in getattr(league, 'teams', []):
-            if getattr(t, 'team_name', None) == team_name:
-                return getattr(t, 'conference', None)
+            conf_of[getattr(t, 'team_name', None)] = getattr(t, 'conference', None)
     except Exception:
         pass
-    return None
+    return conf_of
+
+
+def _conference_of(app, team_name):
+    return _conference_map(app).get(team_name)
 
 
 def stance(app, team_name):
@@ -58,10 +68,11 @@ def stance(app, team_name):
     rows = _standings_rows(app)
     if not rows:
         return 'neutral'
-    conf = _conference_of(app, team_name)
+    conf_of = _conference_map(app)
+    conf = conf_of.get(team_name)
     if conf:
         names = [n for n, _ in rows
-                 if _conference_of(app, n) == conf]
+                 if conf_of.get(n) == conf]
     else:
         names = [n for n, _ in rows]
     if team_name not in names:

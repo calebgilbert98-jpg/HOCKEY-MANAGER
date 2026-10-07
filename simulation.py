@@ -1337,7 +1337,7 @@ class GameSim:
                     # Personality compatibility
                     leadership_diff = abs(player1.leadership - player2.leadership)
                     teamwork_compatibility = (player1.teamwork + player2.teamwork) / 2
-                    chemistry += (teamwork_compatibility - 10) * 2  # Teamwork bonus
+                    chemistry += (teamwork_compatibility - 70) * 0.5  # Teamwork bonus (1-100 scale)
                     chemistry -= leadership_diff * 0.5  # Leadership clash penalty
                     
                     # Skill compatibility (players of similar skill work better together)
@@ -5516,9 +5516,9 @@ class GameSim:
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
         # F3: morale (1-10, initialized 4-7) affects finishing. Subtle: +/-3%.
         try:
-            morale = getattr(shooter, 'morale', 5)
-            if 1 <= morale <= 10:
-                morale_edge = (morale - 5) * 0.006
+            morale = getattr(shooter, 'morale', 70)
+            if 1 <= morale <= 100:
+                morale_edge = (morale - 70) * 0.0006
                 adjusted_save_prob *= (1.0 - morale_edge)
         except Exception:
             pass
@@ -7742,7 +7742,7 @@ class GameSim:
         # tactics.SHOT_LIFT (recalibrated for the honest possession model);
         # the base stays moderate so the 0.85 clamp below preserves the
         # turnover/cycle texture and team-to-team shot_vol spread.
-        shot_chance = 0.54
+        shot_chance = 0.68
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
@@ -7939,7 +7939,7 @@ class GameSim:
                     shot_chance *= _tb
             except Exception:
                 pass
-            shot_chance = max(0.2, min(0.85, shot_chance))
+            shot_chance = max(0.2, min(0.92, shot_chance))
         # 6-on-5 (divergence #13): the pulled-goalie extra attacker. The
         # canonical 2.2x lived in the dead _apply_special_situation_modifiers
         # (zero callers); revived here on the live volume gate, AFTER the
@@ -8273,9 +8273,21 @@ class GameSim:
         if self.home_score == 0:
             goalie = self._selected_goalie(self.away_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
+            # Credit the shutout to the goalie's stats
+            try:
+                if goalie and hasattr(goalie, 'stats'):
+                    goalie.stats.shutouts = getattr(goalie.stats, 'shutouts', 0) + 1
+            except Exception:
+                pass
         if self.away_score == 0:
             goalie = self._selected_goalie(self.home_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
+            # Credit the shutout to the goalie's stats
+            try:
+                if goalie and hasattr(goalie, 'stats'):
+                    goalie.stats.shutouts = getattr(goalie.stats, 'shutouts', 0) + 1
+            except Exception:
+                pass
 
     def _selected_goalie(self, team):
         """The goalie selected in the lineup (G1), falling back to the best
@@ -9358,23 +9370,33 @@ class GameSim:
     def _apply_game_injury(self, injured_player, hitting_player=None):
         """Apply an in-game injury from a hit. Player leaves the game."""
         try:
-            injury_types = [
-                ('upper body', 3, 14),   # name, min days, max days
-                ('lower body', 5, 21),
-                ('head', 7, 30),
-                ('shoulder', 4, 18),
-            ]
-            inj_type, min_d, max_d = random.choice(injury_types)
-            days = random.randint(min_d, max_d)
-            injured_player.injury_status = f"{inj_type} ({days} days)"
-            injured_player.injury_days = days
+            # Route through the real injury system (not legacy attrs nothing reads)
+            applied = False
+            try:
+                import injury_data
+                if hasattr(injury_data, 'apply_injury'):
+                    inj_type = random.choice(['upper body', 'lower body', 'head', 'shoulder'])
+                    injury_data.apply_injury(injured_player, inj_type)
+                    applied = True
+            except (ImportError, AttributeError):
+                pass
+            if not applied:
+                injury_types = [
+                    ('upper body', 3, 14),
+                    ('lower body', 5, 21),
+                    ('head', 7, 30),
+                    ('shoulder', 4, 18),
+                ]
+                inj_type, min_d, max_d = random.choice(injury_types)
+                days = random.randint(min_d, max_d)
+                injured_player.injury_status = f"{inj_type} ({days} days)"
+                injured_player.injury_days = days
             if injured_player.id in self.game_stats:
                 self.game_stats[injured_player.id]['injured'] = True
-                self.game_stats[injured_player.id]['injury_type'] = inj_type
             hitter = getattr(hitting_player, 'name', 'opponent') if hitting_player else 'opponent'
             self._log_event(
                 f"INJURY: {getattr(injured_player, 'name', 'player')} "
-                f"hurt on a hit from {hitter} ({inj_type}).")
+                f"hurt on a hit from {hitter}.")
         except Exception:
             pass
 

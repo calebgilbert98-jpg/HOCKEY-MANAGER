@@ -119,7 +119,13 @@ def _fa_ask(game, p):
                                         season, scarcity=scarcity)
         else:
             asking = int(base_pct * cap)
-        asking = max(int(asking), 750_000)
+        # Floor at the season-aware league minimum (not a hardcoded $750k).
+        try:
+            from salary_cap_system import league_minimum_salary as _lms2
+            _ask_floor2 = int(_safe(lambda: _lms2(season), 750_000) or 750_000)
+        except Exception:
+            _ask_floor2 = 750_000
+        asking = max(int(asking), _ask_floor2)
         try:
             import trade_engine as _te
             team = _user_team(game)
