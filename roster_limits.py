@@ -1223,9 +1223,86 @@ def ai_roster_compliance(team, league=None, rng=None):
                 team, sk_need, go_need, rng=rng))
             if not can_dress_lineup(team):
                 done["summoned"] = len(summon_emergency_fillers(team, rng))
+        # Emergency crease maintenance (Bot 1 Finding 3): a club with
+        # fewer than 2 REAL (non-filler) goalies on the NHL roster gets
+        # a real goalie -- AHL recall first, then the best UFA goalie on
+        # a 1-year league-minimum deal. Fillers keep the lineup legal;
+        # this keeps the crease real.
+        try:
+            done["crease_fixed"] = ai_crease_maintenance(team, league)
+        except Exception:
+            pass
     except Exception:
         pass
     return done
+
+
+def ai_crease_maintenance(team, league=None):
+    """Emergency crease maintenance for AI clubs (Bot 1 Finding 3).
+
+    If the NHL roster has fewer than 2 real (non-filler) goalies:
+      1. Recall the best available goalie from the AHL.
+      2. Else sign the best UFA goalie to a 1-year league-minimum deal.
+    Never raises; returns the number of real goalies added.
+    """
+    added = 0
+    try:
+        roster = getattr(team, "roster", None)
+        if roster is None:
+            return 0
+        def _real_goalies():
+            return [p for p in list(roster)
+                    if _is_goalie(p) and not is_emergency_filler(p)
+                    and has_active_contract(p)]
+        while len(_real_goalies()) < 2:
+            # 1. Best AHL goalie first (real transaction, cap-checked).
+            _rec = recall_best_available(team, 0, 1)
+            if _rec:
+                added += len(_rec)
+                continue
+            # 2. Best UFA goalie on a 1-year league-minimum deal.
+            _fa_pool = None
+            try:
+                if league is not None:
+                    _fa_pool = list(getattr(league, "free_agents", None) or [])
+            except Exception:
+                _fa_pool = None
+            if not _fa_pool:
+                break
+            _cands = [p for p in _fa_pool
+                      if _is_goalie(p) and not is_emergency_filler(p)]
+            if not _cands:
+                break
+            _cands.sort(key=_overall, reverse=True)
+            _fa = _cands[0]
+            try:
+                from game_classes import Contract as _Contract
+            except Exception:
+                break
+            try:
+                from salary_cap_system import league_minimum_salary as _lms
+                _min_sal = int(_lms() or 775000)
+            except Exception:
+                _min_sal = 775000
+            try:
+                _fa.contract = _Contract(salary=_min_sal, years_remaining=1,
+                                         two_way=False)
+            except Exception:
+                break
+            try:
+                _fa_pool_ref = getattr(league, "free_agents", None)
+                if _fa_pool_ref is not None and _fa in _fa_pool_ref:
+                    _fa_pool_ref.remove(_fa)
+            except Exception:
+                pass
+            try:
+                team.add_player(_fa, "roster")
+                added += 1
+            except Exception:
+                break
+        return added
+    except Exception:
+        return added
 
 
 def user_roster_compliance(team):

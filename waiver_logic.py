@@ -451,6 +451,21 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
                                     continue
                                 if _nmc(p):
                                     continue
+                                # Never strand the crease: don't assign a
+                                # goalie straight down if it would leave
+                                # fewer than 2 on the NHL roster (mirrors
+                                # the wire path's "never waive into one
+                                # goalie" guard).
+                                if _position_group(p) == "G":
+                                    _g_left = sum(
+                                        1 for pl in list(
+                                            getattr(team, "roster", [])
+                                            or [])
+                                        if _position_group(pl) == "G"
+                                        and not bool(getattr(
+                                            pl, "on_waivers", False)))
+                                    if _g_left <= 2:
+                                        continue
                             except Exception:
                                 continue
                             try:

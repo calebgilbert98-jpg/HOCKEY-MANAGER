@@ -5892,6 +5892,31 @@ NHL League Office""",
         if getattr(self, '_season_end_handled_year', None) == season_year:
             if self._playoffs_complete():
                 self._start_offseason()
+            elif getattr(self, '_headless_sim', False) and not getattr(
+                    self, '_bulk_simming', False):
+                # Headless re-entry (Bot 1 Finding 2): the first-entry path
+                # parks the playoffs_mode card for a real user to answer,
+                # but a headless sim has no user -- re-presenting the card
+                # just re-parks it and the day never advances (11-day
+                # silent freeze). Drive the bracket to completion instead,
+                # mirroring the bulk-sim path, then roll to the offseason.
+                try:
+                    self._simulate_playoffs_headless()
+                except Exception:
+                    pass
+                try:
+                    self._maybe_send_cup_recap()
+                except Exception:
+                    pass
+                if self._playoffs_complete():
+                    self._start_offseason()
+                else:
+                    try:
+                        self.add_news(
+                            "Playoff bracket could not complete headless; "
+                            "day advance gated until resolved.")
+                    except Exception:
+                        pass
             elif getattr(self, '_bulk_simming', False):
                 # Bulk sim: drive the bracket to completion automatically.
                 self.open_playoffs_window()

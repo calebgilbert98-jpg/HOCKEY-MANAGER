@@ -377,19 +377,25 @@ class AITeamManager:
         # Only make decisions every few days
         if (current_date - self.last_decision_date).days < self.decision_frequency:
             return decisions
-        
-        # R1 (roster limits): AI clubs obey the same roster rules as the user
-        # -- 23-man max via paper-down, dressed-minimum via emergency
-        # fillers, unneeded fillers released. Guarded: never breaks AI.
-        try:
-            import roster_limits as _rl
-            _rl.ai_roster_compliance(team, None)
-        except Exception:
-            pass
 
         for team in teams:
             if is_human_managed(team):
                 continue
+
+            # R1 (roster limits): AI clubs obey the same roster rules as the
+            # user -- 23-man max via paper-down, dressed-minimum via
+            # emergency fillers, unneeded fillers released. Runs per-team
+            # inside the loop (it was previously before the loop referencing
+            # an undefined `team`, so the NameError was swallowed and it
+            # never ran for any club -- Detroit went 192 days with zero NHL
+            # goalies). The league ref is passed so crease maintenance can
+            # reach the UFA pool. Guarded: never breaks AI.
+            try:
+                import roster_limits as _rl
+                _rl.ai_roster_compliance(
+                    team, getattr(self, "_league_ref", None))
+            except Exception:
+                pass
 
             strategy = self.team_strategies.get(team.team_name)
             if not strategy:

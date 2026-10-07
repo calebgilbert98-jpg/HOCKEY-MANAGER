@@ -989,7 +989,10 @@ def season_meeting_blocker(app: Any) -> Optional[Dict[str, Any]]:
 
         def _auto():
             """Headless/bulk auto-resolution: run the same AI meeting
-            resolution the AI clubs get (user/AI parity). Never raises."""
+            resolution the AI clubs get (user/AI parity). Never raises,
+            and never silently fails: if the full AI resolution cannot
+            produce a mandate, fall back to a default mandate store so
+            the pending flag is always cleared and the day can advance."""
             try:
                 _gm = getattr(app, "game_manager", None) or app
                 _ut = getattr(_gm, "user_team", None)
@@ -1001,6 +1004,18 @@ def season_meeting_blocker(app: Any) -> Optional[Dict[str, Any]]:
                 except Exception:
                     _season = None
                 _mandate = resolve_ai_season_meeting(_ut, _league, _season)
+                if not _mandate:
+                    # Fallback: store a default mandate directly. The full
+                    # AI resolution failed somewhere internally; a default
+                    # mandate still clears the pending flag so the sim
+                    # cannot soft-lock here.
+                    try:
+                        _mandate = store_mandate(
+                            _ut,
+                            {"season": _season,
+                             "reason": "ai_resolution_fallback"})
+                    except Exception:
+                        _mandate = None
                 return bool(_mandate)
             except Exception:
                 return False
