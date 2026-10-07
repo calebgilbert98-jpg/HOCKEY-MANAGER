@@ -1,11 +1,12 @@
 /* Puck Dynasty global nav behavior: dropdown toggles + current-page highlight. */
 (function () {
-  /* Tell the backend the window is closing so the game process exits
-     instead of lingering in Task Manager (2026-10-06). The server waits
-     ~12s before exiting, so plain page navigations are unaffected. */
-  window.addEventListener('beforeunload', function () {
-    try { navigator.sendBeacon('/api/shutdown'); } catch (e) {}
-  });
+  /* DISABLED 2026-10-06: the beforeunload shutdown beacon was killing the
+     server on normal page navigations (not just window close), causing
+     "connection refused" and slow loads. The 60s heartbeat timeout is
+     sufficient fallback for actual window closes. */
+  // window.addEventListener('beforeunload', function () {
+  //   try { navigator.sendBeacon('/api/shutdown'); } catch (e) {}
+  // });
 })();
 (function () {
   /* Multiplayer bar (Batch E): load the MP layer on every page. It
