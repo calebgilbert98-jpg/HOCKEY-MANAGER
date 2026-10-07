@@ -3031,13 +3031,22 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                             if not isinstance(a, DraftPick)]
             _in_players = [a for a in (_in or [])
                            if not isinstance(a, DraftPick)]
-            if _out_players and _rl2.would_break_dress_minimum(
-                    _src_team, _out_players, _in_players):
-                _tname = getattr(_src_team, "team_name", "?")
-                return _blocked(
-                    f"{_tname} would be unable to dress a full lineup "
-                    f"(18 skaters + 2 goalies) after this trade -- deal blocked.")
+            if _out_players:
+                try:
+                    if _rl2.would_break_dress_minimum(
+                            _src_team, _out_players, _in_players):
+                        _tname = getattr(_src_team, "team_name", "?")
+                        return _blocked(
+                            f"{_tname} would be unable to dress a full lineup "
+                            f"(18 skaters + 2 goalies) after this trade -- deal blocked.")
+                except Exception:
+                    # Fail-safe: if the guard errors, block the trade
+                    # (better than allowing a roster-breaking deal through)
+                    return _blocked(
+                        "Trade blocked: roster validation unavailable.")
     except Exception:
+        # If roster_limits import fails, block trades with players
+        # (fail-safe: better than allowing roster-breaking deals)
         pass
 
     # Retention preflight -- every term validated BEFORE anything moves.
