@@ -9,6 +9,7 @@ desktop. The voice lines below are ported verbatim from the desktop
 window -- flavor over the same mechanics.
 """
 from flask import Blueprint, jsonify, render_template, request
+from web_ui.bridge import _resolve_gm
 
 bp = Blueprint("coach_checkin", __name__)
 

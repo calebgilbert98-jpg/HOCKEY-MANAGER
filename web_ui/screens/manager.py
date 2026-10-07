@@ -21,6 +21,7 @@ never 500s. Game attachment is via _web_app_ref (no game attached ->
 the page still renders; APIs return empty-state payloads).
 """
 from flask import Blueprint, jsonify, render_template, request
+from web_ui.bridge import _resolve_gm
 
 bp = Blueprint("manager", __name__)
 

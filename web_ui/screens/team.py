@@ -9,6 +9,7 @@ Every read defensive: missing data degrades gracefully, never 500s.
 """
 from flask import Blueprint, jsonify, render_template
 from urllib.parse import unquote
+from web_ui.bridge import _resolve_gm
 
 bp = Blueprint("team", __name__)
 

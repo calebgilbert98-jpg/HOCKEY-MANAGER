@@ -8,6 +8,7 @@ familiarity, whiteboard control, and opponent tactical intel. This screen
 exposes all of it; writes go through the command queue to the Tk thread.
 """
 from flask import Blueprint, jsonify, render_template, request
+from web_ui.bridge import _resolve_gm
 
 bp = Blueprint("tactics", __name__)
 
