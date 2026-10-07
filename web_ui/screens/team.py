@@ -240,5 +240,11 @@ def api_team(name):
         return jsonify({"error": "no game"}), 503
     t = _find_team(name)
     if t is None:
+        # Debug logging (2026-10-06): log available team names
+        gm = _resolve_gm(live)
+        league = _safe(lambda: getattr(gm, "league", None))
+        teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
+        names = [_safe(lambda: getattr(x, "team_name", "?"), "?") for x in teams[:5]]
+        print(f"=== /api/team 404: requested={name!r}, league_teams={len(teams)}, sample={names} ===")
         return jsonify({"error": "not found"}), 404
     return jsonify(_team_payload(t))
