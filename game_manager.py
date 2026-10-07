@@ -14873,307 +14873,6 @@ NHL League Office""",
         self._strength_cache[cache_key] = strength
         
         return strength
-
-        def _calculate_star_player_effects(self, team, situation_score=None):
-            """Calculate individual star player effects on game outcome"""
-            effects = {
-                'offensive_boost': 0.0,
-                'defensive_reduction': 0.0,
-                'clutch_factor': 0.0
-            }
-        
-            # Get top players by position -- only dressed players move the
-            # needle. Suspended or injured stars don't boost the team from
-            # the press box (same exclusion the strength calc uses).
-            available = [p for p in team.roster
-                         if not getattr(p, 'is_injured', False)
-                         and not (getattr(p, 'suspension_games_remaining', 0)
-                                  or 0)]
-            sorted_roster = sorted(available, key=lambda p: p.overall_rating(), reverse=True)
-            top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:3]
-            top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:2]
-            top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
-        
-            # Elite forwards boost offensive production
-            # D28 (Wave A, 2026-10-01, Muck): retiered to the true 1-100
-            # talent bands. The old thresholds (52/50/47/44) handed nearly
-            # every rostered forward the max effect -- a flat +0.4 for all 32
-            # teams, the opposite of a hierarchy. Now aligned with the talent
-            # tiers: Generational 92+ -> 0.25, Elite 88+ -> 0.18,
-            # Very good 84+ -> 0.10, Good 80+ -> 0.05.
-            for forward in top_forwards:
-                rating = forward.overall_rating()
-                if rating >= 92:  # Generational
-                    effects['offensive_boost'] += 0.25
-                elif rating >= 88:  # Elite
-                    effects['offensive_boost'] += 0.18
-                elif rating >= 84:  # Very good
-                    effects['offensive_boost'] += 0.10
-                elif rating >= 80:  # Good
-                    effects['offensive_boost'] += 0.05
-        
-            # Elite defensemen reduce opponent scoring
-            # (native 1-100 scale: ~84+ is a top-pair NHL defender)
-            # (clutch moved to team_clutch.py -- shared dynamic factor)
-            for defenseman in top_defense:
-                rating = defenseman.overall_rating()
-                if rating >= 93:  # Elite defender (Norris level)
-                    effects['defensive_reduction'] += 0.25
-                elif rating >= 90:  # Very good defender
-                    effects['defensive_reduction'] += 0.15
-                elif rating >= 87:  # Good defender
-                    effects['defensive_reduction'] += 0.08
-                elif rating >= 84:  # Decent defender
-                    effects['defensive_reduction'] += 0.03
-        
-            # Elite goalies have major defensive impact
-            # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
-            # Factor-calibrated 2026-09-29 vs the event sim: the event engine's
-            # goalie response is ~2x the old tiers (weak goalie 86->30: +0.37
-            # there vs +0.13 here; elite 87->95: -0.30 there vs -0.20 here).
-            # Steepened through the NHL range and extended below it -- a bad
-            # goalie actively bleeds goals (negative reduction), matching the
-            # event sim's continuous (unfloored) goalie skill response.
-            for goalie in top_goalies:
-                rating = goalie.overall_rating()
-                if rating >= 95:  # Generational goalie
-                    effects['defensive_reduction'] += 0.60
-                elif rating >= 91:  # Elite goalie (Vezina level)
-                    effects['defensive_reduction'] += 0.48
-                elif rating >= 88:  # Very good goalie
-                    effects['defensive_reduction'] += 0.36
-                elif rating >= 85:  # Good goalie
-                    effects['defensive_reduction'] += 0.25
-                elif rating >= 82:  # Decent goalie
-                    effects['defensive_reduction'] += 0.16
-                elif rating >= 79:  # Fringe starter
-                    effects['defensive_reduction'] += 0.08
-                elif rating >= 76:  # Replacement level
-                    effects['defensive_reduction'] += 0.0
-                else:  # Below replacement: actively costs goals
-                    effects['defensive_reduction'] -= 0.12
-        
-            # Cap the effects to prevent unrealistic swings
-            effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
-            effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
-            # Clutch: dynamic per-team factor (team_clutch.py), shared with the
-            # advanced engine so factor parity holds by construction. Replaces
-            # the old saturated accumulation (forward tiers were on the wrong
-            # rating scale -- 1.00 for every club).
-            try:
-                from team_clutch import team_clutch_factor
-                effects['clutch_factor'] = team_clutch_factor(
-                    team, league=getattr(self, 'league', None),
-                    situation_score=situation_score)
-            except Exception:
-                effects['clutch_factor'] = 1.0
-        
-            return effects
-
-
-        def _career_morale_modifier(self, team) -> float:
-            """FM-style squad-confidence modifier from average morale.
-
-            Native 1-100 morale: 70 is neutral, each point moves expectations
-            0.03% -- factor-calibrated 2026-09-29 vs the event sim, whose
-            per-shot morale channel moves a fully toxic room only ~-1.3%
-            (the old 0.1%/pt, +/-3% intent, overstated it ~2.5x). Own channel
-            next to the situations factor: situations reads room structure,
-            bench buy-in and hunger counts; this reads the squad's raw
-            confidence level. Applied only in the lightweight quick-sim.
-            """
-            try:
-                roster = getattr(team, "roster", []) or []
-                if not roster:
-                    return 1.0
-                avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
-                return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.0003))
-            except Exception:
-                return 1.0
-
-
-        def _generate_player_stats(self, home_team, away_team, home_goals, away_goals):
-            """Generate realistic individual player statistics from team game results.
-        
-            Ensures statistical coherence:
-            - Team shots = sum of skater shots = opposing goalie shots_against
-            - Hat tricks properly detected (3+ goals in one game)
-            - Only dressed players (18 skaters + 1 goalie) get GP
-            """
-            import random
-        
-            # Track team shot totals for reconciliation
-            team_shots = {}
-        
-            for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
-                # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
-                # Injured or suspended players don't dress
-                healthy = [p for p in team.roster
-                           if not getattr(p, 'is_injured', False)
-                           and not (getattr(p, 'suspension_games_remaining', 0)
-                                    or 0)]
-                forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
-                defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
-                dressed_skaters = forwards + defensemen  # 18 skaters
-            
-                # Track per-player game goals for hat trick detection
-                game_goals = {p.id: 0 for p in dressed_skaters}
-            
-                # Distribute goals and assists
-                goals_to_distribute = team_goals
-                # P1 (scoring calibration 2026-09-29): NHL-shaped assists per
-                # goal -- 68% two, 30% one, 2% unassisted (A/G ~1.66). The
-                # assister selection below stays ovr-weighted and unchanged.
-                assists_to_distribute = sum(
-                    random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
-                    for _ in range(team_goals))
-            
-                # Weight players by rating for stat distribution
-                weighted_players = []
-                for player in dressed_skaters:
-                    weight = player.overall_rating() / 100.0
-                    if player.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
-                        weight *= 1.5  # Forwards score more
-                    weighted_players.append((player, weight))
-            
-                # Distribute goals
-                for _ in range(goals_to_distribute):
-                    if weighted_players:
-                        weights = [w[1] for w in weighted_players]
-                        player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
-                    
-                        player.stats.goals += 1
-                        player.stats.shots += 1  # Goal counts as shot
-                        game_goals[player.id] += 1
-                    
-                        # Check for hat trick (3+ goals in THIS game)
-                        if game_goals[player.id] == 3:
-                            print(f"🎩 HAT TRICK! {player.first_name} {player.last_name} scores 3 goals!")
-                            # GUI has no per-game event feed; stash on a best-effort list
-                            notable = getattr(self, 'notable_events', None)
-                            if notable is None:
-                                notable = self.notable_events = []
-                            notable.append({
-                                'time': 3600, 'period': 3, 'team': team.team_name,
-                                'player': player, 'event': 'Hat Trick'
-                            })
-                    
-                        self._check_player_records(player)
-            
-                # Distribute assists (1-2 per goal, not to the scorer)
-                for _ in range(assists_to_distribute):
-                    if weighted_players:
-                        # Pick assister (can be same as scorer for simplicity, or exclude)
-                        weights = [w[1] for w in weighted_players]
-                        player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
-                        player.stats.assists += 1
-                        self._check_player_records(player)
-            
-                # Penalty minutes (NHL: ~6-10 PIM per team per game)
-                penalty_minutes = random.randint(6, 14)
-                pim_remaining = penalty_minutes
-                while pim_remaining > 0 and dressed_skaters:
-                    player = random.choice(dressed_skaters)
-                    pim = min(pim_remaining, random.choice([2, 2, 2, 4, 5]))
-                    player.stats.penalties += 1
-                    player.stats.penalties_in_minutes += pim
-                    pim_remaining -= pim
-            
-                # Shots: distribute among skaters, track total for goalie reconciliation
-                # NHL: ~30 shots per team per game
-                total_shots = max(team_goals, random.randint(25, 35))  # At least as many shots as goals
-                team_shots[team.team_name] = total_shots
-            
-                for _ in range(total_shots):
-                    # Forwards get 75% of shots, defense 25%
-                    if random.random() < 0.75 and forwards:
-                        player = random.choice(forwards)
-                    elif defensemen:
-                        player = random.choice(defensemen)
-                    else:
-                        player = random.choice(dressed_skaters)
-                    player.stats.shots += 1
-            
-                # Games played: ONLY dressed players (18 skaters)
-                for player in dressed_skaters:
-                    player.stats.games_played += 1
-                    self._check_player_records(player)
-
-                # Defensive record: every dressed skater leaves a hits /
-                # takeaways / blocks trail (shutdown defensemen need a
-                # performance record, not just points). Same shared roll as
-                # every other sim path, so evaluator thresholds are uniform.
-                try:
-                    from game_classes import roll_defensive_game_stats as _rdg
-                    for player in dressed_skaters:
-                        _h, _t, _b = _rdg(player)
-                        player.stats.hits += _h
-                        player.stats.takeaways += _t
-                        player.stats.blocked_shots += _b
-                except Exception:
-                    pass
-        
-            # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
-            for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
-                starting_goalie = self._select_starting_goalie(team)
-                if not starting_goalie:
-                    continue
-                opp_team_name = away_team.team_name if team == home_team else home_team.team_name
-            
-                # Shots against = opposing team's total shots (from team_shots dict)
-                shots_against = team_shots.get(opp_team_name, random.randint(25, 35))
-                saves = max(0, shots_against - opp_goals)
-            
-                won = (team_goals > opp_goals)
-                shutout = (opp_goals == 0)
-            
-                starting_goalie.stats.saves += saves
-                starting_goalie.stats.shots_against += shots_against
-                starting_goalie.stats.goals_against += opp_goals
-                starting_goalie.stats.games_played += 1
-                # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
-                if hasattr(starting_goalie.stats, 'wins'):
-                    if won:
-                        starting_goalie.stats.wins += 1
-                    else:
-                        starting_goalie.stats.losses += 1
-                    if shutout:
-                        starting_goalie.stats.shutouts += 1
-            
-                self._check_player_records(starting_goalie)
-            
-                if shutout:
-                    print(f"🥅 SHUTOUT! {starting_goalie.first_name} {starting_goalie.last_name} records a shutout!")
-
-
-        def _late_six_on_five_news(self, home_team, away_team, ctx,
-                                     trailing_team_is_home=False):
-            """One headline when the late 6v5 produces the tying goal (ot_drama).
-
-            Single hook: uses the existing GameManager -> GUI news path
-            (add_news lives on the GUI; the manager only holds it via .app).
-            No-op headless. Never raises.
-            """
-            try:
-                _drivers = (ctx or {}).get("drivers") or []
-                _flavor = _drivers[0] if _drivers else "Sheer desperation"
-                _trail_team = home_team if trailing_team_is_home else away_team
-                _lead_team = away_team if trailing_team_is_home else home_team
-                _trailing = (getattr(_trail_team, "team_name", "")
-                             or "The visitors")
-                _story = (
-                    f"\u00a9 LATE EQUALIZER: {_trailing} pull the goalie and force "
-                    f"overtime against {getattr(_lead_team, 'team_name', 'the hosts')} -- "
-                    f"{_flavor.lower()} willed it to OT.")
-                _add = getattr(self, "add_news", None) or getattr(
-                    getattr(self, "app", None), "add_news", None)
-                if callable(_add):
-                    _add(_story)
-            except Exception:
-                pass
-
-
-
     def _calculate_star_player_effects(self, team, situation_score=None):
         """Calculate individual star player effects on game outcome"""
         effects = {
@@ -15468,6 +15167,324 @@ NHL League Office""",
                 _add(_story)
         except Exception:
             pass
+
+    def _check_player_records(self, player):
+        """Check if player broke any records and notify if so"""
+        # record_manager lives on GameManager (property); in the GUI this was
+        # accessed via self.game_manager.record_manager.
+        rm = self.record_manager
+        # Initialize player in record manager if needed
+        tracker = rm.get_or_create_tracker(
+            str(player.id), 
+            player.full_name, 
+            player.team_name,
+            player.is_rookie
+        )
+        
+        # Update the tracker with current stats
+        rm.player_trackers[str(player.id)] = tracker
+        tracker.season_goals = player.goals
+        tracker.season_assists = player.assists
+        tracker.season_points = player.points
+        tracker.season_games = player.games_played
+        tracker.season_pim = player.penalty_minutes
+        tracker.season_wins = player.wins
+        tracker.season_shutouts = player.shutouts
+        tracker.career_goals = player.career_goals
+        tracker.career_assists = player.career_assists
+        tracker.career_points = player.career_points
+        tracker.career_games = player.career_games
+        tracker.career_wins = player.career_wins
+        tracker.career_shutouts = player.career_shutouts
+        tracker.longest_point_streak = player.longest_point_streak
+        tracker.longest_goal_streak = player.longest_goal_streak
+        tracker.hat_tricks_season = player.hat_tricks_season
+        tracker.hat_tricks_career = player.hat_tricks_career
+        tracker.current_point_streak = player.current_point_streak
+        tracker.current_goal_streak = player.current_goal_streak
+        
+        # Check for broken records
+        rm._check_for_records(tracker)
+        
+        # Show record breaking notifications
+        recent_records = rm.get_recent_records(1)  # Just the most recent
+        if recent_records and recent_records[-1]['player_id'] == str(player.id):
+            self._show_record_notification(recent_records[-1])
+
+    def _show_record_notification(self, record_info):
+        """Show a notification when a record is broken.
+        Moved from HockeyManagerGUI -- native version uses _ui_notify
+        instead of the Tkinter achievement popup."""
+        try:
+            player_name = record_info['player_name']
+            record_type = record_info['record_type'].replace('_', ' ').title()
+            new_value = record_info['new_value']
+            is_rookie = record_info.get('is_rookie_record', False)
+            label = "ROOKIE" if is_rookie else "NHL"
+            message = f"{player_name} has set a new {label} {record_type} record with {new_value}!"
+            try:
+                self.add_news(f"RECORD ALERT: {message}")
+            except Exception:
+                pass
+            self._ui_notify("achievement", "Record Broken", message)
+        except Exception:
+            pass
+
+
+    def _select_starting_goalie(self, team):
+        """Pick tonight's starting goalie with realistic rotation.
+
+        Starters play ~75-80% of games; the backup's chance grows the longer
+        the starter's consecutive-starts streak runs (covers back-to-backs).
+        Injured or suspended goalies never dress.
+        """
+        import random
+        goalies = sorted(
+            [p for p in team.roster
+             if p.primary_position.name == 'GOALIE'
+             and not getattr(p, 'is_injured', False)
+             and not (getattr(p, 'suspension_games_remaining', 0)
+                      or 0)],
+            key=lambda p: p.overall_rating(), reverse=True)
+        if not goalies:
+            return None
+        if len(goalies) == 1:
+            return goalies[0]
+        if not hasattr(self, '_goalie_tracker'):
+            self._goalie_tracker = {}
+        track = self._goalie_tracker.setdefault(team.team_name, {'last': None, 'consec': 0})
+        starter, backup = goalies[0], goalies[1]
+        # Backup probability grows with the starter's streak
+        p_backup = 0.08 + 0.15 * track['consec']
+        if track['last'] == starter.id and random.random() < p_backup:
+            pick = backup
+        else:
+            pick = starter
+        if pick.id == starter.id:
+            track['consec'] = track['consec'] + 1 if track['last'] == starter.id else 1
+        else:
+            track['consec'] = 0
+        track['last'] = pick.id
+        return pick
+
+
+    def _auto_fix_cap(self, team, over_amount):
+        """Auto-resolve salary cap: LTIR injured, demote waiver-safe
+        high-salary players. Never risks valuable players on waivers."""
+        try:
+            from auto_resolve import auto_fix_salary_cap
+            moves, err = auto_fix_salary_cap(team, over_amount)
+            for kind, p, ch in moves:
+                try:
+                    if kind == 'ltir':
+                        p.ir_status = 'LTIR'
+                    else:  # demote: move to farm team
+                        if p in team.roster:
+                            team.roster.remove(p)
+                        _ft = getattr(team, 'farm_team', None)
+                        if _ft is not None:
+                            _fr = getattr(_ft, 'roster', None)
+                            if _fr is not None and p not in _fr:
+                                _fr.append(p)
+                except Exception:
+                    pass
+            _names = ", ".join(
+                f"{getattr(p, 'full_name', '?')} ({kind})"
+                for kind, p, ch in moves)
+            if err:
+                self.add_news(f"Auto cap fix partial: {_names}. {err}")
+            else:
+                self.add_news(
+                    f"Auto-shed ${sum(c for _, _, c in moves)/1e6:.2f}M: "
+                    f"{_names}. All moves waiver-safe.")
+        except Exception as e:
+            try:
+                self.add_news(f"Auto cap fix failed: {e}")
+            except Exception:
+                pass
+
+
+    def _ai_offseason_captaincy_changes(self):
+        """AI torch-passing (captaincy_change.py). Rare, conservative, and
+        resolved with the same assess/apply logic the human GM faces."""
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            return
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        user_team = getattr(self, "user_team", None)
+        try:
+            date_str = self.current_date.isoformat()
+        except Exception:
+            date_str = ""
+        for team in (getattr(league, "teams", None) or []):
+            try:
+                if team is user_team:
+                    continue
+                if getattr(team, "league_name", "") != "National Hockey League":
+                    continue
+                report = _cc.ai_consider_captaincy_change(
+                    team, league, date_str=date_str)
+                if not report:
+                    continue
+                for line in (report.get("news") or []):
+                    try:
+                        self.add_news(line)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+
+    def _auto_conduct_entry_draft(self, draft_year):
+        """Headless full entry draft: every pick made with the draft board's
+        AI selection logic (no UI). Prospects go to team prospect pools.
+
+        Delegates to draft_night.conduct_entry_draft -- the ONE headless
+        conductor, shared with the automated season flow. The war room's
+        _do_ai_pick uses the same ai_select_prospect, so all three paths
+        pick identically.
+
+        DRAFT AGENCY (Muck 2026-10-02): user picks are only auto-drafted
+        in bulk-sim harness mode. A real user session parks the draft --
+        the conductor defers and the continue-blocker routes the user to
+        the war room.
+        """
+        try:
+            from draft_night import conduct_entry_draft
+            picks = conduct_entry_draft(
+                self.league, draft_year, app=self,
+                allow_user_autodraft=getattr(self, '_bulk_simming', False))
+            if picks:
+                print(f"Auto-draft complete: {len(picks)} picks made.",
+                      flush=True)
+        except Exception:
+            debug_print("Tentpole auto-draft failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+
+    def _user_playoff_result(self):
+        """(made_playoffs, rounds_won, won_cup) for the user's club.
+
+        Walks the playoff bracket the same way _record_season_to_history
+        does. Defensive: any missing piece -> (False, 0, False).
+        """
+        try:
+            user = getattr(getattr(self, 'user_team', None), 'team_name', None)
+            if not user:
+                return False, 0, False
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') \
+                    and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is None:
+                return False, 0, False
+            made, rounds = False, 0
+            for series_list in (getattr(bracket, 'playoff_series', {})
+                                or {}).values():
+                for s in series_list or []:
+                    t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                    t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                    if user not in (t1, t2):
+                        continue
+                    made = True
+                    if getattr(getattr(s, 'winner', None),
+                               'team_name', None) == user:
+                        rounds += 1
+            champ = getattr(bracket, 'stanley_cup_champion', None)
+            won_cup = getattr(champ, 'team_name', None) == user
+            return made, rounds, won_cup
+        except Exception:
+            return False, 0, False
+
+
+    def _career_assistant_advice(self) -> str:
+        """Generate a context-aware tip from the assistant coach."""
+        import random as _r
+        team = self.user_team
+        roster = getattr(team, "roster", []) or []
+        unhappy = [p for p in roster if (getattr(p, "happiness", 70) or 70) < 40]
+        low_morale = sum(1 for p in roster if (getattr(p, "morale", 7) or 7) <= 4)
+        tips = []
+        if unhappy:
+            p = _r.choice(unhappy)
+            tips.append(f"{p.first_name} {p.last_name} looks unhappy — maybe a private chat would help (Manager Hub → Squad).")
+        if low_morale >= 5:
+            tips.append("Dressing-room morale is low. Consider a lighter training week or an encouraging team talk.")
+        fx = self.career.training.weekly_effects()
+        if fx["injury_risk_mult"] >= 1.5:
+            tips.append("This training load is brutal — I'd schedule a recovery week before someone breaks down.")
+        if not tips:
+            tips.append("The squad looks in good shape. Keep the routine going.")
+        return "Morning boss.\n\n" + "\n".join("• " + t for t in tips)
+
+
+    def _career_board_review(self):
+        """Monthly board confidence review email."""
+        from game_classes import EmailMessage
+        b = self.career.board
+        games = self._career_team_games()
+        if games == 0:
+            return
+        points = b.season_wins * 2 + b.season_otl
+        pct = points / (games * 2)
+        headline, body = b.monthly_review(pct, self.current_date.isoformat())
+        # GM stature: the board gives a respected GM a longer leash and a
+        # clown GM a shorter one. Drift only (+/-2/mo); results dominate.
+        try:
+            import reputation_system as _rs
+            _drift = _rs.gm_board_drift(b, self.user_team)
+            if _drift:
+                body += (f" The board also notes your standing around the "
+                         f"league ({'growing' if _drift > 0 else 'slipping'}).")
+        except Exception:
+            pass
+        self.send_email_to_user(EmailMessage(
+            sender="Board of Directors", sender_type="Owner",
+            subject=headline, content=body, date_sent=self.current_date,
+            category="General", is_important=b.confidence < 30))
+        # Restless board: nudge the GM that they can ask the owner for time.
+        if (b.confidence < 40
+                and not b._on_or_after(self.current_date.isoformat(),
+                                       b.patience_cooldown_until)):
+            self.send_email_to_user(EmailMessage(
+                sender="Board of Directors", sender_type="Owner",
+                subject="The walls are closing in",
+                content=("Confidence in your project is fading. If you need "
+                         "time to get things together, you can request a "
+                         "meeting with the owner from the Manager Hub and ask "
+                         "for patience — but choose the moment wisely. A "
+                         "refused request makes the next two months harder."),
+                date_sent=self.current_date, category="General",
+                is_important=True))
+        if b.sacked:
+            self._career_handle_sack()
+
+
+    def _career_handle_sack(self):
+        """Board has lost patience: game-over flow."""
+        # Fire once: without this the dialog + news spam on every subsequent
+        # game day / monthly review for the rest of the save.
+        if getattr(self.career, 'sack_announced', False):
+            return
+        self.career.sack_announced = True
+        self.add_news("🚨 BREAKING: The board has sacked the manager.")
+        try:
+            self._ui_notify("warning", "Sacked",
+                "The board has lost faith and terminated your contract. "
+                "Your career at this club is over.")
+        except Exception:
+            pass
+        # Disable further prompts; user can keep browsing but career is over
+        self.career.prompts_enabled = False
+
     def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
         """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
 
