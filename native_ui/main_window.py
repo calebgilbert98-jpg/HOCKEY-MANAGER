@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QShortcut, QKeySequence
 
 from .theme import THEME_QSS
 
@@ -82,6 +82,14 @@ class TopBar(QWidget):
         self.settings_btn.clicked.connect(
             lambda: self._main.show_screen("settings"))
         layout.addWidget(self.settings_btn)
+
+        self.shortcuts_btn = QPushButton("?")
+        self.shortcuts_btn.setObjectName("nav-btn")
+        self.shortcuts_btn.setCursor(Qt.PointingHandCursor)
+        self.shortcuts_btn.setToolTip("Keyboard shortcuts (?)")
+        self.shortcuts_btn.clicked.connect(
+            lambda: self._main.show_shortcuts_dialog())
+        layout.addWidget(self.shortcuts_btn)
 
     def set_active(self, name):
         for n, btn in self._nav_buttons.items():
@@ -349,6 +357,9 @@ class MainWindow(QMainWindow):
 
         # Apply theme
         self.setStyleSheet(THEME_QSS)
+
+        # Keyboard shortcuts (Space, Ctrl+S, Esc, ?, 1-9)
+        self._setup_keyboard_shortcuts()
 
     def _register_all_screens(self):
         """Register all ported screens for lazy instantiation."""
@@ -674,6 +685,105 @@ class MainWindow(QMainWindow):
         else:
             # No game loaded — show the setup wizard
             self.show_screen("setup")
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+    _TEXT_INPUT_CLASSES = (
+        "QLineEdit", "QTextEdit", "QPlainTextEdit", "QComboBox",
+        "QSpinBox", "QDoubleSpinBox", "QDateEdit", "QTimeEdit",
+        "QDateTimeEdit",
+    )
+
+    def _typing_in_field(self):
+        """True when focus is in a text input (shortcuts stay quiet)."""
+        try:
+            from PySide6.QtWidgets import QApplication
+            w = QApplication.focusWidget()
+            if w is None:
+                return False
+            return w.__class__.__name__ in self._TEXT_INPUT_CLASSES
+        except Exception:
+            return False
+
+    def _modal_dialog_open(self):
+        """True when a modal dialog is open (shortcuts stay quiet)."""
+        try:
+            from PySide6.QtWidgets import QApplication
+            for w in QApplication.topLevelWidgets():
+                if w.isModal() and w.isVisible() and w is not self:
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _setup_keyboard_shortcuts(self):
+        """Wire up app-wide keyboard shortcuts via QShortcut."""
+        if getattr(self, "_shortcuts_bound", False):
+            return
+        self._shortcuts_bound = True
+
+        def _bind(key_seq, handler):
+            sc = QShortcut(QKeySequence(key_seq), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(handler)
+            return sc
+
+        # Space: Continue (advance day) — not while typing or in a dialog
+        _bind("Space", self._shortcut_continue)
+        # Ctrl+S: Quick save
+        _bind("Ctrl+S", self._shortcut_save)
+        # Esc: Back to hub
+        _bind("Escape", self._shortcut_escape)
+        # ?: Shortcuts cheat-sheet
+        _bind("?", self._shortcut_cheat_sheet)
+        _bind("Shift+?", self._shortcut_cheat_sheet)
+
+        # 1-9: Quick navigation
+        nav_targets = {
+            "1": "hub",
+            "2": "roster",
+            "3": "lines",
+            "4": "team",
+            "5": "inbox",
+            "6": "standings",
+            "7": "stats",
+            "8": "trades",
+            "9": "schedule",
+        }
+        for key, screen in nav_targets.items():
+            _bind(key, lambda s=screen: self._shortcut_navigate(s))
+
+    def _shortcut_continue(self):
+        if self._typing_in_field() or self._modal_dialog_open():
+            return
+        self.on_continue()
+
+    def _shortcut_save(self):
+        self.save_game()
+
+    def _shortcut_escape(self):
+        if self._modal_dialog_open():
+            return  # Let the dialog handle Esc itself
+        self.show_screen("hub")
+
+    def _shortcut_cheat_sheet(self):
+        if self._typing_in_field() or self._modal_dialog_open():
+            return
+        try:
+            from .dialogs.shortcuts import show_shortcuts
+            show_shortcuts(self)
+        except Exception as e:
+            print(f"[native] shortcuts dialog failed: {e}")
+
+    def _shortcut_navigate(self, screen):
+        if self._typing_in_field() or self._modal_dialog_open():
+            return
+        self.show_screen(screen)
+
+    def show_shortcuts_dialog(self):
+        """Public entry point for the shortcuts cheat-sheet."""
+        self._shortcut_cheat_sheet()
 
 
 def run(game=None):
