@@ -290,9 +290,32 @@ def roster_limit_blockers(app):
             def _auto_demote(_t=team, _app=app, _n=n):
                 """Auto-resolve: demote waiver-safe players to get to 23."""
                 try:
+                    # FIRST: IR-eligible injured players don't count against
+                    # the 23-man limit -- stashing them frees spots WITHOUT
+                    # touching the dressable lineup. This is the actual
+                    # ping-pong breaker: without it, the demote step below
+                    # removes a skater, dress_minimum re-fires, auto-recall
+                    # pushes the roster back over 23, and the calendar
+                    # freezes forever (injury never heals, day never
+                    # advances -- a real user pressing Continue would be
+                    # stuck too).
+                    try:
+                        _placed, _who = apply_ir_quick_fix(
+                            _t, getattr(_app, "current_date", None))
+                        if _placed:
+                            _app.add_news(
+                                f"🏥 Placed {', '.join(_who)} on IR/LTIR "
+                                f"to clear roster space.")
+                    except Exception:
+                        pass
+                    # Re-count after the IR stash -- it may already be
+                    # compliant, in which case no demotion is needed at all.
+                    _n2 = active_roster_count(_t)
+                    _over_by = _n2 - ACTIVE_ROSTER_MAX
+                    if _over_by <= 0:
+                        return
                     from auto_resolve import auto_fix_roster_limit
-                    over_by = _n - ACTIVE_ROSTER_MAX
-                    demoted, err = auto_fix_roster_limit(_t, over_by)
+                    demoted, err = auto_fix_roster_limit(_t, _over_by)
                     if err:
                         _app.add_news(f"Auto-demote failed: {err}")
                         return

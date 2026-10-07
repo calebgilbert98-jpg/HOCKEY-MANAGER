@@ -147,7 +147,16 @@ def auto_choose_captains(team):
 def auto_fix_roster_limit(team, over_by):
     """Demote `over_by` players using waiver-safe logic.
     Returns (demoted_list, error_msg). Never demotes valuable
-    waiver-eligible players."""
+    waiver-eligible players, and never demotes a player whose removal
+    would leave the club unable to dress 18+2 -- that caused the
+    dress_minimum <-> roster_limit_23 ping-pong (demote a skater to
+    clear 23, dress_minimum re-fires, auto-recall pushes back over 23,
+    repeat until the calendar freezes forever)."""
+    try:
+        # Deferred: roster_limits imports this module lazily too.
+        from roster_limits import would_break_dress_minimum
+    except Exception:
+        would_break_dress_minimum = None
     try:
         roster = list(getattr(team, 'roster', []) or [])
     except Exception:
@@ -157,14 +166,30 @@ def auto_fix_roster_limit(team, over_by):
                   if not getattr(p, 'is_injured', False)
                   and not getattr(p, 'on_ir', False)]
     safe, risky = rank_demotion_candidates(candidates)
-    if len(safe) < over_by:
+    # Walk the safe list in rank order, skipping anyone whose removal --
+    # on top of already-chosen demotions -- would break the dressed
+    # lineup minimum. The check is cumulative: removing several players
+    # at once compounds, so test demoted+[p] each step.
+    demoted = []
+    for p in safe:
+        if len(demoted) >= over_by:
+            break
+        try:
+            if (would_break_dress_minimum is not None
+                    and would_break_dress_minimum(team, demoted + [p])):
+                continue
+        except Exception:
+            pass
+        demoted.append(p)
+    if len(demoted) < over_by:
         names = ", ".join(getattr(p, 'full_name', '?') for p in risky[:3])
-        return [], (
-            f"Only {len(safe)} safe demotion(s) available, need {over_by}. "
-            f"Remaining players ({names}) are too valuable to risk on waivers. "
-            f"Resolve manually."
+        return demoted, (
+            f"Only {len(demoted)} safe demotion(s) available without "
+            f"breaking the dressed lineup, need {over_by}. "
+            f"Remaining players ({names}) are too valuable to risk on "
+            f"waivers. IR the injured first, then resolve manually."
         )
-    return safe[:over_by], None
+    return demoted, None
 
 
 def auto_run_practice(team, app=None):
