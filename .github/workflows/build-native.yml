@@ -2,6 +2,9 @@ name: Build Puck Dynasty Native
 
 # Native Qt build for the Steam-target application.
 # Triggers on push to native-ui branch.
+#
+# Pipeline: build -> zip -> VALIDATE -> upload -> release -> discord.
+# If validation fails, no artifact is uploaded and no release is created.
 
 on:
   push:
@@ -43,13 +46,141 @@ jobs:
           cd dist
           Compress-Archive -Path PuckDynasty -DestinationPath "PuckDynasty-Native-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip"
 
+      - name: Validate bundle
+        # Catches the v0.26.25-28 missing-modules bug BEFORE any release is cut.
+        # If this step fails, the workflow stops: no upload, no release, no Discord post.
+        shell: bash
+        run: |
+          python - << 'PYEOF'
+          import os, sys, zipfile, shutil
+
+          version = "${{ steps.version.outputs.APP_VERSION }}"
+          zip_path = f"dist/PuckDynasty-Native-v{version}-Windows.zip"
+          tmp_dir = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "bundle_check")
+          MIN_SCREENS = 60
+
+          print(f"Validating {zip_path}...")
+
+          # 1. Extract
+          if os.path.exists(tmp_dir):
+              shutil.rmtree(tmp_dir)
+          os.makedirs(tmp_dir)
+          with zipfile.ZipFile(zip_path) as z:
+              z.extractall(tmp_dir)
+          print("  [ok] zip extracts cleanly")
+
+          # 2. Find exe, check size > 5MB
+          exe_path = None
+          for root, dirs, files in os.walk(tmp_dir):
+              if "PuckDynasty.exe" in files:
+                  exe_path = os.path.join(root, "PuckDynasty.exe")
+                  break
+          if not exe_path:
+              print("::error::VALIDATION FAILED: PuckDynasty.exe not found in bundle")
+              sys.exit(1)
+          size_mb = os.path.getsize(exe_path) / (1024 * 1024)
+          if size_mb < 5:
+              print(f"::error::VALIDATION FAILED: PuckDynasty.exe too small "
+                    f"({size_mb:.1f} MB, need > 5MB)")
+              sys.exit(1)
+          print(f"  [ok] PuckDynasty.exe found ({size_mb:.1f} MB)")
+
+          # 3. Find _internal
+          internal = None
+          bundle_root = None
+          for root, dirs, files in os.walk(tmp_dir):
+              if "_internal" in dirs:
+                  internal = os.path.join(root, "_internal")
+                  bundle_root = root
+                  break
+          if not internal:
+              print("::error::VALIDATION FAILED: _internal folder missing "
+                    "-- PyInstaller bundle is malformed")
+              sys.exit(1)
+          print("  [ok] _internal folder present")
+
+          # 4. Count bundled screen modules.
+          # Expected list comes from the source tree (what SHOULD be bundled).
+          screens_dir = "native_ui/screens"
+          expected = [f[:-3] for f in os.listdir(screens_dir)
+                      if f.endswith(".py") and f != "__init__.py"]
+          print(f"  Expecting {len(expected)} screen modules from source")
+
+          found = set()
+
+          # Check A: _internal/native_ui/screens/ as loose .pyc/.py files
+          bundled_dir = os.path.join(internal, "native_ui", "screens")
+          if os.path.isdir(bundled_dir):
+              for f in os.listdir(bundled_dir):
+                  if f.endswith((".pyc", ".py")):
+                      name = f.rsplit(".", 1)[0]
+                      if name in expected:
+                          found.add(name)
+              print(f"  Found {len(found)} via _internal/native_ui/screens/ directory")
+
+          # Check B: byte-string search across the bundle (catches PYZ-embedded
+          # modules and exe-embedded archives). Read each file once.
+          if len(found) < MIN_SCREENS:
+              needles = {}
+              for s in expected:
+                  if s not in found:
+                      needles[s] = (
+                          f"native_ui.screens.{s}".encode(),
+                          f"native_ui/screens/{s}".encode(),
+                          f"native_ui\\screens\\{s}".encode(),
+                      )
+              # Search _internal plus the exe itself (modules can be embedded there)
+              search_roots = [internal]
+              if exe_path:
+                  search_roots.append(os.path.dirname(exe_path))
+              seen_files = set()
+              for search_root in search_roots:
+                  for root, dirs, files in os.walk(search_root):
+                      if not needles:
+                          break
+                      for f in files:
+                          if not needles:
+                              break
+                          fp = os.path.join(root, f)
+                          if fp in seen_files:
+                              continue
+                          seen_files.add(fp)
+                          try:
+                              # Skip enormous binaries for speed; module names
+                              # live in the PYZ/pyc data, not in 100MB+ DLLs.
+                              if os.path.getsize(fp) > 100 * 1024 * 1024:
+                                  continue
+                              with open(fp, "rb") as fh:
+                                  data = fh.read()
+                          except (OSError, IOError):
+                              continue
+                          for s in list(needles.keys()):
+                              if any(v in data for v in needles[s]):
+                                  found.add(s)
+                                  del needles[s]
+              print(f"  Found {len(found)} total after byte-string search")
+
+          if len(found) < MIN_SCREENS:
+              missing = sorted(set(expected) - found)
+              shown = ", ".join(missing[:10]) + ("..." if len(missing) > 10 else "")
+              print(f"::error::VALIDATION FAILED: only {len(found)} screen modules "
+                    f"bundled (need >= {MIN_SCREENS}). Missing: {shown}. "
+                    f"This is the missing-modules bug: check puck_dynasty_native.spec "
+                    f"hiddenimports actually collects native_ui.screens.*")
+              sys.exit(1)
+          print(f"  [ok] screen module count OK ({len(found)} >= {MIN_SCREENS})")
+          print("Bundle validation passed.")
+          PYEOF
+
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: PuckDynasty-Native-v${{ steps.version.outputs.APP_VERSION }}-Windows
           path: dist/PuckDynasty-Native-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
 
       - name: Create release
+        if: success()
         uses: softprops/action-gh-release@v1
         with:
           tag_name: native-v${{ steps.version.outputs.APP_VERSION }}
@@ -60,3 +191,59 @@ jobs:
           files: dist/PuckDynasty-Native-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
           draft: false
           prerelease: false
+
+      - name: Post to Discord
+        # Announces the release in the Quickmuck #dev-updates forum.
+        # Uses the DISCORD_BOT_TOKEN repo secret -- never hardcode the token.
+        # A Discord outage must not fail the release, so failures warn only.
+        if: success()
+        shell: bash
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          python - << 'PYEOF'
+          import os, json, urllib.request, urllib.error
+
+          token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+          if not token:
+              print("::warning::DISCORD_BOT_TOKEN secret not set -- skipping Discord post")
+              raise SystemExit(0)
+
+          version = "${{ steps.version.outputs.APP_VERSION }}"
+          forum_id = "1557494208871407796"  # Quickmuck #dev-updates forum
+
+          title = f"v{version} released"
+          body = (
+              f"Puck Dynasty Native v{version} is live!\n\n"
+              f"Download: https://github.com/calebgilbert98-jpg/HOCKEY-MANAGER"
+              f"/releases/tag/native-v{version}\n\n"
+              f"Native Qt build (Steam target). No browser, no extensions."
+          )
+          title = title[:100]
+          body = body[:2000]
+
+          payload = json.dumps({
+              "name": title,
+              "message": {"content": body},
+          }).encode("utf-8")
+
+          req = urllib.request.Request(
+              f"https://discord.com/api/v10/channels/{forum_id}/threads",
+              data=payload,
+              headers={
+                  "Authorization": f"Bot {token}",
+                  "Content-Type": "application/json",
+                  "User-Agent": "PuckDynastyBot/1.0",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  result = json.load(resp)
+                  print(f"Posted to Discord: forum post id={result.get('id')}")
+          except urllib.error.HTTPError as e:
+              err_body = e.read().decode("utf-8", "replace")[:500]
+              print(f"::warning::Discord post failed: HTTP {e.code}: {err_body}")
+          except Exception as e:
+              print(f"::warning::Discord post failed: {e}")
+          PYEOF
