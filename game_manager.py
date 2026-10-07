@@ -16,6 +16,16 @@ from game_classes import (
 )
 from game_classes import debug_print
 
+try:
+    from database_manager import initialize_game_database
+except ImportError:
+    initialize_game_database = None
+
+try:
+    from media_system import MediaSystem
+except ImportError:
+    MediaSystem = None
+
 SALARY_CAP = 104_000_000  # 2026-27 NHL cap (modern day)
 
 START_DATE = date(datetime.now().year, 9, 1)  # start of preseason
@@ -668,6 +678,9 @@ NHL League Office""",
         print("Setting up a new game with comprehensive player database...")
         
         # Initialize the comprehensive database system
+        if initialize_game_database is None:
+            raise RuntimeError(
+                "database_manager module not available -- cannot set up new game")
         self.database_manager = initialize_game_database(self.league.teams)
 
         # P-5 is handled at creation time by name_safety (star-surname
@@ -676,7 +689,10 @@ NHL League Office""",
         # "Mikko Rantanen" from the real one.
         
         # Initialize media system
-        self.media_system = MediaSystem(self)
+        if MediaSystem is not None:
+            self.media_system = MediaSystem(self)
+        else:
+            self.media_system = None
         
         # Generate league schedule
         self.league.generate_schedule()
