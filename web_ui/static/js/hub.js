@@ -519,7 +519,10 @@ async function continueFlow() {
   } catch (e) { /* fall through to single-player flow */ }
   let st;
   try {
+    const _t0 = performance.now();
     st = await (await fetch('/api/continue_state')).json();
+    const _ms = Math.round(performance.now() - _t0);
+    console.log(`[timing] /api/continue_state took ${_ms}ms (server: ${st._timing_ms || '?'}ms)`);
   } catch (e) { return; }
   if (!st.blocked) {
     // Host mode: the click is a ready vote, not an instant advance.

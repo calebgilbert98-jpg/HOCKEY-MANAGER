@@ -6618,10 +6618,17 @@ def create_app(game_app=None):
 
     @app.route("/api/continue_state")
     def continue_state():
+        import time
+        _t0 = time.time()
         live = _live()
         if live is None:
             return jsonify({"label": "Continue", "blocked": False, "blockers": []})
-        return jsonify(get_continue_state(live))
+        result = get_continue_state(live)
+        _elapsed = time.time() - _t0
+        # Include timing in response so it's visible in browser console
+        result["_timing_ms"] = int(_elapsed * 1000)
+        print(f"[api-timing] /api/continue_state: {_elapsed:.2f}s")
+        return jsonify(result)
 
     # Ops a multiplayer spectator may run (everything else is refused:
     # spectators browse; management actions are disabled -- desktop parity).
