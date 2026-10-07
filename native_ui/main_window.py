@@ -615,6 +615,7 @@ class MainWindow(QMainWindow):
                         native_target = {
                             "fantasy_draft": "fantasy_draft",
                             "entry_draft": "draft",
+                            "captaincy_choice": "captains",
                             "captaincy": "captains",
                         }.get(blocker_id)
                         if native_target:
@@ -622,6 +623,36 @@ class MainWindow(QMainWindow):
                                 lambda _=False, n=native_target: (
                                     dlg.accept(), self.show_screen(n)))
                         cl.addWidget(btn)
+                    except Exception:
+                        pass
+                # Render auto_action button if present (e.g. Auto-pick Captains)
+                auto_action = b.get("auto_action")
+                if auto_action:
+                    try:
+                        auto_label, auto_cb = auto_action
+                        # For captaincy auto-pick, we can't call the Tk closure.
+                        # Instead, trigger the native captains screen which has
+                        # its own auto-pick, or run the logic directly.
+                        auto_btn = QPushButton(auto_label)
+                        auto_btn.setObjectName("primary-btn")
+                        bidder = b.get("id", "")
+                        if bidder == "captaincy_choice":
+                            # Navigate to captains screen; user can auto-pick there
+                            auto_btn.clicked.connect(
+                                lambda _=False: (
+                                    dlg.accept(),
+                                    self.show_screen("captains")))
+                        else:
+                            # Generic: close dialog and try the callback
+                            # (may be Tk-bound; guarded)
+                            def _run_auto(cb=auto_cb):
+                                dlg.accept()
+                                try:
+                                    cb()
+                                except Exception:
+                                    pass
+                            auto_btn.clicked.connect(_run_auto)
+                        cl.addWidget(auto_btn)
                     except Exception:
                         pass
             layout.addWidget(card)

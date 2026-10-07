@@ -147,7 +147,7 @@ class DressingRoomScreen(BaseScreen):
                 score += 30
             elif cap == "A":
                 score += 15
-            score += min(20, getattr(p, "age", 25) - 20)
+            score += min(20, (getattr(p, "age", 25) or 25) - 20)
             return score
 
         hier = sorted(roster, key=_influence, reverse=True)
