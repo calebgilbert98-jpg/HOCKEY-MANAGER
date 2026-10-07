@@ -19,6 +19,36 @@ from PySide6.QtGui import QFont, QShortcut, QKeySequence
 from .theme import THEME_QSS
 
 
+# Canonical NHL abbreviations (Team objects don't carry an `abbreviation`
+# attribute). Mirrors web_ui/bridge.py TEAM_ABBR and playoff_system.TEAM_ABBREVIATIONS.
+_TEAM_ABBR = {
+    "Anaheim Ducks": "ANA", "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+    "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
+    "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
+    "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+    "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
+    "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
+    "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
+    "Montréal Canadiens": "MTL", "Nashville Predators": "NSH",
+    "New Jersey Devils": "NJD", "New York Islanders": "NYI",
+    "New York Rangers": "NYR", "Ottawa Senators": "OTT",
+    "Philadelphia Flyers": "PHI", "Pittsburgh Penguins": "PIT",
+    "San Jose Sharks": "SJS", "Seattle Kraken": "SEA",
+    "St. Louis Blues": "STL", "Tampa Bay Lightning": "TBL",
+    "Toronto Maple Leafs": "TOR", "Utah Hockey Club": "UTA",
+    "Utah Mammoth": "UTA", "Vancouver Canucks": "VAN",
+    "Vegas Golden Knights": "VGK", "Washington Capitals": "WSH",
+    "Winnipeg Jets": "WPG",
+}
+
+
+def _team_abbr(team_name):
+    """Canonical NHL 3-letter abbreviation (Team objects don't carry one)."""
+    if not team_name:
+        return "???"
+    return _TEAM_ABBR.get(team_name, team_name[:3].upper())
+
+
 class TopBar(QWidget):
     """Application header: brand + nav + inbox/save."""
 
@@ -885,9 +915,9 @@ class HubPage(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(10)
-        my_abbr = team_name[:3].upper()
+        my_abbr = _team_abbr(team_name)
         if is_home:
-            opp_abbr = away[:3].upper()
+            opp_abbr = _team_abbr(away)
             row.addLayout(_team_col(opp_abbr, away))
             at = QLabel("@")
             at.setStyleSheet(
@@ -896,7 +926,7 @@ class HubPage(QWidget):
             row.addWidget(at)
             row.addLayout(_team_col(my_abbr, team_name))
         else:
-            opp_abbr = home[:3].upper()
+            opp_abbr = _team_abbr(home)
             row.addLayout(_team_col(my_abbr, team_name))
             at = QLabel("@")
             at.setStyleSheet(
@@ -942,7 +972,7 @@ class HubPage(QWidget):
             o = getattr(t, "otl", 0) or 0
             pts = w * 2 + o
             tn = getattr(t, "team_name", "?") or "?"
-            abbr = getattr(t, "abbreviation", None) or tn[:3].upper()
+            abbr = _team_abbr(tn)
             me = (t is team)
             vals = [str(i + 1), "%s  %s" % (abbr, tn),
                     str(w), str(lv), str(o), str(pts)]
