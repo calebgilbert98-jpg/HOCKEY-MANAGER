@@ -588,8 +588,22 @@ class MainWindow(QMainWindow):
                     label, callback = action
                     btn = QPushButton(label)
                     btn.setObjectName("primary-btn")
-                    # Close dialog then run the action
-                    btn.clicked.connect(lambda _=False, cb=callback: (dlg.accept(), cb()))
+                    # Map known blocker IDs to native screens instead of
+                    # calling Tkinter methods from main.py
+                    blocker_id = b.get("id", "")
+                    native_target = {
+                        "fantasy_draft": "fantasy_draft",
+                        "entry_draft": "draft",
+                        "captaincy": "captains",
+                    }.get(blocker_id)
+                    if native_target:
+                        btn.clicked.connect(
+                            lambda _=False, n=native_target: (
+                                dlg.accept(), self.show_screen(n)))
+                    else:
+                        # Close dialog then run the action
+                        btn.clicked.connect(
+                            lambda _=False, cb=callback: (dlg.accept(), cb()))
                     cl.addWidget(btn)
                 except Exception:
                     pass
