@@ -129,6 +129,18 @@ def auto_choose_captains(team):
         return None, f"Not enough eligible skaters ({len(ranked)})"
     captain = ranked[0]
     alternates = ranked[1:3]
+    # O-3: apply the picks here too (idempotent -- callers that apply
+    # manually just repeat a no-op). Direct callers previously got picks
+    # that were never set on the players.
+    try:
+        for _p in getattr(team, 'roster', []) or []:
+            if getattr(_p, 'captaincy', '') in ('C', 'A'):
+                _p.captaincy = ''
+        captain.captaincy = 'C'
+        for _a in alternates:
+            _a.captaincy = 'A'
+    except Exception:
+        pass
     return (captain, alternates), None
 
 

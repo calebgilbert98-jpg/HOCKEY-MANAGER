@@ -998,7 +998,24 @@ class Player:
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
-        
+
+    @property
+    def position(self) -> str:
+        """Primary position code ('C','LW','RW','LD','RD','G').
+
+        O-5: assorted code compared ``player.position == 'G'`` but Player
+        only had ``primary_position`` (enum). This property bridges both
+        APIs. Never raises -- returns '' when unresolvable."""
+        try:
+            pp = self.primary_position
+            if pp is None:
+                return ''
+            if hasattr(pp, 'value'):
+                return str(pp.value)
+            return str(pp)
+        except Exception:
+            return ''
+                
     def __hash__(self):
         """Make Player objects hashable based on their ID."""
         return hash(self.id)
