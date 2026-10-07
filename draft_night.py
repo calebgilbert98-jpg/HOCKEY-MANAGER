@@ -897,7 +897,7 @@ def park_draft_for_user(league, year, app=None):
         return False
 
 
-def resume_entry_draft_session(league, session, app=None):
+def resume_entry_draft_session(league, session, app=None, force_complete=False):
     """Finalize a complete-but-unfinalized war-room session, headlessly.
 
     The session's remaining slots are normally completed through the
@@ -908,16 +908,22 @@ def resume_entry_draft_session(league, session, app=None):
     replays nothing (every overall is already journaled) and runs the
     standard finalize -- conducted stamp, grades, session release.
 
+    force_complete: headless sims ONLY (never for real users). Completes
+    an in-progress session's remaining picks through ai_select_prospect
+    (each club's head-scout board) and finalizes. There is no user to
+    park the draft for, so the draft must not soft-lock the sim.
+
     Returns the full pick log [(team_name, overall, player)].
     """
     year = int(getattr(session, 'year', 0) or 0)
     if not year:
         return []
     # Structural guarantee: an in-progress session is NEVER advanced
-    # headlessly. Only a session whose slots are all picked gets
-    # finalized here. (The pick-completing loop below is retained for
-    # explicit callers but is unreachable while this guard stands.)
-    if not session.is_complete():
+    # headlessly -- UNLESS force_complete (headless sim, no user exists).
+    # Only a session whose slots are all picked gets finalized here. (The
+    # pick-completing loop below is retained for explicit callers but is
+    # unreachable while this guard stands.)
+    if not session.is_complete() and not force_complete:
         try:
             return list(session.materialize_picks(league))
         except Exception:

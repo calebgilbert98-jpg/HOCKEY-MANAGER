@@ -3138,7 +3138,7 @@ NHL League Office""",
                                 continue
                     if _upicks:
                         _upicks.sort()
-                        blockers.append({
+                        _ed_blocker = {
                             'id': 'entry_draft',
                             'title': 'Entry draft awaiting your picks',
                             'detail': (
@@ -3150,7 +3150,22 @@ NHL League Office""",
                                 f"war room or Sim Pick via your head scout."),
                             'action_id': 'entry_draft',
                             'action_label': 'Open Draft War Room',
-                        })
+                        }
+                        # Headless sims have no user to make picks: auto-draft
+                        # the parked session via each club's head-scout board
+                        # (ai_select_prospect). Real users never get this --
+                        # their picks stay parked for the war room.
+                        if getattr(self, '_headless_sim', False):
+                            _hl_sess = _sess
+                            _hl_self = self
+                            def _auto_draft_headless(_s=_hl_sess, _app=_hl_self):
+                                from draft_night import resume_entry_draft_session
+                                _lg = getattr(_app, 'league', None)
+                                resume_entry_draft_session(
+                                    _lg, _s, app=_app, force_complete=True)
+                            _ed_blocker['auto_action'] = (
+                                'Auto-draft (head scout)', _auto_draft_headless)
+                        blockers.append(_ed_blocker)
         except Exception:
             pass
         _tlog('entry_draft_done')
@@ -3579,6 +3594,19 @@ NHL League Office""",
         self.user_team.inbox.add_message(message)
         self.update_inbox_notification()
 
+    def _sim_early_return(self, reason):
+        """Headless diagnostics: name which simulate_day() early-return fired.
+
+        Every early return in simulate_day() logs through here so a frozen
+        date always leaves a trace naming the cause instead of failing
+        silently. Uses debug_print (game_classes), never raises.
+        """
+        try:
+            debug_print(f"[simulate_day] early-return: {reason} "
+                        f"(date={getattr(self, 'current_date', '?')})")
+        except Exception:
+            pass
+
     def simulate_day(self):
         """Completely reworked daily simulation that properly handles all scenarios"""
         # MULTIPLAYER (Phase 2) advance gate: in host mode the day advances
@@ -3588,11 +3616,13 @@ NHL League Office""",
         if getattr(self, 'mp_host', None) is not None \
                 and not getattr(self, '_mp_advance_authorized', False):
             self._mp_toggle_host_ready()
+            self._sim_early_return("mp-host-not-authorized: converted to ready vote")
             return
         if getattr(self, 'mp_client', None) is not None \
                 and getattr(self, 'mp_host', None) is None:
             self._mp_toast("Only the host advances days -- "
                            "use Ready to vote for the advance.")
+            self._sim_early_return("mp-client: only host advances")
             return
         # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
         # be completed before the day advances. Show what is blocking and
@@ -3615,6 +3645,11 @@ NHL League Office""",
                     _payload = None
                 self._mp_refresh_continue_ui(_payload)
             self._show_continue_blockers(blockers)
+            try:
+                _bids = [str((b or {}).get('id', '?')) for b in (blockers or [])]
+            except Exception:
+                _bids = ['?']
+            self._sim_early_return(f"blockers-present: {','.join(_bids)}")
             return
 
         # Prevent double-clicks: the dashboard helper also paints
@@ -3622,6 +3657,7 @@ NHL League Office""",
         dashboard = getattr(self, 'dashboard', None)
         if (dashboard is not None
                 and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
+            self._sim_early_return("already-processing: continue button disabled")
             return  # Already processing, ignore this click
         self._set_continue_feedback(True, "Starting simulation...")
 
@@ -3639,6 +3675,7 @@ NHL League Office""",
             if getattr(self, 'mp_host', None) is not None \
                     and getattr(self, '_mp_advance_authorized', False):
                 self._mp_after_deadline_tick()
+            self._sim_early_return("deadline-clock-tick: 30-min increment, date held")
             return
 
         # Resuming after the game-day inbox bundle: daily maintenance
@@ -3656,6 +3693,7 @@ NHL League Office""",
             # (exactly-once is enforced in try_play_scheduled_game).
             if self._playoffs_in_progress():
                 self._simulate_playoff_day()
+                self._sim_early_return("playoff-day: bracket path advanced the date")
                 return
 
             # Check for season end by games completed (primary trigger).
@@ -3666,6 +3704,7 @@ NHL League Office""",
             if season_complete:
                 self.end_of_season()
                 self._set_continue_feedback(False)
+                self._sim_early_return("season-complete: end_of_season ran")
                 return
 
             last_game_date = getattr(self, '_season_last_game_date', None)
@@ -3681,6 +3720,7 @@ NHL League Office""",
             if last_game_date and self.current_date > last_game_date + timedelta(days=7):
                 self.end_of_season()
                 self._set_continue_feedback(False)
+                self._sim_early_return("past-last-game-plus-7: end_of_season ran")
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
@@ -3777,6 +3817,7 @@ NHL League Office""",
                 # Bundle opened: the day waits for the user's Watch/Quick
                 # pick. Dismiss the loading overlay so they can interact.
                 self._set_continue_feedback(False)
+                self._sim_early_return("game-day-bundle: waiting for user Watch/Quick pick")
                 return
 
             # NHL Rule 6.1: every club must have 1C+2As before opening night.
@@ -3922,6 +3963,7 @@ NHL League Office""",
                     # its session on the next Continue. The finally below
                     # still restores the Continue button.
                     self._abort_day_sim = False
+                    self._sim_early_return("abort-day-sim: mid-team-talk save/load orphan")
                     return
             
             self._set_continue_feedback(True, "Updating injuries...")
@@ -4634,6 +4676,38 @@ NHL League Office""",
                     self._check_for_event_day()
                 except Exception as e:
                     print(f"deadline day event prompt failed (non-fatal): {e}")
+            if getattr(self, '_headless_sim', False):
+                # Headless: drain the whole 9 AM -> 3 PM clock inside this
+                # one call so the date advances every simulate_day(). Runs
+                # the same per-tick sim content (negotiations + tick
+                # activity) as the UI path -- just without 12 round-trips.
+                # Bounded: a misbehaving clock can never freeze the date.
+                _ticks = 0
+                for _ in range(24):
+                    tick = mgr.advance_clock()
+                    _ticks += 1
+                    try:
+                        import trade_negotiation as _tn_hl
+                        _tn_hl.process_due_negotiations(self)
+                    except Exception:
+                        pass
+                    try:
+                        self._deadline_tick_activity(mgr, tick)
+                    except Exception:
+                        pass
+                    if tick.get('expired'):
+                        break
+                try:
+                    self._close_trade_deadline(mgr)
+                except Exception:
+                    pass
+                try:
+                    debug_print(f"[simulate_day] deadline clock drained "
+                                f"headless ({_ticks} ticks, "
+                                f"date={self.current_date})")
+                except Exception:
+                    pass
+                return False
             tick = mgr.advance_clock()
             # Instant AI answers: any due negotiations resolve right now.
             try:
