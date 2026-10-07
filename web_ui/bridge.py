@@ -6538,7 +6538,13 @@ def create_app(game_app=None):
             # mock fallback (POC data)
             from web_ui.server import MOCK_STATE  # noqa
             return jsonify(MOCK_STATE)
-        return jsonify(get_hub_state(live))
+        try:
+            return jsonify(get_hub_state(live))
+        except Exception as e:
+            import traceback
+            print(f"=== /api/state FAILED: {e} ===")
+            traceback.print_exc()
+            return jsonify({"ok": False, "error": str(e)}), 500
 
     @app.route("/api/inbox")
     def inbox():
