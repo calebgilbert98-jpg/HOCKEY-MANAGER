@@ -1545,14 +1545,21 @@ BLOCKER_WEB_ROUTES = {
 }
 
 
-_continue_state_cache = {"at": 0.0, "data": None}
+_continue_state_cache = {"at": 0.0, "data": None, "date": None}
 
 def get_continue_state(app):
     """Continue button state + JSON-safe blockers for the web modal.
-    Cached for 5s (2026-10-06: the desktop computation takes 25s)."""
+    Cached for 30s or until the game date changes (2026-10-06: the desktop
+    computation takes 13-25s)."""
     import time
     now = time.time()
-    if _continue_state_cache["data"] is not None and now - _continue_state_cache["at"] < 5.0:
+    gm = _resolve_gm(app)
+    cur_date = _safe(lambda: gm.current_date)
+    cur_date_str = str(cur_date) if cur_date else ""
+    # Cache hit: same day and within 30s
+    if (_continue_state_cache["data"] is not None
+            and now - _continue_state_cache["at"] < 30.0
+            and _continue_state_cache["date"] == cur_date_str):
         return _continue_state_cache["data"]
     label, blockers = _safe(lambda: app.get_continue_state(), ("Continue", [])) or ("Continue", [])
     web_blockers = []
@@ -1602,6 +1609,7 @@ def get_continue_state(app):
             "has_games": has_games}
     _continue_state_cache["at"] = now
     _continue_state_cache["data"] = result
+    _continue_state_cache["date"] = cur_date_str
     return result
 
 
@@ -1620,11 +1628,13 @@ def get_schedule(app, limit=40):
             if not isinstance(g, dict):
                 continue
             gd = g.get("date")
+            # Early date filter: skip games before today without doing
+            # expensive team name lookups
+            if today and isinstance(gd, (date, datetime)) and gd < today:
+                continue
             home = _team_name(g.get("home_team"))
             away = _team_name(g.get("away_team"))
             if my_name and my_name not in (home, away):
-                continue
-            if today and isinstance(gd, (date, datetime)) and gd < today:
                 continue
             out.append({
                 "date": gd.strftime("%a %m/%d") if isinstance(gd, (date, datetime)) else str(gd),
@@ -1634,6 +1644,15 @@ def get_schedule(app, limit=40):
                 "opponent": away if home == my_name else home,
                 "preseason": bool(g.get("preseason", False)),
             })
+            # Early exit: if we only need `limit` games and they're
+            # chronological, we can stop once we have enough. But the
+            # schedule may not be sorted, so only do this for limit=1
+            # when checking "is there a game today".
+            if limit == 1 and len(out) >= 1:
+                # For the has_games check, we just need to know if ANY
+                # game matches today. The caller compares dates, so we
+                # need the actual game data, but we don't need to sort.
+                break
         except Exception:
             continue
     # chronological
@@ -3186,6 +3205,7 @@ def _execute_command(app, cmd):
             try:
                 _continue_state_cache["at"] = 0.0
                 _continue_state_cache["data"] = None
+                _continue_state_cache["date"] = None
             except Exception:
                 pass
             # Batch A: web parity for _post_advance_landing. When the
