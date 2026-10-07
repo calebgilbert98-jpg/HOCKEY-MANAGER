@@ -987,6 +987,24 @@ def season_meeting_blocker(app: Any) -> Optional[Dict[str, Any]]:
                 except Exception:
                     pass
 
+        def _auto():
+            """Headless/bulk auto-resolution: run the same AI meeting
+            resolution the AI clubs get (user/AI parity). Never raises."""
+            try:
+                _gm = getattr(app, "game_manager", None) or app
+                _ut = getattr(_gm, "user_team", None)
+                if _ut is None:
+                    return False
+                _league = getattr(_gm, "league", None)
+                try:
+                    _season = int(getattr(_league, "season_year", 0) or 0) or None
+                except Exception:
+                    _season = None
+                _mandate = resolve_ai_season_meeting(_ut, _league, _season)
+                return bool(_mandate)
+            except Exception:
+                return False
+
         return {
             "id": "season_meeting",
             "title": "Meet with your head coach",
@@ -994,6 +1012,7 @@ def season_meeting_blocker(app: Any) -> Optional[Dict[str, Any]]:
                        "on expectations, the rookie plan, and who owns the "
                        "lines and the whiteboard." % cname),
             "action": ("Open Season Meeting", _open),
+            "auto_action": ("Hold meeting (AI resolution)", _auto),
         }
     except Exception:
         return None

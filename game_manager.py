@@ -729,6 +729,7 @@ NHL League Office""",
             raise RuntimeError(
                 "database_manager module not available -- cannot set up new game")
         self.database_manager = initialize_game_database(self.league.teams)
+        self.db_manager = self.database_manager  # alias (O-7: some code uses db_manager)
 
         # P-5 is handled at creation time by name_safety (star-surname
         # filter in the name generators) -- no post-hoc scrub: there is no
@@ -2388,6 +2389,44 @@ NHL League Office""",
         """Display blocker dialog. UI subclasses override."""
         self._ui_notify("blockers", blockers)
 
+    def _headless_auto_resolve_blockers(self, blockers, max_rounds=3):
+        """Headless sims: attempt each blocker's auto_action, then re-check
+        get_continue_state(). Returns the remaining blockers (empty when
+        everything auto-resolved). Bounded so a broken auto_action can't
+        infinite-loop the day. Never raises."""
+        try:
+            remaining = list(blockers or [])
+            for _ in range(max_rounds):
+                if not remaining:
+                    break
+                progressed = False
+                still = []
+                for b in remaining:
+                    auto = (b or {}).get("auto_action") if isinstance(b, dict) else None
+                    if auto:
+                        try:
+                            _label, _cb = auto
+                            _cb()
+                            progressed = True
+                        except Exception:
+                            still.append(b)
+                    else:
+                        still.append(b)
+                # Re-check: auto_actions may have cleared blockers or
+                # revealed new ones.
+                try:
+                    _, fresh = self.get_continue_state()
+                except Exception:
+                    fresh = still
+                remaining = list(fresh or [])
+                if not remaining:
+                    return []
+                if not progressed:
+                    break
+            return remaining
+        except Exception:
+            return list(blockers or [])
+
     def _set_continue_feedback(self, busy, status=""):
         """Update continue button state. UI subclasses override."""
         self._ui_notify("continue_feedback", busy, status)
@@ -3553,6 +3592,12 @@ NHL League Office""",
         # be completed before the day advances. Show what is blocking and
         # offer a jump to it -- never silently do nothing.
         _label, blockers = self.get_continue_state()
+        if blockers and getattr(self, '_headless_sim', False):
+            # Headless sims have no UI to clear blockers: run each
+            # blocker's auto_action (real logic, never a no-op) and re-check.
+            # Bounded rounds -- a blocker with no working auto_action still
+            # stops the day instead of looping forever.
+            blockers = self._headless_auto_resolve_blockers(blockers)
         if blockers:
             # A blocker that appeared after the host readied must rescind
             # the vote -- the day can't advance like this.

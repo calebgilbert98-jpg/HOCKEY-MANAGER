@@ -301,9 +301,15 @@ def roster_limit_blockers(app):
                             # Move to minors: remove from NHL roster, add to
                             # AHL affiliate. The 23-man count reads
                             # team.roster directly, so removal is what clears
-                            # the blocker.
+                            # the blocker. Add to BOTH ahl_roster (the
+                            # recall pool read by recall_candidates) and
+                            # farm_team.roster (O-2: demoted players were
+                            # invisible to future recalls).
                             if p in _t.roster:
                                 _t.roster.remove(p)
+                            _ahl = getattr(_t, 'ahl_roster', None)
+                            if _ahl is not None and p not in _ahl:
+                                _ahl.append(p)
                             _ft = getattr(_t, 'farm_team', None)
                             if _ft is not None:
                                 _fr = getattr(_ft, 'roster', None)
@@ -374,6 +380,15 @@ def roster_limit_blockers(app):
                                 # Move from AHL to NHL roster. The dressed-
                                 # lineup check reads team.roster, so the
                                 # player must actually be on it.
+                                # Candidates come from team.ahl_roster
+                                # (see recall_candidates) -- remove there
+                                # FIRST, then farm_team.roster if present
+                                # (O-2: stale double-listing caused the
+                                # dress_minimum <-> roster_limit_23
+                                # ping-pong).
+                                _ahl = getattr(_t, 'ahl_roster', None)
+                                if _ahl is not None and p in _ahl:
+                                    _ahl.remove(p)
                                 _ft = getattr(_t, 'farm_team', None)
                                 if _ft is not None:
                                     _fr = getattr(_ft, 'roster', None)
