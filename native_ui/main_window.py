@@ -1551,76 +1551,143 @@ class MainWindow(QMainWindow):
         self._setup_keyboard_shortcuts()
 
     def _register_all_screens(self):
-        """Register all ported screens for lazy instantiation."""
-        # Map of screen name -> (module, class name)
-        _registry = {
-            "roster": ("native_ui.screens.roster", "RosterScreen"),
-            "player": ("native_ui.screens.player_profile", "PlayerProfileScreen"),
-            "lines": ("native_ui.screens.lines", "LinesScreen"),
-            "setup": ("native_ui.screens.setup", "SetupScreen"),
-            "multiplayer": ("native_ui.screens.multiplayer", "MultiplayerScreen"),
-            "practice_center": ("native_ui.screens.practice_center", "PracticeCenterScreen"),
-            "camp": ("native_ui.screens.camp", "CampScreen"),
-            "captains": ("native_ui.screens.captains", "CaptainsScreen"),
-            "staff": ("native_ui.screens.staff", "StaffScreen"),
-            "staff_detail": ("native_ui.screens.staff_detail", "StaffDetailScreen"),
-            "contracts": ("native_ui.screens.contracts", "ContractsScreen"),
-            "morale": ("native_ui.screens.morale", "MoraleScreen"),
-            "development": ("native_ui.screens.development", "DevelopmentScreen"),
-            "tactics": ("native_ui.screens.tactics", "TacticsScreen"),
-            "season_goals": ("native_ui.screens.season_goals", "SeasonGoalsScreen"),
-            "offseason_programs": ("native_ui.screens.offseason_programs", "OffseasonProgramsScreen"),
-            "jersey_numbers": ("native_ui.screens.jersey_numbers", "JerseyNumbersScreen"),
-            "gm_relationships": ("native_ui.screens.gm_relationships", "GmRelationshipsScreen"),
-            "trades": ("native_ui.screens.trades", "TradesScreen"),
-            "free_agents": ("native_ui.screens.free_agents", "FreeAgentsScreen"),
-            "waivers": ("native_ui.screens.waivers", "WaiversScreen"),
-            "offer_sheets": ("native_ui.screens.offer_sheets", "OfferSheetsScreen"),
-            "trade_block": ("native_ui.screens.trade_block", "TradeBlockScreen"),
-            "deadline": ("native_ui.screens.deadline", "DeadlineScreen"),
-            "standings": ("native_ui.screens.standings", "StandingsScreen"),
-            "stats": ("native_ui.screens.stats", "StatsScreen"),
-            "schedule": ("native_ui.screens.schedule", "ScheduleScreen"),
-            "playoffs": ("native_ui.screens.playoffs", "PlayoffsScreen"),
-            "draft": ("native_ui.screens.draft", "DraftScreen"),
-            "lottery": ("native_ui.screens.lottery", "LotteryScreen"),
-            "history": ("native_ui.screens.history", "HistoryScreen"),
-            "season_summary": ("native_ui.screens.season_summary", "SeasonSummaryScreen"),
-            "ahl": ("native_ui.screens.ahl", "AhIScreen"),
-            "calendar": ("native_ui.screens.calendar", "CalendarScreen"),
-            "team": ("native_ui.screens.team", "TeamScreen"),
-            "inbox": ("native_ui.screens.inbox", "InboxScreen"),
-            "news": ("native_ui.screens.news", "NewsScreen"),
-            "finances": ("native_ui.screens.finances", "FinancesScreen"),
-            "settings": ("native_ui.screens.settings", "SettingsScreen"),
-            "save": ("native_ui.screens.save", "SaveScreen"),
-            "watch": ("native_ui.screens.watch", "WatchScreen"),
-            "replay": ("native_ui.screens.replay", "ReplayScreen"),
-            "compare": ("native_ui.screens.compare", "CompareScreen"),
-            "coach_checkin": ("native_ui.screens.coach_checkin", "CoachCheckinScreen"),
-            "manager": ("native_ui.screens.manager", "ManagerScreen"),
-            "fa_frenzy": ("native_ui.screens.fa_frenzy", "FaFrenzyScreen"),
-            "fantasy_draft": ("native_ui.screens.fantasy_draft", "FantasyDraftScreen"),
-            "scouting": ("native_ui.screens.scouting", "ScoutingScreen"),
-            "contract_negotiation": ("native_ui.screens.contract_negotiation", "ContractNegotiationScreen"),
-            "dressing_room": ("native_ui.screens.dressing_room", "DressingRoomScreen"),
-            "media_center": ("native_ui.screens.media_center", "MediaCenterScreen"),
-            "records": ("native_ui.screens.records", "RecordsScreen"),
-            "shortlist": ("native_ui.screens.shortlist", "ShortlistScreen"),
-            "shot_chart_viewer": ("native_ui.screens.shot_chart_viewer", "ShotChartViewerScreen"),
-            "analytics": ("native_ui.screens.analytics", "AnalyticsScreen"),
-        }
-        # Systems pages
-        for sys_name in ["clutch", "circumstance", "discipline",
-                         "rivalry", "deployment", "condition"]:
-            _registry[f"systems_{sys_name}"] = (
-                f"native_ui.screens.systems_{sys_name}",
-                f"Systems{sys_name.title()}Screen")
+        """Register all ported screens for lazy instantiation.
 
-        for name, (mod_path, cls_name) in _registry.items():
+        Uses static imports (not dynamic __import__) so PyInstaller's
+        static analysis can see and bundle all screen modules.
+        """
+        # Static imports — PyInstaller bundles these via AST analysis.
+        # Imported inside the method (not at module top) to avoid
+        # circular-import issues and keep startup fast.
+        from native_ui.screens.ahl import AhIScreen
+        from native_ui.screens.analytics import AnalyticsScreen
+        from native_ui.screens.calendar import CalendarScreen
+        from native_ui.screens.camp import CampScreen
+        from native_ui.screens.captains import CaptainsScreen
+        from native_ui.screens.coach_checkin import CoachCheckinScreen
+        from native_ui.screens.compare import CompareScreen
+        from native_ui.screens.contract_negotiation import ContractNegotiationScreen
+        from native_ui.screens.contracts import ContractsScreen
+        from native_ui.screens.deadline import DeadlineScreen
+        from native_ui.screens.development import DevelopmentScreen
+        from native_ui.screens.draft import DraftScreen
+        from native_ui.screens.dressing_room import DressingRoomScreen
+        from native_ui.screens.fa_frenzy import FaFrenzyScreen
+        from native_ui.screens.fantasy_draft import FantasyDraftScreen
+        from native_ui.screens.finances import FinancesScreen
+        from native_ui.screens.free_agents import FreeAgentsScreen
+        from native_ui.screens.gm_relationships import GmRelationshipsScreen
+        from native_ui.screens.history import HistoryScreen
+        from native_ui.screens.inbox import InboxScreen
+        from native_ui.screens.jersey_numbers import JerseyNumbersScreen
+        from native_ui.screens.lines import LinesScreen
+        from native_ui.screens.lottery import LotteryScreen
+        from native_ui.screens.manager import ManagerScreen
+        from native_ui.screens.media_center import MediaCenterScreen
+        from native_ui.screens.morale import MoraleScreen
+        from native_ui.screens.multiplayer import MultiplayerScreen
+        from native_ui.screens.news import NewsScreen
+        from native_ui.screens.offer_sheets import OfferSheetsScreen
+        from native_ui.screens.offseason_programs import OffseasonProgramsScreen
+        from native_ui.screens.player_profile import PlayerProfileScreen
+        from native_ui.screens.playoffs import PlayoffsScreen
+        from native_ui.screens.practice_center import PracticeCenterScreen
+        from native_ui.screens.records import RecordsScreen
+        from native_ui.screens.replay import ReplayScreen
+        from native_ui.screens.roster import RosterScreen
+        from native_ui.screens.save import SaveScreen
+        from native_ui.screens.schedule import ScheduleScreen
+        from native_ui.screens.scouting import ScoutingScreen
+        from native_ui.screens.season_goals import SeasonGoalsScreen
+        from native_ui.screens.season_summary import SeasonSummaryScreen
+        from native_ui.screens.settings import SettingsScreen
+        from native_ui.screens.setup import SetupScreen
+        from native_ui.screens.shortlist import ShortlistScreen
+        from native_ui.screens.shot_chart_viewer import ShotChartViewerScreen
+        from native_ui.screens.staff import StaffScreen
+        from native_ui.screens.staff_detail import StaffDetailScreen
+        from native_ui.screens.standings import StandingsScreen
+        from native_ui.screens.stats import StatsScreen
+        from native_ui.screens.tactics import TacticsScreen
+        from native_ui.screens.team import TeamScreen
+        from native_ui.screens.trade_block import TradeBlockScreen
+        from native_ui.screens.trades import TradesScreen
+        from native_ui.screens.waivers import WaiversScreen
+        from native_ui.screens.watch import WatchScreen
+        from native_ui.screens.systems_clutch import SystemsClutchScreen
+        from native_ui.screens.systems_circumstance import SystemsCircumstanceScreen
+        from native_ui.screens.systems_discipline import SystemsDisciplineScreen
+        from native_ui.screens.systems_rivalry import SystemsRivalryScreen
+        from native_ui.screens.systems_deployment import SystemsDeploymentScreen
+        from native_ui.screens.systems_condition import SystemsConditionScreen
+
+        # Map of screen name -> class (no dynamic import needed)
+        _registry = {
+            "roster": RosterScreen,
+            "player": PlayerProfileScreen,
+            "lines": LinesScreen,
+            "setup": SetupScreen,
+            "multiplayer": MultiplayerScreen,
+            "practice_center": PracticeCenterScreen,
+            "camp": CampScreen,
+            "captains": CaptainsScreen,
+            "staff": StaffScreen,
+            "staff_detail": StaffDetailScreen,
+            "contracts": ContractsScreen,
+            "morale": MoraleScreen,
+            "development": DevelopmentScreen,
+            "tactics": TacticsScreen,
+            "season_goals": SeasonGoalsScreen,
+            "offseason_programs": OffseasonProgramsScreen,
+            "jersey_numbers": JerseyNumbersScreen,
+            "gm_relationships": GmRelationshipsScreen,
+            "trades": TradesScreen,
+            "free_agents": FreeAgentsScreen,
+            "waivers": WaiversScreen,
+            "offer_sheets": OfferSheetsScreen,
+            "trade_block": TradeBlockScreen,
+            "deadline": DeadlineScreen,
+            "standings": StandingsScreen,
+            "stats": StatsScreen,
+            "schedule": ScheduleScreen,
+            "playoffs": PlayoffsScreen,
+            "draft": DraftScreen,
+            "lottery": LotteryScreen,
+            "history": HistoryScreen,
+            "season_summary": SeasonSummaryScreen,
+            "ahl": AhIScreen,
+            "calendar": CalendarScreen,
+            "team": TeamScreen,
+            "inbox": InboxScreen,
+            "news": NewsScreen,
+            "finances": FinancesScreen,
+            "settings": SettingsScreen,
+            "save": SaveScreen,
+            "watch": WatchScreen,
+            "replay": ReplayScreen,
+            "compare": CompareScreen,
+            "coach_checkin": CoachCheckinScreen,
+            "manager": ManagerScreen,
+            "fa_frenzy": FaFrenzyScreen,
+            "fantasy_draft": FantasyDraftScreen,
+            "scouting": ScoutingScreen,
+            "contract_negotiation": ContractNegotiationScreen,
+            "dressing_room": DressingRoomScreen,
+            "media_center": MediaCenterScreen,
+            "records": RecordsScreen,
+            "shortlist": ShortlistScreen,
+            "shot_chart_viewer": ShotChartViewerScreen,
+            "analytics": AnalyticsScreen,
+            "systems_clutch": SystemsClutchScreen,
+            "systems_circumstance": SystemsCircumstanceScreen,
+            "systems_discipline": SystemsDisciplineScreen,
+            "systems_rivalry": SystemsRivalryScreen,
+            "systems_deployment": SystemsDeploymentScreen,
+            "systems_condition": SystemsConditionScreen,
+        }
+
+        for name, cls in _registry.items():
             try:
-                mod = __import__(mod_path, fromlist=[cls_name])
-                cls = getattr(mod, cls_name)
                 self._screen_classes[name] = cls
             except Exception as e:
                 _nav_error(f"[nav] failed to register {name}: {e}")
