@@ -4036,6 +4036,22 @@ NHL League Office""",
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
 
+            # Offseason programs weekly tick (offseason_programs.py): during
+            # July + August, run one PracticeEngine tick per week for every
+            # player with an assigned summer program. Ported from mainline.
+            try:
+                import offseason_programs as _osp
+                if _osp.is_offseason(self.current_date) and \
+                        self.current_date.weekday() == 0:  # Monday
+                    _all_p = []
+                    for _t in (getattr(getattr(self, "league", None),
+                                       "teams", None) or []):
+                        _all_p.extend(getattr(_t, "roster", None) or [])
+                    _osp.run_offseason_week(_all_p,
+                                            on_date=self.current_date)
+            except Exception:
+                pass
+
             # Pre-season coach expectations meeting: training camp opens
             # every September 1. The user club arms its season meeting;
             # every AI club resolves immediately. Season-idempotent (the
@@ -5545,6 +5561,10 @@ NHL League Office""",
                             getattr(away_team, "is_user_team", False)))
                     if talk_boost != 1.0 and self.user_team is not None:
                         sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                    # Perf (2026-10-07): suppress position snapshots for
+                    # non-high-fidelity sims (no visualizer consumer).
+                    if not sim_engine.high_fidelity:
+                        sim_engine._suppress_skate = True
                     # D1: the user's explicit coach instruction from the
                     # game-day bundle -- uniform channel, inert on the quick
                     # path (no hit classifier), but accepted for parity.
@@ -6721,7 +6741,7 @@ NHL League Office""",
             if not bd.get("under_floor"):
                 return None
             short = int(bd.get("floor", 0)) - int(bd.get("total", 0))
-            return {
+            _blocker = {
                 'id': 'salary_floor',
                 'title': 'Roster under the salary floor',
                 'detail': (f"Payroll ${bd['total']/1e6:.2f}M is ${short/1e6:.2f}M "
@@ -6729,6 +6749,29 @@ NHL League Office""",
                            f"Sign free agents to reach the floor before advancing."),
                 'action': ('Open Free Agency', self.open_free_agency_window),
             }
+            # SIM1 (2026-10-07): headless sims have no user to sign FAs --
+            # without an auto_action a sub-floor user club freezes the
+            # calendar permanently. Reuse the AI floor-enforcement logic
+            # (same signings the AI clubs get via ai_roster_compliance).
+            if getattr(self, '_headless_sim', False):
+                _app = self
+                def _auto_floor(_t=team, _a=_app):
+                    try:
+                        _aim = _a.ai_manager
+                        try:
+                            _aim._league_ref = getattr(_a, 'league', None)
+                        except Exception:
+                            pass
+                        _n = _aim._enforce_salary_floor(
+                            _t, getattr(getattr(_a, 'league', None),
+                                        'free_agents', []),
+                            getattr(_a, 'current_date', None))
+                        _a.add_news(f"Auto-signed {_n} free agent(s) to "
+                                    f"reach the salary floor.")
+                    except Exception as e:
+                        _a.add_news(f"Auto floor-compliance failed: {e}")
+                _blocker['auto_action'] = ('Auto-sign to floor', _auto_floor)
+            return _blocker
 
     def _generate_weekly_email_summary(self):
             """Generate a weekly email summary instead of daily emails to reduce CPU load"""
@@ -8053,6 +8096,8 @@ NHL League Office""",
                 # silent sim so the recorded result is always a valid full game.
                 from simulation import GameSim as _GameSim
                 sim = _GameSim(home_team, away_team)
+                # Perf: silent fallback sim never has visual consumers.
+                sim._suppress_skate = True
                 sim.simulate_game()
 
             home_score = getattr(sim, 'home_score', 0)
@@ -8462,6 +8507,25 @@ NHL League Office""",
             # Controversy cooldown + staff rep + Cup bonus. Reads standings before
             # league.end_of_season() wipes them.
             self._update_offseason_reputations()
+            # Season goals payoff (season_goals.py): players who hit their
+            # targets earn attribute/potential/morale boosts; misses cost
+            # a little morale. Must run before league.end_of_season() wipes
+            # the stats it reads. Ported from mainline (was defined but
+            # never called there either -- now actually wired).
+            try:
+                import season_goals as _sg
+                _all_players = []
+                for _t in (getattr(getattr(self, "league", None), "teams", None) or []):
+                    _all_players.extend(getattr(_t, "roster", None) or [])
+                    _all_players.extend(getattr(_t, "ahl_roster", None) or [])
+                _goal_report = _sg.evaluate_season_goals(_all_players)
+                _hits = sum(1 for _r in _goal_report if _r.get("hit"))
+                if _goal_report:
+                    self.add_news(
+                        f"Season goals settled: {_hits}/{len(_goal_report)} "
+                        f"targets hit.")
+            except Exception:
+                pass
             # Captaincy torch-passing (captaincy_change.py): AI clubs rarely
             # and conservatively hand the C to a plainly worthier successor.
             # Same assess/apply logic the human GM faces -- no free lunch.
@@ -14968,6 +15032,10 @@ NHL League Office""",
         sim = GameSim(home_team, away_team, atmosphere=_atm,
                       crowd_hype=crowd_hype_for_tension(
                           _atm.get("energy", 50.0), _atm.get("mood", 30.0)))
+        # Perf (2026-10-07): batch sims don't need position snapshots.
+        # _emit_skate runs ~2800x/game doing 77k round() calls for the
+        # _sniff listener below, which ignores skate data entirely.
+        sim._suppress_skate = True
         # Deployment directive: feed today's trade-deadline stances to the
         # ice-time ecosystem so coaches read team direction (buyer/seller).
         # Additive; the stance model lives in trade_storylines.

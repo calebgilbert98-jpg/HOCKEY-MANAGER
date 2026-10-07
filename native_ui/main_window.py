@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
 
 from .theme import THEME_QSS
+from native_ui.dialogs import modal as _modal
 
 
 # Canonical NHL abbreviations (Team objects don't carry an `abbreviation`
@@ -1693,6 +1694,7 @@ class MainWindow(QMainWindow):
             "fa_frenzy": FaFrenzyScreen,
             "fantasy_draft": FantasyDraftScreen,
             "scouting": ScoutingScreen,
+            "season_meeting": SeasonMeetingScreen,
             "contract_negotiation": ContractNegotiationScreen,
             "dressing_room": DressingRoomScreen,
             "media_center": MediaCenterScreen,
@@ -1885,6 +1887,7 @@ class MainWindow(QMainWindow):
                         "fantasy_draft": "fantasy_draft",
                         "entry_draft": "draft",
                         "captaincy": "captains",
+                        "season_meeting": "season_meeting",
                     }.get(action_id)
                     if native_target:
                         btn.clicked.connect(
@@ -1907,6 +1910,7 @@ class MainWindow(QMainWindow):
                             "entry_draft": "draft",
                             "captaincy_choice": "captains",
                             "captaincy": "captains",
+                            "season_meeting": "season_meeting",
                         }.get(blocker_id)
                         if native_target:
                             btn.clicked.connect(
@@ -1949,15 +1953,9 @@ class MainWindow(QMainWindow):
         close = QPushButton("Close")
         close.clicked.connect(dlg.accept)
         layout.addWidget(close)
-        # Automation bypass: modal exec() hard-blocks scripted UI drivers
-        # (visual test bots). PUCK_DYNASTY_NO_MODAL=1 logs the blockers and
-        # skips the dialog instead of blocking forever. Real users unaffected.
-        if os.environ.get("PUCK_DYNASTY_NO_MODAL"):
-            print("[blockers] (%d, auto-skipped modal): %s" % (
-                len(blockers),
-                "; ".join(b.get("title", "?") for b in blockers)))
-        else:
-            dlg.exec()
+        # Centralized modal helper honors PUCK_DYNASTY_NO_MODAL for
+        # scripted UI drivers; real users get the blocking dialog.
+        _modal.exec_dialog(dlg, "blockers")
         # If the club can't dress 18+2, offer the AHL recall picker.
         # maybe_open_recall_picker is a no-op when there's no shortfall.
         try:
@@ -2113,11 +2111,10 @@ def run(game=None):
         cur = window.stack.currentWidget()
         is_setup = cur is window._screens.get("setup")
         if not is_setup:
-            from PySide6.QtWidgets import QMessageBox
             detail = "registered screens: " + ", ".join(
                 sorted(window._screen_classes.keys())[:8]) + "..."
             _nav_error(f"[nav] setup screen not shown after launch. {detail}")
-            QMessageBox.critical(
+            _modal.critical(
                 window, "Setup unavailable",
                 "The new-career setup wizard could not be loaded.\n\n"
                 "Please report this and attach puck_dynasty_errors.log "
