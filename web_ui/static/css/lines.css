@@ -39,6 +39,8 @@
 
 /* ---- two-panel layout ---- */
 .le-grid { display: grid; grid-template-columns: 360px 1fr; gap: 20px; align-items: start; }
+.le-grid.no-sidebar { grid-template-columns: 1fr; }
+.le-grid.no-sidebar #roster-panel { display: none; }
 @media (max-width: 900px) { .le-grid { grid-template-columns: 1fr; } }
 
 /* ---- roster panel (kit .bpanel class added in HTML for styling) ---- */
@@ -58,12 +60,13 @@
 }
 .le-roster-hint { font-size: 11.5px; color: var(--dimmer); margin-top: 10px; text-align: center; }
 
-/* ---- player card: kit .pcard pattern (JS-generated markup) ---- */
+/* ---- player card: kit .pcard pattern (JS-generated markup) ----
+   Name column gets flex priority so full names stay visible (2026-10-06). */
 .le-pcard {
-  display: flex; align-items: center; gap: 14px;
+  display: flex; align-items: center; gap: 10px;
   background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
   border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
-  border-radius: var(--nhl-r); padding: 12px 14px 14px 12px; cursor: grab;
+  border-radius: var(--nhl-r); padding: 10px 10px 12px 10px; cursor: grab;
   transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
   user-select: none;
 }
@@ -75,22 +78,25 @@
 .le-pcard.dragging { opacity: .45; }
 .le-pcard.selected { border-color: var(--nhl-blue); box-shadow: var(--nhl-glow); }
 .le-pcard .ovr {
-  min-width: 38px; text-align: center;
-  font-family: var(--nhl-cond); font-weight: 900; font-size: 17px;
+  flex: 0 0 auto;
+  min-width: 36px; text-align: center;
+  font-family: var(--nhl-cond); font-weight: 900; font-size: 16px;
   padding: 5px 4px; border-radius: var(--nhl-r-sm);
   background: var(--nhl-blue-soft); border: 1px solid var(--nhl-line-blue);
 }
 .ovr.ovr-hi { color: var(--green); text-shadow: 0 0 10px rgba(52,211,153,.5); }
 .ovr.ovr-mid { color: var(--gold); }
 .ovr.ovr-lo { color: var(--red); }
-.le-pcard .nm { flex: 1; min-width: 0; }
+.le-pcard .nm { flex: 1 1 0%; min-width: 0; overflow: hidden; }
 .le-pcard .nm .n {
+  display: block;
   font-family: var(--nhl-cond);
-  font-weight: 800; font-size: 15px; text-transform: uppercase;
-  letter-spacing: .8px; color: #fff; line-height: 1.25;
+  font-weight: 800; font-size: 14px; text-transform: uppercase;
+  letter-spacing: .6px; color: #fff; line-height: 1.25;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.le-pcard .nm .s { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+.le-pcard .nm .s { display: block; font-size: 11px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.le-pcard .badges { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
 /* kit .pos-badge treatment (JS-generated markup) */
 .le-pcard .pos {
   display: inline-flex; align-items: center; justify-content: center;
@@ -178,7 +184,7 @@
 
 /* ---------- player portraits ---------- */
 .le-face {
-  width: 40px; height: 40px; flex: 0 0 40px;
+  width: 36px; height: 36px; flex: 0 0 36px;
   border-radius: 50%; object-fit: cover; object-position: top center;
   border: 2px solid rgba(59, 130, 246, 0.55);
   box-shadow: 0 0 0 1px #0a0f1c;
@@ -188,7 +194,7 @@
 .le-slot .who .le-face { width: 28px; height: 28px; flex-basis: 28px; }
 
 /* Special-teams tab (2026-10-05): tab bar + shared roster panel layout. */
-.le-tabs { display: flex; gap: 8px; margin: 4px 0 16px; }
+.le-tabs { display: flex; gap: 8px; margin: 4px 0 16px; flex-wrap: wrap; }
 /* Broadcast-style tab buttons (2026-10-06): own class so they never
    collide with the roster .le-filter pills. */
 .le-tab {
@@ -304,3 +310,79 @@
   flex: 1; font-size: 12px; text-transform: none; letter-spacing: normal;
   padding: 6px 8px;
 }
+
+/* ---- overview tab: condensed read-only grid (2026-10-06) ----
+   Two columns (even strength / special teams); every unit is one
+   compact row of chips. Designed to fit without scrolling. */
+.ov-wrap {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;
+}
+@media (max-width: 1100px) { .ov-wrap { grid-template-columns: 1fr; } }
+.ov-col {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 14px 16px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.ov-sec-label {
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2.2px; color: var(--nhl-blue); margin-bottom: 10px;
+  display: flex; align-items: center; gap: 10px;
+}
+.ov-sec-label::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
+}
+.ov-sub-label {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim); margin: 12px 0 8px;
+}
+.ov-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ov-row:last-child { margin-bottom: 0; }
+.ov-row-label {
+  flex: 0 0 64px;
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.4px; color: var(--dim);
+  display: flex; align-items: center; gap: 6px;
+}
+.ov-row-label .unit-ovr { font-size: 11px; padding: 2px 7px; }
+.ov-chips { flex: 1; min-width: 0; display: flex; gap: 6px; }
+.ov-chip {
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,.28);
+  border: 1px solid var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r-sm);
+  padding: 6px 8px;
+}
+.ov-chip.empty { opacity: .55; border-left-color: var(--nhl-line); }
+.ov-chip.fit-green { border-left-color: rgba(52,211,153,.7); }
+.ov-chip.fit-yellow { border-left-color: rgba(232,185,60,.7); }
+.ov-chip.fit-red { border-left-color: rgba(239,68,68,.7); }
+.ov-tag {
+  flex: 0 0 auto;
+  font-family: var(--nhl-cond);
+  font-size: 10px; font-weight: 800; letter-spacing: 1px;
+  color: var(--dimmer); text-transform: uppercase;
+}
+.ov-name {
+  flex: 1 1 0; min-width: 0;
+  font-family: var(--nhl-cond);
+  font-size: 13px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ov-name.dim { color: var(--dimmer); }
+.ov-chip .ovr {
+  flex: 0 0 auto;
+  font-family: var(--nhl-cond); font-weight: 900; font-size: 13px;
+  padding: 2px 6px; border-radius: var(--nhl-r-sm);
+  background: var(--nhl-blue-soft); border: 1px solid var(--nhl-line-blue);
+}
+/* Per-line tab: roomier units since only one line is shown. */
+.le-tabwrap .le-unit { margin-bottom: 18px; }
+.le-tabwrap .le-slot { min-height: 104px; }

@@ -24,20 +24,27 @@
       <h1 class="bcast-title">Line Editor</h1>
       <p class="le-note" id="lines-note">Drag players onto the ice — or tap a player, then tap a slot.</p>
     </div>
-    <div class="le-toolbar">
-      <button class="btn-ghost" id="btn-autobest" title="Fill every slot with the best available player per position">Auto Best</button>
-      <button class="btn-ghost" id="btn-clear" title="Empty every slot">Clear All</button>
+    <div class="le-toolbar" id="le-toolbar">
+      <button class="btn-ghost" id="btn-autobest" title="Fill this tab with the best available players">Auto Best</button>
+      <button class="btn-ghost" id="btn-clear" title="Empty this tab's slots">Clear</button>
       <button class="btn-ghost" id="btn-cancel" title="Revert unsaved changes">Cancel</button>
-      <button class="btn-primary" id="btn-save" disabled>Save Lines</button>
+      <button class="btn-primary" id="btn-save" disabled>Save</button>
     </div>
   </div>
 
-  <div class="le-tabs" role="tablist">
-    <button class="le-tab on" id="tab-es" role="tab">Even Strength</button>
-    <button class="le-tab" id="tab-st" role="tab">Special Teams</button>
+  <div class="le-tabs" role="tablist" id="le-tabs">
+    <button class="le-tab on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+    <button class="le-tab" data-tab="line1" role="tab" aria-selected="false">Line 1</button>
+    <button class="le-tab" data-tab="line2" role="tab" aria-selected="false">Line 2</button>
+    <button class="le-tab" data-tab="line3" role="tab" aria-selected="false">Line 3</button>
+    <button class="le-tab" data-tab="line4" role="tab" aria-selected="false">Line 4</button>
+    <button class="le-tab" data-tab="pp1" role="tab" aria-selected="false">PP1</button>
+    <button class="le-tab" data-tab="pp2" role="tab" aria-selected="false">PP2</button>
+    <button class="le-tab" data-tab="pk1" role="tab" aria-selected="false">PK1</button>
+    <button class="le-tab" data-tab="pk2" role="tab" aria-selected="false">PK2</button>
   </div>
 
-  <div class="le-grid">
+  <div class="le-grid" id="le-grid">
     <aside class="le-roster bpanel" id="roster-panel">
       <div class="le-roster-tools">
         <input id="roster-search" class="nhl-input" type="search" placeholder="Search players…" autocomplete="off" aria-label="Search players">
@@ -66,41 +73,12 @@
     </aside>
 
     <div class="le-tabwrap">
-  <div id="es-section">
-    <section class="le-ice">
-      <div id="lines-units"></div>
-      <div class="le-legend">
+      <div id="tab-content"></div>
+      <div class="le-legend" id="le-legend">
         <span class="lg lg-green"></span> Natural position
         <span class="lg lg-yellow"></span> Playable
         <span class="lg lg-red"></span> Out of position
       </div>
-    </section>
-  </div>
-
-  <div id="st-section" hidden>
-    <div class="le-head bcast-head st-head">
-      <div>
-        <p class="le-note" id="st-note">Drag skaters onto the special-teams units — or tap a skater, then tap a slot. PP units need 5 skaters, PK units need 4; a cleared unit falls back to the sim's defaults.</p>
-      </div>
-      <div class="le-toolbar">
-        <button class="btn-ghost" id="btn-st-autobest" title="Fill PP/PK units with the best available skaters">Auto Best</button>
-        <button class="btn-ghost" id="btn-st-clear" title="Empty every special-teams slot">Clear All</button>
-        <button class="btn-ghost" id="btn-st-cancel" title="Revert unsaved changes">Cancel</button>
-        <button class="btn-primary" id="btn-st-save" disabled>Save Special Teams</button>
-      </div>
-    </div>
-    <div class="le-st-grid">
-      <section class="le-ice">
-        <div class="le-unit-label" id="st-sub" style="font-size:15px;margin:6px 0 12px;">Special teams</div>
-        <div id="st-units"></div>
-        <div class="le-legend">
-          <span class="lg lg-green"></span> Natural position
-          <span class="lg lg-yellow"></span> Playable
-          <span class="lg lg-red"></span> Out of position
-        </div>
-      </section>
-    </div>
-  </div>
     </div>
   </div>
 </main>
