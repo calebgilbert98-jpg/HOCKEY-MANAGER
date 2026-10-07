@@ -193,9 +193,31 @@ class HubPage(QWidget):
                 self.record_label.setText(f"{wins}-{losses}-{otl}")
                 self.set_tile("record", f"{wins}-{losses}-{otl}", "Season record")
 
-                # Roster size
-                roster = getattr(team, "roster", None) or []
-                self.set_tile("standing", f"{len(roster)}", "Players")
+                # Division rank
+                try:
+                    division = getattr(team, "division", "") or ""
+                    league = getattr(self._main.game, "league", None)
+                    if league and division:
+                        div_teams = [t for t in getattr(league, "teams", [])
+                                     if getattr(t, "division", "") == division]
+                        # Sort by points
+                        def _pts(t):
+                            w = getattr(t, "wins", 0) or 0
+                            o = getattr(t, "otl", 0) or 0
+                            return w * 2 + o
+                        div_teams.sort(key=_pts, reverse=True)
+                        rank = next((i + 1 for i, t in enumerate(div_teams)
+                                     if t is team), None)
+                        if rank:
+                            suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
+                            self.set_tile("standing", f"{rank}{suffix}",
+                                          f"of {len(div_teams)} in {division}")
+                        else:
+                            self.set_tile("standing", division, "Division")
+                    else:
+                        self.set_tile("standing", division or "—", "Division")
+                except Exception:
+                    pass
 
                 # Cap space
                 try:
@@ -208,8 +230,87 @@ class HubPage(QWidget):
 
                 # Injuries
                 try:
+                    roster = getattr(team, "roster", None) or []
                     injured = sum(1 for p in roster if getattr(p, "is_injured", False))
                     self.set_tile("injuries", str(injured), "Injured")
+                except Exception:
+                    pass
+
+                # Streak (last 10 games)
+                try:
+                    recent = getattr(team, "recent_results", None) or []
+                    if recent:
+                        last10 = recent[-10:]
+                        w = sum(1 for r in last10 if str(r).upper().startswith("W"))
+                        l = sum(1 for r in last10 if str(r).upper().startswith("L"))
+                        self.set_tile("streak", f"{w}-{l}", "Last 10")
+                except Exception:
+                    pass
+
+                # Next game
+                try:
+                    league = getattr(self._main.game, "league", None)
+                    sched = getattr(league, "schedule", None) or []
+                    team_name = getattr(team, "team_name", "")
+                    upcoming = [g for g in sched
+                                if not getattr(g, "played", True)
+                                and team_name in (getattr(g, "home_team", ""),
+                                                  getattr(g, "away_team", ""))]
+                    if upcoming:
+                        g = upcoming[0]
+                        opp = getattr(g, "away_team", "") if getattr(g, "home_team", "") == team_name else getattr(g, "home_team", "")
+                        self.set_tile("next_game", opp[:12], "Next game")
+                except Exception:
+                    pass
+
+                # Top scorer
+                try:
+                    roster = getattr(team, "roster", None) or []
+                    if roster:
+                        def _pts2(p):
+                            return (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
+                        top = max(roster, key=_pts2)
+                        name = getattr(top, "full_name", "?") or "?"
+                        pts = _pts2(top)
+                        # Shorten name to fit
+                        parts = name.split()
+                        short = f"{parts[0][0]}. {parts[-1]}" if len(parts) > 1 else name
+                        self.set_tile("top_scorer", short[:14], f"{pts} PTS")
+                except Exception:
+                    pass
+
+                # Morale (average)
+                try:
+                    roster = getattr(team, "roster", None) or []
+                    if roster:
+                        morales = [getattr(p, "morale", 5) or 5 for p in roster]
+                        avg = sum(morales) / len(morales) if morales else 5
+                        self.set_tile("morale", f"{avg:.1f}", "Team morale")
+                except Exception:
+                    pass
+
+                # Ticker: recent headlines
+                try:
+                    game = self._main.game
+                    news = getattr(game, "news_log", None) or []
+                    if news:
+                        # Get latest headline
+                        latest = news[-1] if isinstance(news, list) else None
+                        if latest:
+                            headline = getattr(latest, "headline", None) or str(latest)[:60]
+                            self.ticker.setText(headline[:80])
+                    else:
+                        # Fall back to recent game results
+                        league = getattr(game, "league", None)
+                        sched = getattr(league, "schedule", None) or []
+                        played = [g for g in sched if getattr(g, "played", False)]
+                        if played:
+                            g = played[-1]
+                            ht = getattr(g, "home_team", "?")
+                            at = getattr(g, "away_team", "?")
+                            hs = getattr(g, "home_score", 0)
+                            aws = getattr(g, "away_score", 0)
+                            self.ticker.setText(f"Final: {at} {aws} - {ht} {hs}")
                 except Exception:
                     pass
         except Exception as e:
