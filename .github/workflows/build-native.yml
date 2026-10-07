@@ -172,6 +172,136 @@ jobs:
           print("Bundle validation passed.")
           PYEOF
 
+      - name: Windows smoke test
+        # Launches the built exe on real Windows to catch startup crashes
+        # (e.g. the v0.26.30 draft/morale ModuleNotFoundError).
+        # Runs the Python source directly with console enabled so tracebacks
+        # are visible, plus a brief launch of the bundled exe.
+        # A failure here blocks the release.
+        shell: bash
+        run: |
+          python - << 'PYEOF'
+          import os, subprocess, sys, time
+
+          version = "${{ steps.version.outputs.APP_VERSION }}"
+          print(f"Windows smoke test for v{version}...")
+
+          # Test 1: Import all screen modules via the source tree.
+          # Catches ModuleNotFoundError / ImportError before bundling.
+          print("  Test 1: importing all screen modules from source...")
+          r = subprocess.run(
+              [sys.executable, "-c",
+               "import native_ui.main_window; "
+               "import inspect; "
+               "src = inspect.getsource(native_ui.main_window.MainWindow._register_all_screens); "
+               "imports = [l.strip() for l in src.splitlines() if l.strip().startswith('from native_ui.screens.')]; "
+               "print(f'Found {len(imports)} static screen imports'); "
+               "mods = {}; "
+               "exec(compile('from native_ui.screens import ' + ','.join([]) , '<s>', 'exec'), mods); "
+               ],
+              capture_output=True, text=True, timeout=120,
+              env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+          )
+          # Simpler: just try importing each screen file directly
+          import pathlib
+          screens_dir = pathlib.Path("native_ui/screens")
+          failures = []
+          for f in sorted(screens_dir.glob("*.py")):
+              if f.name == "__init__.py":
+                  continue
+              mod = f"native_ui.screens.{f.stem}"
+              r = subprocess.run(
+                  [sys.executable, "-c", f"import {mod}"],
+                  capture_output=True, text=True, timeout=60,
+                  env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+              )
+              if r.returncode != 0:
+                  err = (r.stderr or r.stdout or "")[:500]
+                  failures.append(f"{mod}: {err}")
+          if failures:
+              print(f"::error::SMOKE TEST FAILED: {len(failures)} screen modules failed to import:")
+              for f in failures[:10]:
+                  print(f"::error::  {f}")
+              sys.exit(1)
+          print(f"  [ok] all screen modules import cleanly from source")
+
+          # Test 2: Instantiate the main window offscreen.
+          # Catches _register_all_screens crashes (the v0.26.30 bug).
+          print("  Test 2: instantiating MainWindow offscreen...")
+          test_code = (
+              "import os; os.environ['QT_QPA_PLATFORM'] = 'offscreen'; "
+              "from PySide6.QtWidgets import QApplication; "
+              "app = QApplication([]); "
+              "from native_ui.main_window import MainWindow; "
+              "w = MainWindow(); "
+              "print(f'MainWindow OK, {len(w._screens)} screens registered'); "
+          )
+          r = subprocess.run(
+              [sys.executable, "-c", test_code],
+              capture_output=True, text=True, timeout=180,
+              env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+          )
+          if r.returncode != 0:
+              err = (r.stderr or r.stdout or "")[-2000:]
+              print(f"::error::SMOKE TEST FAILED: MainWindow instantiation crashed:")
+              print(f"::error::{err}")
+              sys.exit(1)
+          print(f"  [ok] {r.stdout.strip().splitlines()[-1] if r.stdout.strip() else 'MainWindow instantiated'}")
+
+          # Test 3: Brief launch of the bundled exe.
+          # With console=False we can't see tracebacks, but a non-zero
+          # exit within 15s means a startup crash.
+          print("  Test 3: launching bundled PuckDynasty.exe briefly...")
+          import zipfile, shutil, glob
+          zip_path = f"dist/PuckDynasty-Native-v{version}-Windows.zip"
+          tmp = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "smoke_exe")
+          if os.path.exists(tmp):
+              shutil.rmtree(tmp)
+          os.makedirs(tmp)
+          with zipfile.ZipFile(zip_path) as z:
+              z.extractall(tmp)
+          exe = None
+          for root, dirs, files in os.walk(tmp):
+              if "PuckDynasty.exe" in files:
+                  exe = os.path.join(root, "PuckDynasty.exe")
+                  break
+          if not exe:
+              print("::error::SMOKE TEST FAILED: exe not found for launch test")
+              sys.exit(1)
+          try:
+              p = subprocess.Popen(
+                  [exe],
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                  env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+              )
+              try:
+                  # Give it 20s: long enough to crash on missing modules,
+                  # short enough to not hang the workflow.
+                  outs, errs = p.communicate(timeout=20)
+                  # If it exited quickly with non-zero, that's a crash.
+                  if p.returncode != 0:
+                      err = (errs.decode("utf-8", "replace") or outs.decode("utf-8", "replace") or "")[-1500:]
+                      print(f"::error::SMOKE TEST FAILED: exe exited with code {p.returncode} within 20s")
+                      if err.strip():
+                          print(f"::error::{err}")
+                      sys.exit(1)
+                  print(f"  [ok] exe ran 20s without crashing (exit 0 or still running is fine)")
+              except subprocess.TimeoutExpired:
+                  # Still running after 20s = didn't crash on startup. Good.
+                  print("  [ok] exe still running after 20s (no startup crash)")
+              finally:
+                  p.kill()
+                  try:
+                      p.wait(timeout=10)
+                  except Exception:
+                      pass
+          except Exception as e:
+              print(f"::error::SMOKE TEST FAILED: could not launch exe: {e}")
+              sys.exit(1)
+
+          print("Windows smoke test passed.")
+          PYEOF
+
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
