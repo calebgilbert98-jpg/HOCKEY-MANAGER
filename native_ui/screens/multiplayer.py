@@ -266,4 +266,5 @@ class MultiplayerScreen(BaseScreen):
             pass
 
     def refresh(self):
-        pass
+        """Refresh lobby state."""
+        self._poll()
