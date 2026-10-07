@@ -225,6 +225,22 @@ class LinesScreen(BaseScreen):
             # G1 -> G1 (already correct)
             if slot_id == 'G1':
                 sim['G1'] = player
+                continue
+            # PP/PK slots: PP1_LW -> PP1_F_LW, PP1_D1 -> PP1_D_L, PK1_F1 -> PK1_F_L
+            m = re.match(r'^(PP\d+|PK\d+)_(LW|C|RW|D\d+|F\d+|G)$', slot_id)
+            if m:
+                unit, pos = m.groups()
+                if pos in ('LW', 'C', 'RW'):
+                    sim[f'{unit}_F_{pos}'] = player
+                elif pos.startswith('D'):
+                    dnum = int(pos[1:])
+                    side = 'L' if dnum % 2 == 1 else 'R'
+                    sim[f'{unit}_D_{side}'] = player
+                elif pos.startswith('F'):
+                    sim[f'{unit}_{pos}'] = player
+                elif pos == 'G':
+                    sim[f'{unit}_G'] = player
+                continue
         return sim
 
     def refresh(self):
@@ -236,17 +252,65 @@ class LinesScreen(BaseScreen):
             lineup = getattr(user_team, "lineup", None)
             if not lineup:
                 return
-            # Populate slots from saved lineup
+            # Populate slots from saved lineup using the tab's _slots dict
             for tab_id, tab in self._line_tabs.items():
-                slot_map = tab.get_slot_map()
-                for slot_id in slot_map:
-                    if slot_id in lineup:
-                        player = lineup[slot_id]
-                        # Find the slot widget and set player
-                        for i in range(tab.layout().count()):
-                            widget = tab.layout().itemAt(i).widget()
-                            if hasattr(widget, "slot_id") and widget.slot_id == slot_id:
-                                widget.set_player(player)
-                                break
+                slots = getattr(tab, "_slots", {})
+                for slot_id, slot in slots.items():
+                    # Try direct match, then sim-key fallback (F1_LW -> LW1)
+                    player = lineup.get(slot_id)
+                    if player is None:
+                        # Try converting sim key to native key
+                        native_key = self._sim_to_native_key(slot_id)
+                        if native_key:
+                            player = lineup.get(native_key)
+                    if player:
+                        try:
+                            slot.set_player(player)
+                        except Exception:
+                            pass
+            # Update overview tab
+            self._render_overview()
         except Exception:
             pass
+
+    def _sim_to_native_key(self, sim_key):
+        """Convert sim key (F1_LW) to native key (LW1)."""
+        import re
+        m = re.match(r'^F(\d+)_(LW|C|RW)$', sim_key)
+        if m:
+            num, pos = m.groups()
+            return f'{pos}{num}'
+        m = re.match(r'^D(\d+)_(L|R)$', sim_key)
+        if m:
+            num, side = m.groups()
+            # D1_L -> D1, D1_R -> D2, D2_L -> D3, etc.
+            base = (int(num) - 1) * 2 + (1 if side == 'L' else 2)
+            return f'D{base}'
+        if sim_key == 'G1':
+            return 'G1'
+        return None
+
+    def _render_overview(self):
+        """Render the overview tab with current line assignments."""
+        try:
+            if not hasattr(self, '_overview_label'):
+                return
+            user_team = getattr(self.game, "user_team", None)
+            if not user_team:
+                return
+            lineup = getattr(user_team, "lineup", {})
+            lines_text = []
+            for i in range(1, 5):
+                lw = self._get_player_name(lineup.get(f'F{i}_LW') or lineup.get(f'LW{i}'))
+                c = self._get_player_name(lineup.get(f'F{i}_C') or lineup.get(f'C{i}'))
+                rw = self._get_player_name(lineup.get(f'F{i}_RW') or lineup.get(f'RW{i}'))
+                lines_text.append(f"Line {i}: {lw} - {c} - {rw}")
+            self._overview_label.setText("\n".join(lines_text))
+        except Exception:
+            pass
+
+    def _get_player_name(self, player):
+        """Get display name for a player object or None."""
+        if not player:
+            return "---"
+        return getattr(player, 'full_name', getattr(player, 'name', '---'))
