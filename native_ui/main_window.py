@@ -805,7 +805,8 @@ def run(game=None):
     window = MainWindow(game=game)
     window.showMaximized()
     window.refresh()
-    # Show setup wizard if no game
-    if game is None:
+    # Show setup wizard if no game OR game has no career started yet
+    # (fresh GameManager from launcher has user_team=None -- V-A1 fix)
+    if game is None or getattr(game, "user_team", None) is None:
         window.show_screen("setup")
     return app.exec()
