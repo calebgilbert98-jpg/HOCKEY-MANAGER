@@ -370,12 +370,22 @@ def roster_limit_blockers(app):
                     """Auto-resolve: recall best available from AHL."""
                     try:
                         recalled = []
-                        # Recall highest-overall candidates first
-                        for p in sorted(_cands,
-                                        key=lambda x: _overall(x),
-                                        reverse=True):
-                            if len(recalled) >= _sk + _go:
+                        sk_filled, go_filled = 0, 0
+                        # Iterate _cands in recall_candidates' position-aware
+                        # order (goalies first when goalies are needed, then
+                        # best overall). Fill skater and goalie slots
+                        # separately -- the old overall-only re-sort recalled
+                        # skaters while the goalie shortfall persisted,
+                        # leaving the dress_minimum blocker unresolved
+                        # (B2-O7: date froze).
+                        for p in _cands:
+                            if sk_filled >= _sk and go_filled >= _go:
                                 break
+                            if _is_goalie(p):
+                                if go_filled >= _go:
+                                    continue
+                            elif sk_filled >= _sk:
+                                continue
                             try:
                                 # Move from AHL to NHL roster. The dressed-
                                 # lineup check reads team.roster, so the
@@ -397,6 +407,10 @@ def roster_limit_blockers(app):
                                 if p not in _t.roster:
                                     _t.roster.append(p)
                                 recalled.append(p)
+                                if _is_goalie(p):
+                                    go_filled += 1
+                                else:
+                                    sk_filled += 1
                             except Exception:
                                 pass
                         _names = ", ".join(
