@@ -419,6 +419,7 @@ class MainWindow(QMainWindow):
             "records": ("native_ui.screens.records", "RecordsScreen"),
             "shortlist": ("native_ui.screens.shortlist", "ShortlistScreen"),
             "shot_chart_viewer": ("native_ui.screens.shot_chart_viewer", "ShotChartViewerScreen"),
+            "analytics": ("native_ui.screens.analytics", "AnalyticsScreen"),
         }
         # Systems pages
         for sys_name in ["clutch", "circumstance", "discipline",
