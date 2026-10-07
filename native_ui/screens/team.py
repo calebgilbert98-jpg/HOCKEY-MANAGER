@@ -323,6 +323,7 @@ class TeamScreen(BaseScreen):
             h.setObjectName("section-header")
             cl.addWidget(h)
             pt = PlayerTable()
+            pt.set_main_window(self.main_window)
             pt.set_players(roster)
             pt.player_clicked.connect(self._on_player_clicked)
             pt.setMaximumHeight(360)

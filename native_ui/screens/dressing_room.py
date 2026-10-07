@@ -59,6 +59,7 @@ class DressingRoomScreen(BaseScreen):
         hier_note.setWordWrap(True)
         hier_layout.addWidget(hier_note)
         self._hier_table = PlayerTable()
+        self._hier_table.set_main_window(self.main_window)
         hier_layout.addWidget(self._hier_table, 1)
         self.tabs.addTab(hier_page, "Hierarchy")
 

@@ -76,6 +76,7 @@ class PracticeCenterScreen(BaseScreen):
         left_head.setObjectName("section-header")
         left_layout.addWidget(left_head)
         self._table = PlayerTable()
+        self._table.set_main_window(self.main_window)
         self._table.cellClicked.connect(
             lambda row, _col: self._select_player(row))
         left_layout.addWidget(self._table, 1)

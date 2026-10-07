@@ -52,6 +52,7 @@ class AddPlayerDialog(QDialog):
         layout = QFormLayout(self)
 
         self._table = PlayerTable()
+        self._table.set_main_window(self.main_window)
         self._selected = None
         self._table.player_clicked.connect(self._on_pick)
         layout.addRow(self._table)

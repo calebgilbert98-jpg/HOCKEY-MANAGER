@@ -95,7 +95,7 @@ class SetupScreen(BaseScreen):
                 QMessageBox.warning(self, "Quick Start", "No teams available.")
                 return
             team = random.choice(teams)
-            team_name = getattr(team, "name", str(team))
+            team_name = getattr(team, "team_name", str(team))
             gm_name = f"GM {random.choice(['Alex', 'Sam', 'Jordan', 'Taylor', 'Chris'])}"
 
             # Apply settings and start
@@ -135,7 +135,7 @@ class SetupScreen(BaseScreen):
             self._team_combo.clear()
             teams = getattr(self.game.league, "teams", []) if hasattr(self.game, "league") else []
             for team in teams:
-                team_name = getattr(team, "name", str(team))
+                team_name = getattr(team, "team_name", str(team))
                 self._team_combo.addItem(team_name, team_name)
         except Exception:
             pass

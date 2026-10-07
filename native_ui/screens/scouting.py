@@ -255,6 +255,7 @@ class ScoutingScreen(BaseScreen):
 
         # Results table
         self._db_table = PlayerTable()
+        self._db_table.set_main_window(self.main_window)
         self._db_table.player_clicked.connect(self._open_prospect)
         db_layout.addWidget(self._db_table, 1)
 

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QDialog, QMessageBox, QGroupBox,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QIntValidator
 
 from .base import BaseScreen
 
@@ -35,6 +36,7 @@ class HostDialog(QDialog):
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel("Port:"))
         self._port = QLineEdit("5051")
+        self._port.setValidator(QIntValidator(1, 65535, self))
         self._port.setMaximumWidth(100)
         port_row.addWidget(self._port)
         port_row.addStretch()
@@ -55,7 +57,7 @@ class HostDialog(QDialog):
     def get_config(self):
         return {
             "name": self._name.text().strip(),
-            "port": int(self._port.text().strip() or 5051),
+            "port": int(self._port.text().strip() or 5051) if (self._port.text().strip() or "5051").isdigit() else 5051,
         }
 
 
@@ -89,6 +91,7 @@ class JoinDialog(QDialog):
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel("Port:"))
         self._port = QLineEdit("5051")
+        self._port.setValidator(QIntValidator(1, 65535, self))
         self._port.setMaximumWidth(100)
         port_row.addWidget(self._port)
         port_row.addStretch()
@@ -110,7 +113,7 @@ class JoinDialog(QDialog):
         return {
             "name": self._name.text().strip(),
             "host": self._host.text().strip(),
-            "port": int(self._port.text().strip() or 5051),
+            "port": int(self._port.text().strip() or 5051) if (self._port.text().strip() or "5051").isdigit() else 5051,
         }
 
 

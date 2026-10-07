@@ -378,8 +378,15 @@ class MainWindow(QMainWindow):
     # --- Navigation ---
     def show_section(self, name):
         self.topbar.set_active(name)
-        # Map section names to screens
+        # Map section names to screens (handle uppercase nav button names)
         section_map = {
+            "CLUB": "team",
+            "PERSONNEL": "staff",
+            "LEAGUE": "standings",
+            "TRANSACTIONS": "trades",
+            "FINANCES": "finances",
+            "SYSTEMS": "systems_clutch",
+            # Lowercase aliases
             "hub": "hub",
             "roster": "roster",
             "lines": "lines",
@@ -388,7 +395,7 @@ class MainWindow(QMainWindow):
             "transactions": "trades",
             "inbox": "inbox",
         }
-        screen = section_map.get(name, "hub")
+        screen = section_map.get(name, section_map.get(name.lower(), "hub"))
         self.show_screen(screen)
 
     def show_inbox(self):
@@ -404,16 +411,16 @@ class MainWindow(QMainWindow):
             print(f"[native] save failed: {e}")
 
     def on_tile_click(self, title):
-        # Map hub tile titles to screens
+        # Map hub tile titles to screens (titles are uppercase)
         tile_map = {
-            "Roster": "roster",
-            "Lines": "lines",
-            "Standings": "standings",
-            "Schedule": "schedule",
-            "Trades": "trades",
-            "Inbox": "inbox",
-            "Finances": "finances",
-            "Staff": "staff",
+            "RECORD": "standings",
+            "DIVISION": "standings",
+            "STREAK": "schedule",
+            "CAP SPACE": "finances",
+            "NEXT GAME": "schedule",
+            "TOP SCORER": "stats",
+            "INJURIES": "roster",
+            "MORALE": "morale",
         }
         screen = tile_map.get(title, "hub")
         self.show_screen(screen)
@@ -431,7 +438,7 @@ class MainWindow(QMainWindow):
                 if hasattr(self.game, "simulate_day"):
                     self.game.simulate_day()
                 # Refresh current screen
-                current = self._stack.currentWidget() if hasattr(self, "_stack") else None
+                current = self.stack.currentWidget() if hasattr(self, "stack") else None
                 if current and hasattr(current, "refresh"):
                     current.refresh()
                 elif hasattr(self, "hub"):
@@ -487,6 +494,9 @@ class MainWindow(QMainWindow):
     def refresh(self):
         if self.game:
             self.hub.refresh(self.game)
+        else:
+            # No game loaded — show the setup wizard
+            self.show_screen("setup")
 
 
 def run(game=None):
@@ -497,4 +507,7 @@ def run(game=None):
     window = MainWindow(game=game)
     window.showMaximized()
     window.refresh()
+    # Show setup wizard if no game
+    if game is None:
+        window.show_screen("setup")
     return app.exec()

@@ -163,6 +163,7 @@ class LinesScreen(BaseScreen):
         layout = QVBoxLayout(dlg)
 
         table = PlayerTable()
+        table.set_main_window(self.main_window)
         try:
             team = getattr(self.game, "user_team", None)
             if team:
