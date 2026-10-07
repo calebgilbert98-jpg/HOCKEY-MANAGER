@@ -116,6 +116,28 @@ class GameManager:
         
         # Initialize AI team manager (for CPU team decisions)
         self._ai_manager = None
+
+        # --- Attributes referenced by moved sim methods (safe defaults) ---
+        self._abort_day_sim = False
+        self._continue_after_bundle = False
+        self._captaincy_checked_phase = None
+        self._renewals_resolved_year = None
+        self._season_last_game_date = None
+        self._schedule_cache = {}
+        self._strength_cache = {}
+        self._milestone_watches = {}
+        self._milestone_watch_teams = set()
+        self._dev_engine = None
+        self._draft_beats_posted = set()
+        self._fantasy_draft_deferred = False
+        self._game_day_resolution = None
+        self._refresh_dashboard = False
+        self.end_of_season = False
+        self.mp_host = None
+        # UI-compat shims: HockeyManagerGUI sets these; on a bare GameManager
+        # they are safe no-ops so moved methods don't AttributeError.
+        self.open_windows = {}
+        self.game_manager = self  # self-reference for gm.X compatibility
         
         # Don't setup game immediately - wait for startup settings
         
@@ -2279,7 +2301,27 @@ NHL League Office""",
     # implementation routes through _ui_notify; UI subclasses override
     # with actual dialog/display implementations.
 
-    def _show_continue_blockers(self, blockers):
+
+    # --- UI-compat shims (no-ops on headless GameManager) ---
+    # These exist on HockeyManagerGUI; moved methods may call them.
+    # Base implementations are safe no-ops; UI subclasses override.
+    def update_all_views(self, *args, **kwargs):
+        self._ui_notify("update_views")
+
+    def update_news_panel(self, *args, **kwargs):
+        pass
+
+    def refresh_next_day_button(self, *args, **kwargs):
+        pass
+
+    def after_idle(self, fn, *args, **kwargs):
+        """Tk's after_idle: run when idle. Headless: run immediately."""
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            pass
+
+    def _show_continue_blockers(self, blockers, *args, **kwargs):
         """Display blocker dialog. UI subclasses override."""
         self._ui_notify("blockers", blockers)
 
@@ -2291,11 +2333,11 @@ NHL League Office""",
         """Show multiplayer toast. UI subclasses override."""
         self._ui_notify("info", msg)
 
-    def _mp_refresh_continue_ui(self):
+    def _mp_refresh_continue_ui(self, *args, **kwargs):
         """Refresh MP continue UI. UI subclasses override."""
         self._ui_notify("mp_refresh")
 
-    def _maybe_open_game_day_bundle(self):
+    def _maybe_open_game_day_bundle(self, *args, **kwargs):
         """Open game day bundle dialog if applicable. UI subclasses override."""
         self._ui_notify("game_day_bundle")
         return False
@@ -2622,11 +2664,8 @@ NHL League Office""",
             del stories[:len(stories) - cap]
         if len(self.news_log) > cap:
             del self.news_log[:len(self.news_log) - cap]
-        # Update news window if it's open
-        if 'news' in self.open_windows and self.open_windows['news'].winfo_exists():
-            self.open_windows['news'].populate_news()
-        # Update front page news panel
-        self.update_news_panel()
+        # Notify UI to refresh news displays (no-op headless)
+        self._ui_notify("news_updated")
 
     def apply_arbitration_walkaway_decision(self, message, walk_away):
         """Inbox action: walk away from an arbitration award (48h window)."""
@@ -3331,23 +3370,8 @@ NHL League Office""",
                          f"{getattr(player, 'playing_where', 'the minors')}.")}
 
     def open_fantasy_draft_window(self):
-        """Open the Fantasy Draft window."""
-        try:
-            from fantasy_draft import FantasyDraftView
-            
-            # Check if fantasy draft is available or needed
-            if not hasattr(self.game_manager, 'pending_fantasy_draft') or not self.game_manager.pending_fantasy_draft:
-                messagebox.showinfo("Fantasy Draft", 
-                                  "Fantasy draft is only available when starting a new game with the fantasy draft option enabled.")
-                return
-                
-            self.show_screen("fantasy_draft", "Fantasy Draft", FantasyDraftView,
-                             self.game_manager)
-        except Exception as e:
-            print(f"Error opening fantasy draft window: {e}")
-            import traceback
-            traceback.print_exc()
-            messagebox.showerror("Error", f"Could not open fantasy draft window: {e}")
+        """Open the Fantasy Draft window. UI-agnostic: routes via _ui_notify."""
+        self._ui_notify("open_fantasy_draft")
 
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""
@@ -8538,12 +8562,12 @@ NHL League Office""",
             # Update the current date to offseason
             self._set_current_date(date(self.league.season_year, 7, 1))  # Jump to July 1st (Free Agency)
 
-            messagebox.showinfo("Offseason", 
-                               f"Welcome to the {self.league.season_year}-{self.league.season_year + 1} offseason!\n\n"
-                               "• Players have aged one year\n"
-                               "• Stats have been reset\n"
-                               "• New draft class available\n"
-                               "• Free agency is now open")
+            self._ui_notify("info",
+                            f"Welcome to the {self.league.season_year}-{self.league.season_year + 1} offseason!\n\n"
+                            "• Players have aged one year\n"
+                            "• Stats have been reset\n"
+                            "• New draft class available\n"
+                            "• Free agency is now open")
 
             self.update_all_views()
 
