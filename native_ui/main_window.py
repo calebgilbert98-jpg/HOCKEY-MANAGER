@@ -293,13 +293,13 @@ class HubPage(QWidget):
                 except Exception:
                     pass
 
-                # Morale (average, 1-10 scale mapped to 10-100 like morale screen)
+                # Morale (average, 1-100 scale)
                 try:
                     roster = getattr(team, "roster", None) or []
                     if roster:
-                        morales = [getattr(p, "morale", 5) or 5 for p in roster]
-                        avg = sum(morales) / len(morales) if morales else 5
-                        self.set_tile("morale", f"{avg*10:.0f}", "Team morale")
+                        morales = [getattr(p, "morale", 70) or 70 for p in roster]
+                        avg = sum(morales) / len(morales) if morales else 70
+                        self.set_tile("morale", f"{avg:.0f}", "Team morale")
                 except Exception:
                     pass
 
@@ -311,7 +311,11 @@ class HubPage(QWidget):
                         # Get latest headline
                         latest = news[-1] if isinstance(news, list) else None
                         if latest:
-                            headline = getattr(latest, "headline", None) or str(latest)[:60]
+                            if isinstance(latest, dict):
+                                headline = (latest.get("story") or latest.get("headline")
+                                            or str(latest)[:60])
+                            else:
+                                headline = getattr(latest, "headline", None) or str(latest)[:60]
                             self.ticker.setText(headline[:80])
                     else:
                         # Fall back to recent game results
