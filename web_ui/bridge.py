@@ -58,7 +58,7 @@ def note_heartbeat():
     _shutdown_requested_at = 0.0
 
 
-def heartbeat_expired(timeout_s=60):
+def heartbeat_expired(timeout_s=180):
     """True if the browser tab has gone silent (closed/crashed)."""
     import time
     return (_heartbeat_seen and not _shutting_down
@@ -6503,6 +6503,16 @@ def create_app(game_app=None):
     app = Flask(__name__,
                 template_folder=os.path.join(here, "templates"),
                 static_folder=os.path.join(here, "static"))
+
+    @app.before_request
+    def _note_activity():
+        """Any HTTP request means the user is alive — not just heartbeats.
+        (2026-10-06: the server was suiciding during slow API calls because
+        only /api/heartbeat reset the timer.)"""
+        global _last_heartbeat, _heartbeat_seen
+        import time
+        _last_heartbeat = time.time()
+        _heartbeat_seen = True
 
     # Screen blueprints: each screen is self-contained (API + page route)
     # in web_ui/screens/<name>.py so parallel work never conflicts.
