@@ -21260,45 +21260,21 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
-        # MP: route to host; the host applies the paper-transaction rule.
-        if self._mp_client_mode():
-            from windows import _mp_route as _route
-            if _route(self, "call_up",
-                      {"player_id": str(getattr(player, "id", ""))}):
-                return
-        # New-CBA paper-transaction rule: a freshly assigned player must
-        # play at least one AHL game before he can be recalled.
-        try:
-            import ahl_system as _ahl_gate
-            _block = _ahl_gate.ahl_recall_block_reason(player)
-        except Exception:
-            _block = None
-        if _block:
-            messagebox.showwarning("Recall blocked (new CBA)", _block)
+        """UI wrapper: recall a player, showing dialogs on block/failure."""
+        gm = getattr(self, 'game_manager', None)
+        if gm is not None and hasattr(gm, 'call_up_to_nhl'):
+            success, message = gm.call_up_to_nhl(player)
+        else:
+            # Fallback: direct logic if no game_manager (shouldn't happen)
+            success, message = False, "Game manager not available."
+        if not success and message:
+            try:
+                messagebox.showwarning("Recall blocked (new CBA)", message)
+            except Exception:
+                pass
             return
-        self.user_team.ahl_roster.remove(player)
-        self.user_team.roster.append(player)
-        # Dressing room: a first-time NHL arrival shakes the room --
-        # the room reacts to WHO he is (blue-chip hype vs depth plug).
-        # Re-callups are guarded inside (first appearance per team only).
-        try:
-            import dressing_room as _dr_arr
-            _dr_arr.cascade_on_arrival(
-                self.user_team, player, how="callup",
-                date_str=str(getattr(self, "current_date", "")))
-        except Exception:
-            pass
-        # Stamp the audition baseline: production from this point on is his
-        # live NHL audition -- situational readiness reacts to it within days.
-        try:
-            player.nhl_audition = {
-                "goals": getattr(player, "goals", 0) or 0,
-                "assists": getattr(player, "assists", 0) or 0,
-                "games_played": getattr(player, "games_played", 0) or 0,
-            }
-        except Exception:
-            player.nhl_audition = None
-        self.update_all_views()
+        if success:
+            self.update_all_views()
 
     def open_recall_picker(self):
         """Tier-2 recall picker: when the club can't dress 18+2 and the
@@ -21655,333 +21631,45 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         return True, ""
 
+    def _ui_notify(self, kind, *args, **kwargs):
+        """Route GameManager notifications to Tk UI."""
+        try:
+            if kind == "warning":
+                messagebox.showwarning(args[0] if args else "", args[1] if len(args) > 1 else "")
+            elif kind == "error":
+                messagebox.showerror(args[0] if args else "", args[1] if len(args) > 1 else "")
+            elif kind == "info":
+                messagebox.showinfo(args[0] if args else "", args[1] if len(args) > 1 else "")
+            elif kind == "contract_result":
+                # args: kind, person, salary, years, asking_price, extension, notify, kwargs
+                self._notify_contract_result(*args, **kwargs)
+        except Exception:
+            pass
+
     def handle_contract_offer(self, person, extension=False, notify="popup"):
-        # R1 (roster limits): Dec-1 ineligible RFAs can't sign anywhere --
-        # refuse the offer up front with the real reason.
-        try:
-            import roster_limits as _rl
-            _ok, _why = _rl.can_sign_player(person)
-            if not _ok:
-                try:
-                    messagebox.showwarning("Can't sign", _why)
-                except Exception:
-                    pass
-                return False
-        except Exception:
-            pass
-        # No renegotiation (Muck 2026-10-02): a signed player can't be
-        # re-offered as a UFA. Extensions go through is_extension=True;
-        # 1-year deals may extend via the normal extension flow.
-        if not extension:
+        """UI wrapper: delegate to GameManager, handle notifications."""
+        gm = getattr(self, 'game_manager', None)
+        if gm is not None and hasattr(gm, 'handle_contract_offer'):
+            # Temporarily bind our _ui_notify to the game manager
+            orig = getattr(gm, '_ui_notify', None)
+            gm._ui_notify = self._ui_notify.__get__(gm, type(gm))
             try:
-                _fa_pool = getattr(getattr(self, "league", None),
-                                   "free_agents", None)
-                if isinstance(_fa_pool, list) and person not in _fa_pool:
-                    try:
-                        messagebox.showwarning(
-                            "Already signed",
-                            f"{getattr(person, 'full_name', 'This player')} "
-                            f"is already under contract -- you can't "
-                            f"renegotiate a signed deal.")
-                    except Exception:
-                        pass
-                    return False
-            except Exception:
-                pass
-        # NHL contract rules (cap-relative: uses the live league cap):
-        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
-        # inbox message; counter-offers become interactive), "quiet" (no
-        # notification -- bulk callers send one digest themselves).
-        # Defensive: ensure salary and contract_years attributes exist
-        salary = getattr(person, "salary",
-                         getattr(getattr(person, "contract", None),
-                                 "salary", 750_000))
-        years = getattr(person, "contract_years",
-                        getattr(getattr(person, "contract", None),
-                                "years_remaining", 1))
-        person.salary = salary
-        person.contract_years = years
-
-        ok, err = self._validate_contract_terms(
-            person, salary, years, extension=extension)
-        if not ok:
-            messagebox.showerror("Error", err)
-            return False
-
-        # Trade protection on the table: a clause the player wants is worth
-        # money to him, so the *effective* offer is salary + clause value.
-        # Shared valuation with the AI (trade_engine), not a user-only perk.
-        import trade_engine as te
-        _clause_kind = getattr(person, "offered_clause_kind", "none") or "none"
-        _clause_size = getattr(person, "offered_clause_list_size", 10) or 10
-        _demand = te.clause_demand_score(
-            person, getattr(self, "user_team", None),
-            getattr(self, "league", None))
-        _clause_val = te.clause_annual_value(person, _clause_kind) \
-            if _demand > 0.25 else 0
-        _effective_salary = salary + _clause_val
-
-        # If extension, use current salary and offer +X years
-        if extension:
-            # Create/assign negotiate_contract if missing
-            if not hasattr(person, "negotiate_contract"):
-                def negotiate_contract(salary, years):
-                    # Accept if salary is within 90-120% of value and years >= 1
-                    value = getattr(person, "value", getattr(person, "overall_rating", lambda: 10)() * 100000)
-                    min_salary = value * 0.9
-                    max_salary = value * 1.2
-                    return min_salary <= salary <= max_salary and years >= 1
-                person.negotiate_contract = negotiate_contract
-            accepted = person.negotiate_contract(_effective_salary, years)
-            if accepted:
-                person.contract_years = years
-                person.salary = salary
-                # A new SPC starts with no retained salary: the old deal's
-                # discount and two-club history die with it (the retaining
-                # club's ledger entry survives independently, per CBA).
-                try:
-                    te.clear_retention_state(person)
-                except Exception:
-                    pass
-                if hasattr(person, "contract"):
-                    person.contract.salary = salary
-                    person.contract.years_remaining = years
-                    te.apply_clause_to_contract(person.contract, _clause_kind,
-                                                _clause_size, player=person)
-            self._notify_contract_result("accepted" if accepted else "rejected",
-                                         person, salary, years, salary, extension,
-                                         notify)
-            self._clear_offered_clause(person)
-            return accepted
-
-        # Cap-relative asking price: base demand as % of cap, scaled by
-        # the live cap and any market-setter premium (the McDavid effect).
-        _cap_sys = getattr(getattr(self, 'league', None),
-                           'salary_cap_system', None)
-        _live_cap = self.get_live_cap()
-        _ovr = person.overall_rating()
-        try:
-            from game_classes import to_100_scale
-            _ovr100 = int(to_100_scale(_ovr))
-        except Exception:
-            _ovr100 = int(_ovr * 2)
-        _pos = getattr(person, "primary_position", "")
-        _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-        try:
-            _on_elc = bool(getattr(getattr(person, "contract", None),
-                                  "entry_level", False))
-        except Exception:
-            _on_elc = False
-        from salary_cap_system import base_ask_dollars as _bad2
-        _base_pct = _bad2(_ovr100, getattr(person, "age", 27),
-                          _on_elc, _pos_name) / _live_cap
-        # UFA/RFA scarcity: the same market read the AI clubs get -- thin
-        # market + many suitors inflates this ask, a flooded pool softens
-        # it. Stored on the session so the UI can explain the number.
-        _scarc3 = 1.0
-        _scarc_sig3 = "balanced"
-        try:
-            from salary_cap_system import fa_market_scarcity as _fms3
-            _sc = _fms3(getattr(self, 'league', None), _pos_name)
-            _scarc3 = float(_sc.get("multiplier", 1.0))
-            _scarc_sig3 = str(_sc.get("signal", "balanced"))
-        except Exception:
-            pass
-        if _cap_sys is not None:
-            _season = getattr(getattr(self, 'league', None), 'season_year', 0)
-            asking_price = _cap_sys.demand_for(
-                _base_pct, _ovr100, _pos_name,
-                getattr(person, "age", 27), _season, scarcity=_scarc3)
-        else:
-            asking_price = int(_base_pct * _live_cap)
-        asking_price = max(asking_price, 750_000)
-        # Stash the market read on the negotiation session so the talks UI
-        # can explain the number (qualitative signal only, never the
-        # multiplier).
-        try:
-            from popup_system import get_negotiation_session as _gns
-            _nsess = _gns(self, person, defaults={})
-            if _nsess is not None:
-                _nsess["scarcity_signal"] = _scarc_sig3
-                _nsess["scarcity_pos"] = _pos_name
-        except Exception:
-            pass
-
-        # A player who badly wants protection and isn't getting it charges
-        # for the missing clause.
-        if _demand >= 0.65 and _clause_kind == "none":
-            asking_price = int(asking_price * 1.08)
-
-        if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
-            # UFA consideration period (Muck 2026-10-02): no more instant
-            # signings. A qualifying UFA offer becomes a BID -- the player
-            # fields offers from every club for 3-7 days, then signs with
-            # the most appealing one per contract_appeal(). Extensions keep
-            # the instant path (they're re-signings, not market bids).
-            if not extension:
-                try:
-                    import ufa_consideration as _uc
-                    _cons = _uc.submit_ufa_offer(
-                        self, getattr(self, "league", None), person,
-                        getattr(self, "user_team", None),
-                        person.salary, person.contract_years,
-                        is_user=True,
-                        clause_kind=_clause_kind,
-                        clause_size=_clause_size)
-                    if _cons is not None:
-                        _uc.notify_consideration_started(
-                            self, person, person.salary,
-                            person.contract_years,
-                            int(_cons.get("days_left", 4) or 4))
-                        self._clear_offered_clause(person)
-                        return "consideration"
-                except Exception:
-                    pass
-            self._finalize_contract_signing(person, person.salary,
-                                            person.contract_years,
-                                            asking_price, extension)
-            self._notify_contract_result("accepted", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify,
-                                         clause_kind=_clause_kind,
-                                         clause_list_size=_clause_size)
-            self._clear_offered_clause(person)
-            return True
-        elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
-            # The clause offer travels WITH the counter: capture the staged
-            # terms into the inbox action and clear them here, so they stay
-            # single-use and can't leak into an unrelated later deal.
-            _ck, _cs = _clause_kind, _clause_size
-            self._clear_offered_clause(person)
-            self._notify_contract_result("counter", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify,
-                                         clause_kind=_ck,
-                                         clause_list_size=_cs)
-            return False
-        else: # Rejects if below 70%
-            self._notify_contract_result("rejected", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify)
-            self._clear_offered_clause(person)
-            return False
+                return gm.handle_contract_offer(person, extension=extension, notify=notify)
+            finally:
+                if orig is not None:
+                    gm._ui_notify = orig
+        return False
 
     def _clear_offered_clause(self, person):
-        """Staged clause terms are single-use: never leak into a later deal."""
-        for _attr in ("offered_clause_kind", "offered_clause_list_size"):
-            try:
-                if hasattr(person, _attr):
-                    delattr(person, _attr)
-            except Exception:
-                pass
+        gm = getattr(self, 'game_manager', None)
+        if gm is not None and hasattr(gm, '_clear_offered_clause'):
+            return gm._clear_offered_clause(person)
 
     def _finalize_contract_signing(self, person, salary, years, asking_price,
                                    extension):
-        """Apply an agreed contract: cap records, market tracking, news,
-        media, roster moves. Shared by the negotiation window and the
-        inbox counter-offer accept button."""
-        person.salary = salary
-        person.contract_years = years
-        # A new SPC starts with no retained salary: the old deal's discount
-        # and two-club history die with it (the retaining club's ledger
-        # entry survives independently, per CBA).
-        try:
-            import trade_engine as _te_clr3
-            _te_clr3.clear_retention_state(person)
-        except Exception:
-            pass
-        _contract = getattr(person, "contract", None)
-        if _contract is not None:
-            _contract.salary = salary
-            _contract.years_remaining = years
-            # Trade protection negotiated at the table lands on the deal.
-            import trade_engine as _te2
-            _te2.apply_clause_to_contract(
-                _contract,
-                getattr(person, "offered_clause_kind", "none") or "none",
-                getattr(person, "offered_clause_list_size", 10) or 10,
-                player=person)
-        _cap_sys = getattr(getattr(self, 'league', None),
-                           'salary_cap_system', None)
-        # Track market-setting contracts (star + top-5 AAV)
-        _set_market = False
-        try:
-            _ovr = person.overall_rating()
-            try:
-                from game_classes import to_100_scale
-                _ovr100 = int(to_100_scale(_ovr))
-            except Exception:
-                _ovr100 = int(_ovr * 2)
-            _pos = getattr(person, "primary_position", "")
-            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-            if _cap_sys is not None:
-                _season = getattr(getattr(self, 'league', None), 'season_year', 0)
-                _set_market = _cap_sys.register_signing(
-                    person.full_name, salary, _ovr100,
-                    _pos_name, getattr(person, "age", 27), _season)
-                if _set_market:
-                    self.news_log.append({
-                        'date': self.current_date,
-                        'story': (f"{person.full_name}'s "
-                                  f"${salary:,} deal sets the market "
-                                  f"-- comparable stars will demand more.")})
-        except Exception:
-            pass
-        # Contract-decision fallout: overpay verdict, fan beef, GM rep,
-        # and GM-GM heat when the deal resets the market. The salary
-        # engine itself (SalaryCapSystem) is untouched.
-        try:
-            from reputation_system import evaluate_contract_decision
-            _cd = evaluate_contract_decision(
-                person, salary, asking_price,
-                team=self.user_team, league=self.league,
-                market_setter=bool(_set_market))
-            if _cd.get("story"):
-                self.news_log.append({'date': self.current_date,
-                                      'story': _cd["story"]})
-        except Exception:
-            pass
-        if not extension:
-            try:
-                self.league.free_agents.remove(person)
-            except Exception:
-                pass
-            self.user_team.add_player(person, "roster")
-            # Rivalry lifecycle: a free-agent signing is a transfer -- his
-            # personal beefs follow him to the new room; ambient noise he
-            # merely encouraged stays behind. Same chokepoint as trades.
-            try:
-                from reputation_system import on_player_transfer as _opt
-                _rivs = getattr(getattr(self, "league", None), "rivalries", None)
-                if isinstance(_rivs, list):
-                    _opt(_rivs, person, from_team=None, to_team=self.user_team)
-            except Exception:
-                pass
-            # Dressing room: a new face in the room -- the room reacts to
-            # WHO he is (blue-chip hype, veteran gravity), bounded.
-            try:
-                import dressing_room as _dr_arr
-                _dr_arr.cascade_on_arrival(
-                    self.user_team, person, how="signing",
-                    date_str=str(getattr(self, "current_date", "")))
-            except Exception:
-                pass
-            # D4: signing a star is a board headline (star_signing fuel).
-            try:
-                import reputation_system as _rs4
-                _rs4.note_star_signing(
-                    getattr(getattr(self, "career", None), "board", None),
-                    person)
-            except Exception:
-                pass
-        self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
-
-        # Generate media event for signing (if media system enabled)
-        if hasattr(self, 'media_system') and self.media_system:
-            contract_type = 'extension' if extension else 'signing'
-            self.media_system.process_signing(person, self.user_team, contract_type, salary, years)
-
-        self.update_all_views()
+        gm = getattr(self, 'game_manager', None)
+        if gm is not None and hasattr(gm, '_finalize_contract_signing'):
+            return gm._finalize_contract_signing(person, salary, years, asking_price, extension)
 
     def _notify_contract_result(self, kind, person, salary, years,
                                 asking_price, extension, notify="popup",

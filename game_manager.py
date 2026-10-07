@@ -2201,6 +2201,79 @@ NHL League Office""",
             except Exception:
                 pass
         return True, ""
+
+    # ------------------------------------------------------------------
+    # AHL call-up (extracted from HockeyManagerGUI — UI-agnostic)
+    # ------------------------------------------------------------------
+    def _mp_client_mode(self):
+        """True when running as a multiplayer client (not host)."""
+        return getattr(self, 'mp_client', None) is not None \
+            and getattr(self, 'mp_host', None) is None
+
+    def call_up_to_nhl(self, player):
+        """Recall a player from the AHL roster to the NHL roster.
+
+        Returns (success: bool, message: str|None).
+        UI-agnostic: no messagebox, no view updates. Callers handle UI.
+        """
+        if self._mp_client_mode():
+            try:
+                from windows import _mp_route as _route
+                if _route(self, "call_up",
+                          {"player_id": str(getattr(player, "id", ""))}):
+                    return True, None
+            except Exception:
+                pass
+        try:
+            import ahl_system as _ahl_gate
+            _block = _ahl_gate.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            return False, _block
+        try:
+            self.user_team.ahl_roster.remove(player)
+        except (ValueError, AttributeError):
+            pass
+        try:
+            self.user_team.roster.append(player)
+        except AttributeError:
+            return False, "No active roster available."
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                self.user_team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+        try:
+            player.nhl_audition = {
+                "goals": getattr(player, "goals", 0) or 0,
+                "assists": getattr(player, "assists", 0) or 0,
+                "games_played": getattr(player, "games_played", 0) or 0,
+            }
+        except Exception:
+            try:
+                player.nhl_audition = None
+            except Exception:
+                pass
+        return True, None
+
+    def _ui_notify(self, kind, *args, **kwargs):
+        """UI notification hook. Overridden by UI subclasses.
+
+        kind: "warning" | "error" | "info" | "contract_result"
+        """
+        pass
+
+    def _clear_offered_clause(self, person):
+        """Staged clause terms are single-use: never leak into a later deal."""
+        for _attr in ("offered_clause_kind", "offered_clause_list_size"):
+            try:
+                if hasattr(person, _attr):
+                    delattr(person, _attr)
+            except Exception:
+                pass
 def launch_game_viewer_with_sim(home_team, away_team):
     """
     Run a full AdvancedGameSim and launch the professional GameViewer with real data
