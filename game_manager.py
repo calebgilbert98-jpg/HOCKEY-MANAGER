@@ -8628,6 +8628,522 @@ NHL League Office""",
             except Exception:
                 pass
 
+    # --- Critical sim methods from HockeyManagerGUI ---
+
+    def _record_game_result(self, game_result):
+        """Append a game result and keep the derived indexes in sync."""
+        self.game_results.append(game_result)
+        if self._results_index_src is self.game_results:
+            key = self._result_date_key(game_result.get('date'))
+            if key is not None:
+                self._results_by_date.setdefault(key, []).append(game_result)
+                self._results_by_matchup[
+                    (key, id(game_result.get('home_team')),
+                     id(game_result.get('away_team')))] = game_result
+
+    def _sim_game_guaranteed(self, home_team, away_team, game, game_date,
+                             is_preseason=False):
+        """Simulate one scheduled game; NEVER raises, NEVER drops the game.
+
+        Tiers:
+          0 -- normal path: the full event sim for 'full'-detail leagues
+               (regular season only), else the lightweight sim.
+          1 -- retry via the lightweight sim (skipped when tier 0 already
+               was the lightweight path).
+          2 -- deterministic last-resort result from roster strength
+               (seeded, reproducible, loudly logged).
+
+        The preseason flag flows through every tier: exhibitions never
+        touch standings or season stats, in ANY tier. Returns
+        (winner, loser, scores, went_to_ot, full_sim) with full_sim None
+        unless tier 0 ran the full event sim.
+        """
+        league_key = game.get('league') if isinstance(game, dict) else None
+        _want_full = False
+        try:
+            _want_full = (self._league_sim_detail(league_key) == 'full'
+                          and not is_preseason)
+        except Exception as _ld_e:
+            # Detail lookup failed: fall through to the lightweight sim.
+            self._log_slate_fallback(home_team, away_team, game_date,
+                                     _ld_e, tier="full->lightweight",
+                                     detail="sim-detail lookup failed")
+        if _want_full:
+            try:
+                winner, loser, scores, went_to_ot, full_sim = \
+                    self._simulate_game_full_batch(home_team, away_team)
+                return winner, loser, scores, went_to_ot, full_sim
+            except Exception as _full_e:
+                self._log_slate_fallback(
+                    home_team, away_team, game_date, _full_e,
+                    tier="full->lightweight",
+                    detail="full-batch sim failed; retrying lightweight")
+                # Fall through to the lightweight retry below.
+        try:
+            winner, loser, scores, went_to_ot = \
+                self._simulate_game_lightweight(home_team, away_team,
+                                                preseason=is_preseason)
+            return winner, loser, scores, went_to_ot, None
+        except Exception as _light_e:
+            self._log_slate_fallback(
+                home_team, away_team, game_date, _light_e,
+                tier="lightweight->deterministic",
+                detail=("lightweight sim failed"
+                        + (" after full-batch failure" if _want_full else "")))
+        # Tier 2: deterministic last resort. Built to not raise; the
+        # belt-and-braces except below is for pathological team objects.
+        try:
+            return self._slate_deterministic_result(home_team, away_team,
+                                                    game_date)
+        except Exception as _det_e:
+            self._log_slate_fallback(home_team, away_team, game_date,
+                                     _det_e, tier="deterministic->coinflip",
+                                     detail="deterministic builder failed; "
+                                            "absolute last resort")
+            import random as _r
+            _rng = _r.Random(f"coinflip|{game_date}|"
+                             f"{getattr(home_team, 'team_name', '?')}|"
+                             f"{getattr(away_team, 'team_name', '?')}")
+            if _rng.random() < 0.5:
+                return home_team, away_team, (2, 1), False, None
+            return away_team, home_team, (1, 2), False, None
+
+    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False,
+                               preseason=False):
+        """Fast standings update without complex calculations.
+
+        preseason: exhibitions never touch the table."""
+        if preseason:
+            return
+        home_score, away_score = scores
+        
+        # Ensure teams exist in standings
+        for team in [home_team, away_team]:
+            if team.team_name not in self.league.standings:
+                self.league.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+        
+        # Update winner (2 points)
+        self.league.standings[winner.team_name]["W"] += 1
+        self.league.standings[winner.team_name]["Points"] += 2
+        
+        # Update loser (OTL point if went to OT/SO, else regulation loss)
+        loser = away_team if winner == home_team else home_team
+        if went_to_ot:
+            self.league.standings[loser.team_name]["OTL"] += 1
+            self.league.standings[loser.team_name]["Points"] += 1
+        else:
+            self.league.standings[loser.team_name]["L"] += 1
+
+        # Sync the Team objects too (dashboard/standings UI read
+        # team.wins/losses/ot_losses/games_played/goals_for/goals_against).
+        try:
+            winner.update_record("WIN")
+            loser.update_record("LOSS", overtime=went_to_ot)
+            home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+            home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+            away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+            away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+        except Exception:
+            pass
+
+    def process_waivers(self):
+        """Process waiver claims and update waiver days for all players on waivers."""
+        # NHL claim order (CBA Art. 13): lowest points percentage first --
+        # previous season's final standings until Nov 1, current standings
+        # after that. A club that claims drops to the bottom of the order.
+        try:
+            import waiver_logic as _wl
+            teams_by_ranking = _wl.waiver_priority_order(
+                self.league, self.current_date)
+        except Exception:
+            teams_by_ranking = list(getattr(self.league, "teams", []) or [])
+        
+        claimed_players = []
+        for player in self.waiver_list:
+            if player in claimed_players:
+                continue
+
+            # The 2-day clock ticks in the daily advance (see above); a
+            # player is only eligible for claim processing once it has
+            # fully elapsed. No same-day claims for fresh placements.
+            if player.waiver_days > 0:
+                continue
+
+            # Clock elapsed: process possible claims
+            # Determine claiming team (if any)
+            claiming_team = None
+            for team in teams_by_ranking:
+                # Skip player's current team
+                if team.team_name == player.team_name:
+                    continue
+
+                # The user's club claims only through a submitted pending
+                # claim (WaiversView "Claim" button). Real NHL: claims are
+                # due by noon and processed in priority order, so a
+                # higher-priority rival beats your claim.
+                try:
+                    import game_classes as _gc
+                    _is_user = bool(_gc.is_human_managed(team))
+                except Exception:
+                    _is_user = bool(getattr(team, 'is_user_team', False))
+                if _is_user:
+                    # Pending claims are per-team: the legacy host flag
+                    # belongs to the host's own club only, client claims
+                    # ride in player.mp_claim_teams.
+                    _mp_pending = (getattr(player, "mp_claim_teams", None)
+                                   or [])
+                    _is_host_club = (team is getattr(self, "user_team",
+                                                     None))
+                    _claimed = (
+                        team.team_name in _mp_pending
+                        or (getattr(player, "user_claim_pending", False)
+                            and _is_host_club))
+                    if (_claimed
+                            and len(team.roster) < 23
+                            and team.cap_space > player.contract.salary):
+                        claiming_team = team
+                        break
+                    continue
+                    
+                # Check if team is interested (based on player quality and team needs)
+                if len(team.roster) < 23 and team.cap_space > player.contract.salary:
+                    # Calculate team interest based on player quality vs. team needs
+                    player_rating = player.overall_rating()
+                    position_need = 1.0  # Default need
+                    
+                    # Check position needs
+                    if player.primary_position == PlayerPosition.GOALIE:
+                        goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
+                        if len(goalies) < 2:
+                            position_need = 1.5  # High need for goalies
+                    elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
+                        forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
+                        if len(forwards) < 12:
+                            position_need = 1.3  # Need forwards
+                    else:  # Defensemen
+                        defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
+                        if len(defensemen) < 6:
+                            position_need = 1.3  # Need defensemen
+                            
+                    # Teams are more likely to claim higher-rated players
+                    claim_chance = min(0.9, (player_rating / 100) * position_need)
+                    
+                    if random.random() < claim_chance:
+                        claiming_team = team
+                        break
+            
+            # Process claim if a team is interested
+            if claiming_team:
+                self._execute_waiver_claim(player, claiming_team)
+
+                # Mark as claimed
+                claimed_players.append(player)
+            else:
+                # Player cleared waivers
+                player.waiver_days = 0
+                player.on_waivers = False
+                # A pending user claim that never fired (roster filled or
+                # cap evaporated before processing) lapses quietly.
+                if getattr(player, "user_claim_pending", False):
+                    try:
+                        player.user_claim_pending = False
+                        self.add_news(
+                            f"Your waiver claim for {player.full_name} "
+                            f"lapsed (roster or cap space changed).")
+                    except Exception:
+                        pass
+                try:
+                    _lapsed = list(getattr(player, "mp_claim_teams", None)
+                                   or [])
+                except Exception:
+                    _lapsed = []
+                for _loser in _lapsed:
+                    try:
+                        self.add_news(
+                            f"{_loser}'s waiver claim for "
+                            f"{player.full_name} lapsed (roster or cap "
+                            f"space changed before processing).")
+                    except Exception:
+                        pass
+                try:
+                    player.mp_claim_teams = []
+                except Exception:
+                    pass
+                
+                # Add to original team's AHL roster on clearance: waiving is
+                # always a demotion move (cap burial or AHL shuttle), for
+                # AI clubs exactly as for the user's. (BUG-019: AI clubs
+                # now use the wire, so this branch fires for them too.)
+                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
+                if original_team and hasattr(original_team, 'ahl_roster'):
+                    if player in original_team.roster:
+                        original_team.roster.remove(player)
+                    # CHL-NHL agreement: a cleared under-20 CHL prospect
+                    # who isn't AHL-eligible (new CBA: 19-year-old
+                    # first-rounders excepted) goes back to junior, not
+                    # the AHL.
+                    try:
+                        import game_classes as _gcw
+                        _to_junior = (
+                            getattr(player, "contract", None) is not None
+                            and _gcw.junior_track_of(player) == "CHL"
+                            and not _gcw.prospect_ahl_eligible(player))
+                    except Exception:
+                        _to_junior = False
+                    if _to_junior:
+                        try:
+                            player.playing_where = \
+                                _gcw.junior_assignment_label(player)
+                        except Exception:
+                            pass
+                        if player not in original_team.prospects:
+                            original_team.prospects.append(player)
+                    else:
+                        original_team.ahl_roster.append(player)
+                        # Jersey number: the drafted prospect wants his
+                        # favorite -- preferred, else second choice, else
+                        # first free legal number in the org pool.
+                        try:
+                            import immortality as _im_arr
+                            _im_arr.assign_arrival_number(
+                                original_team, player,
+                                int(getattr(getattr(self, "league", None),
+                                            "season_year", 2026) or 2026))
+                        except Exception:
+                            pass
+                        # New-CBA paper-transaction rule: the assignment
+                        # stamps the recall gate -- he must play an AHL
+                        # game before he can come back up.
+                        try:
+                            import ahl_system as _ahl_stamp2
+                            _ahl_stamp2.stamp_ahl_assignment(player)
+                        except Exception:
+                            pass
+                else:
+                    _to_junior = False
+                # Clearance is league news regardless of who runs the club.
+                if _to_junior:
+                    self.add_news(
+                        f"{player.full_name} cleared waivers and was "
+                        f"returned to junior.")
+                else:
+                    self.add_news(f"{player.full_name} cleared waivers.")
+
+        # Remove claimed players from waiver list
+        for player in claimed_players:
+            if player in self.waiver_list:
+                self.waiver_list.remove(player)
+
+        # Remove players who cleared waivers (on_waivers=False now).
+        # Players whose clock hit 0 but who await the next Mon/Thu
+        # processing stay listed -- the shed already ended when the
+        # clock elapsed.
+        self.waiver_list = [p for p in self.waiver_list if p.on_waivers]
+        
+        # Update any open waiver windows
+        if 'waivers' in self.open_windows and self.open_windows['waivers'].winfo_exists():
+            self.open_windows['waivers'].populate_eligible_players()
+            self.open_windows['waivers'].populate_waiver_wire()
+
+    def process_waivers(self):
+        """Process waiver claims and update waiver days for all players on waivers."""
+        # NHL claim order (CBA Art. 13): lowest points percentage first --
+        # previous season's final standings until Nov 1, current standings
+        # after that. A club that claims drops to the bottom of the order.
+        try:
+            import waiver_logic as _wl
+            teams_by_ranking = _wl.waiver_priority_order(
+                self.league, self.current_date)
+        except Exception:
+            teams_by_ranking = list(getattr(self.league, "teams", []) or [])
+        
+        claimed_players = []
+        for player in self.waiver_list:
+            if player in claimed_players:
+                continue
+
+            # The 2-day clock ticks in the daily advance (see above); a
+            # player is only eligible for claim processing once it has
+            # fully elapsed. No same-day claims for fresh placements.
+            if player.waiver_days > 0:
+                continue
+
+            # Clock elapsed: process possible claims
+            # Determine claiming team (if any)
+            claiming_team = None
+            for team in teams_by_ranking:
+                # Skip player's current team
+                if team.team_name == player.team_name:
+                    continue
+
+                # The user's club claims only through a submitted pending
+                # claim (WaiversView "Claim" button). Real NHL: claims are
+                # due by noon and processed in priority order, so a
+                # higher-priority rival beats your claim.
+                try:
+                    import game_classes as _gc
+                    _is_user = bool(_gc.is_human_managed(team))
+                except Exception:
+                    _is_user = bool(getattr(team, 'is_user_team', False))
+                if _is_user:
+                    # Pending claims are per-team: the legacy host flag
+                    # belongs to the host's own club only, client claims
+                    # ride in player.mp_claim_teams.
+                    _mp_pending = (getattr(player, "mp_claim_teams", None)
+                                   or [])
+                    _is_host_club = (team is getattr(self, "user_team",
+                                                     None))
+                    _claimed = (
+                        team.team_name in _mp_pending
+                        or (getattr(player, "user_claim_pending", False)
+                            and _is_host_club))
+                    if (_claimed
+                            and len(team.roster) < 23
+                            and team.cap_space > player.contract.salary):
+                        claiming_team = team
+                        break
+                    continue
+                    
+                # Check if team is interested (based on player quality and team needs)
+                if len(team.roster) < 23 and team.cap_space > player.contract.salary:
+                    # Calculate team interest based on player quality vs. team needs
+                    player_rating = player.overall_rating()
+                    position_need = 1.0  # Default need
+                    
+                    # Check position needs
+                    if player.primary_position == PlayerPosition.GOALIE:
+                        goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
+                        if len(goalies) < 2:
+                            position_need = 1.5  # High need for goalies
+                    elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
+                        forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
+                        if len(forwards) < 12:
+                            position_need = 1.3  # Need forwards
+                    else:  # Defensemen
+                        defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
+                        if len(defensemen) < 6:
+                            position_need = 1.3  # Need defensemen
+                            
+                    # Teams are more likely to claim higher-rated players
+                    claim_chance = min(0.9, (player_rating / 100) * position_need)
+                    
+                    if random.random() < claim_chance:
+                        claiming_team = team
+                        break
+            
+            # Process claim if a team is interested
+            if claiming_team:
+                self._execute_waiver_claim(player, claiming_team)
+
+                # Mark as claimed
+                claimed_players.append(player)
+            else:
+                # Player cleared waivers
+                player.waiver_days = 0
+                player.on_waivers = False
+                # A pending user claim that never fired (roster filled or
+                # cap evaporated before processing) lapses quietly.
+                if getattr(player, "user_claim_pending", False):
+                    try:
+                        player.user_claim_pending = False
+                        self.add_news(
+                            f"Your waiver claim for {player.full_name} "
+                            f"lapsed (roster or cap space changed).")
+                    except Exception:
+                        pass
+                try:
+                    _lapsed = list(getattr(player, "mp_claim_teams", None)
+                                   or [])
+                except Exception:
+                    _lapsed = []
+                for _loser in _lapsed:
+                    try:
+                        self.add_news(
+                            f"{_loser}'s waiver claim for "
+                            f"{player.full_name} lapsed (roster or cap "
+                            f"space changed before processing).")
+                    except Exception:
+                        pass
+                try:
+                    player.mp_claim_teams = []
+                except Exception:
+                    pass
+                
+                # Add to original team's AHL roster on clearance: waiving is
+                # always a demotion move (cap burial or AHL shuttle), for
+                # AI clubs exactly as for the user's. (BUG-019: AI clubs
+                # now use the wire, so this branch fires for them too.)
+                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
+                if original_team and hasattr(original_team, 'ahl_roster'):
+                    if player in original_team.roster:
+                        original_team.roster.remove(player)
+                    # CHL-NHL agreement: a cleared under-20 CHL prospect
+                    # who isn't AHL-eligible (new CBA: 19-year-old
+                    # first-rounders excepted) goes back to junior, not
+                    # the AHL.
+                    try:
+                        import game_classes as _gcw
+                        _to_junior = (
+                            getattr(player, "contract", None) is not None
+                            and _gcw.junior_track_of(player) == "CHL"
+                            and not _gcw.prospect_ahl_eligible(player))
+                    except Exception:
+                        _to_junior = False
+                    if _to_junior:
+                        try:
+                            player.playing_where = \
+                                _gcw.junior_assignment_label(player)
+                        except Exception:
+                            pass
+                        if player not in original_team.prospects:
+                            original_team.prospects.append(player)
+                    else:
+                        original_team.ahl_roster.append(player)
+                        # Jersey number: the drafted prospect wants his
+                        # favorite -- preferred, else second choice, else
+                        # first free legal number in the org pool.
+                        try:
+                            import immortality as _im_arr
+                            _im_arr.assign_arrival_number(
+                                original_team, player,
+                                int(getattr(getattr(self, "league", None),
+                                            "season_year", 2026) or 2026))
+                        except Exception:
+                            pass
+                        # New-CBA paper-transaction rule: the assignment
+                        # stamps the recall gate -- he must play an AHL
+                        # game before he can come back up.
+                        try:
+                            import ahl_system as _ahl_stamp2
+                            _ahl_stamp2.stamp_ahl_assignment(player)
+                        except Exception:
+                            pass
+                else:
+                    _to_junior = False
+                # Clearance is league news regardless of who runs the club.
+                if _to_junior:
+                    self.add_news(
+                        f"{player.full_name} cleared waivers and was "
+                        f"returned to junior.")
+                else:
+                    self.add_news(f"{player.full_name} cleared waivers.")
+
+        # Remove claimed players from waiver list
+        for player in claimed_players:
+            if player in self.waiver_list:
+                self.waiver_list.remove(player)
+
+        # Remove players who cleared waivers (on_waivers=False now).
+        # Players whose clock hit 0 but who await the next Mon/Thu
+        # processing stay listed -- the shed already ended when the
+        # clock elapsed.
+        self.waiver_list = [p for p in self.waiver_list if p.on_waivers]
+        
+        # Update any open waiver windows
+        if 'waivers' in self.open_windows and self.open_windows['waivers'].winfo_exists():
+            self.open_windows['waivers'].populate_eligible_players()
+            self.open_windows['waivers'].populate_waiver_wire()
+
 
 def launch_game_viewer_with_sim(home_team, away_team):
     """
