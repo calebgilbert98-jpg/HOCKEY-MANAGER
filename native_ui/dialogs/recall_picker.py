@@ -116,7 +116,14 @@ class RecallPickerDialog(QDialog):
         try:
             game = getattr(self.game, "game_manager", None) or self.game
             if hasattr(game, "call_up_to_nhl"):
-                game.call_up_to_nhl(player)
+                result = game.call_up_to_nhl(player)
+                # Handle (success, message) tuple from GameManager
+                if isinstance(result, tuple):
+                    success, message = result
+                    if not success:
+                        QMessageBox.warning(
+                            self, "Call Up Blocked", message or "Call up failed.")
+                        return
             else:
                 # Fallback: move via roster_limits
                 import roster_limits as _rl
