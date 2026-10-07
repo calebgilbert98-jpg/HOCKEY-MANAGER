@@ -50,12 +50,17 @@ For each web UI screen:
 - [ ] Daily results
 
 ### Phase 2: Team Management
+- [ ] Practice Center (with "Coach Runs Practice" — v0.15.0 headline, missing from web-ui)
 - [ ] Staff
 - [ ] Contracts
 - [ ] Morale
 - [ ] Development
 - [ ] Tactics
 - [ ] Camp
+- [ ] Season Goals (missing from web-ui)
+- [ ] Offseason Programs (missing from web-ui)
+- [ ] Jersey Numbers Editor (missing from web-ui)
+- [ ] GM Relationships Dashboard (missing from web-ui)
 
 ### Phase 3: Transactions
 - [ ] Trades

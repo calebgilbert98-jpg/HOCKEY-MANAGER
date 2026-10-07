@@ -164,14 +164,40 @@ class HubPage(QWidget):
         """Populate from the live game object. Direct Python access --
         no HTTP, no serialization."""
         try:
-            team = getattr(game, "user_team", None)
+            # Resolve game manager (handles both app and gm objects)
+            gm = getattr(game, "game_manager", None) or game
+            team = getattr(gm, "user_team", None) or getattr(game, "user_team", None)
             if team:
                 self.team_label.setText(
                     getattr(team, "team_name", "—").upper())
-            # TODO: wire real values from game state
-            self.set_tile("record", "0-0-0", "Season record")
-        except Exception:
-            pass
+                # Record
+                wins = getattr(team, "wins", 0) or 0
+                losses = getattr(team, "losses", 0) or 0
+                otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
+                self.record_label.setText(f"{wins}-{losses}-{otl}")
+                self.set_tile("record", f"{wins}-{losses}-{otl}", "Season record")
+
+                # Roster size
+                roster = getattr(team, "roster", None) or []
+                self.set_tile("standing", f"{len(roster)}", "Players")
+
+                # Cap space
+                try:
+                    from salary_cap_system import cap_breakdown
+                    bd = cap_breakdown(team)
+                    space = bd.get("space", 0)
+                    self.set_tile("cap", f"${space/1e6:.1f}M", "Cap space")
+                except Exception:
+                    pass
+
+                # Injuries
+                try:
+                    injured = sum(1 for p in roster if getattr(p, "is_injured", False))
+                    self.set_tile("injuries", str(injured), "Injured")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[hub] refresh failed: {e}")
 
 
 class MainWindow(QMainWindow):
