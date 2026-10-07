@@ -14871,6 +14871,600 @@ NHL League Office""",
         
         return strength
 
+        def _calculate_star_player_effects(self, team, situation_score=None):
+            """Calculate individual star player effects on game outcome"""
+            effects = {
+                'offensive_boost': 0.0,
+                'defensive_reduction': 0.0,
+                'clutch_factor': 0.0
+            }
+        
+            # Get top players by position -- only dressed players move the
+            # needle. Suspended or injured stars don't boost the team from
+            # the press box (same exclusion the strength calc uses).
+            available = [p for p in team.roster
+                         if not getattr(p, 'is_injured', False)
+                         and not (getattr(p, 'suspension_games_remaining', 0)
+                                  or 0)]
+            sorted_roster = sorted(available, key=lambda p: p.overall_rating(), reverse=True)
+            top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:3]
+            top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:2]
+            top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
+        
+            # Elite forwards boost offensive production
+            # D28 (Wave A, 2026-10-01, Muck): retiered to the true 1-100
+            # talent bands. The old thresholds (52/50/47/44) handed nearly
+            # every rostered forward the max effect -- a flat +0.4 for all 32
+            # teams, the opposite of a hierarchy. Now aligned with the talent
+            # tiers: Generational 92+ -> 0.25, Elite 88+ -> 0.18,
+            # Very good 84+ -> 0.10, Good 80+ -> 0.05.
+            for forward in top_forwards:
+                rating = forward.overall_rating()
+                if rating >= 92:  # Generational
+                    effects['offensive_boost'] += 0.25
+                elif rating >= 88:  # Elite
+                    effects['offensive_boost'] += 0.18
+                elif rating >= 84:  # Very good
+                    effects['offensive_boost'] += 0.10
+                elif rating >= 80:  # Good
+                    effects['offensive_boost'] += 0.05
+        
+            # Elite defensemen reduce opponent scoring
+            # (native 1-100 scale: ~84+ is a top-pair NHL defender)
+            # (clutch moved to team_clutch.py -- shared dynamic factor)
+            for defenseman in top_defense:
+                rating = defenseman.overall_rating()
+                if rating >= 93:  # Elite defender (Norris level)
+                    effects['defensive_reduction'] += 0.25
+                elif rating >= 90:  # Very good defender
+                    effects['defensive_reduction'] += 0.15
+                elif rating >= 87:  # Good defender
+                    effects['defensive_reduction'] += 0.08
+                elif rating >= 84:  # Decent defender
+                    effects['defensive_reduction'] += 0.03
+        
+            # Elite goalies have major defensive impact
+            # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
+            # Factor-calibrated 2026-09-29 vs the event sim: the event engine's
+            # goalie response is ~2x the old tiers (weak goalie 86->30: +0.37
+            # there vs +0.13 here; elite 87->95: -0.30 there vs -0.20 here).
+            # Steepened through the NHL range and extended below it -- a bad
+            # goalie actively bleeds goals (negative reduction), matching the
+            # event sim's continuous (unfloored) goalie skill response.
+            for goalie in top_goalies:
+                rating = goalie.overall_rating()
+                if rating >= 95:  # Generational goalie
+                    effects['defensive_reduction'] += 0.60
+                elif rating >= 91:  # Elite goalie (Vezina level)
+                    effects['defensive_reduction'] += 0.48
+                elif rating >= 88:  # Very good goalie
+                    effects['defensive_reduction'] += 0.36
+                elif rating >= 85:  # Good goalie
+                    effects['defensive_reduction'] += 0.25
+                elif rating >= 82:  # Decent goalie
+                    effects['defensive_reduction'] += 0.16
+                elif rating >= 79:  # Fringe starter
+                    effects['defensive_reduction'] += 0.08
+                elif rating >= 76:  # Replacement level
+                    effects['defensive_reduction'] += 0.0
+                else:  # Below replacement: actively costs goals
+                    effects['defensive_reduction'] -= 0.12
+        
+            # Cap the effects to prevent unrealistic swings
+            effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
+            effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
+            # Clutch: dynamic per-team factor (team_clutch.py), shared with the
+            # advanced engine so factor parity holds by construction. Replaces
+            # the old saturated accumulation (forward tiers were on the wrong
+            # rating scale -- 1.00 for every club).
+            try:
+                from team_clutch import team_clutch_factor
+                effects['clutch_factor'] = team_clutch_factor(
+                    team, league=getattr(self, 'league', None),
+                    situation_score=situation_score)
+            except Exception:
+                effects['clutch_factor'] = 1.0
+        
+            return effects
+
+
+        def _career_morale_modifier(self, team) -> float:
+            """FM-style squad-confidence modifier from average morale.
+
+            Native 1-100 morale: 70 is neutral, each point moves expectations
+            0.03% -- factor-calibrated 2026-09-29 vs the event sim, whose
+            per-shot morale channel moves a fully toxic room only ~-1.3%
+            (the old 0.1%/pt, +/-3% intent, overstated it ~2.5x). Own channel
+            next to the situations factor: situations reads room structure,
+            bench buy-in and hunger counts; this reads the squad's raw
+            confidence level. Applied only in the lightweight quick-sim.
+            """
+            try:
+                roster = getattr(team, "roster", []) or []
+                if not roster:
+                    return 1.0
+                avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
+                return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.0003))
+            except Exception:
+                return 1.0
+
+
+        def _generate_player_stats(self, home_team, away_team, home_goals, away_goals):
+            """Generate realistic individual player statistics from team game results.
+        
+            Ensures statistical coherence:
+            - Team shots = sum of skater shots = opposing goalie shots_against
+            - Hat tricks properly detected (3+ goals in one game)
+            - Only dressed players (18 skaters + 1 goalie) get GP
+            """
+            import random
+        
+            # Track team shot totals for reconciliation
+            team_shots = {}
+        
+            for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
+                # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
+                # Injured or suspended players don't dress
+                healthy = [p for p in team.roster
+                           if not getattr(p, 'is_injured', False)
+                           and not (getattr(p, 'suspension_games_remaining', 0)
+                                    or 0)]
+                forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
+                defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
+                dressed_skaters = forwards + defensemen  # 18 skaters
+            
+                # Track per-player game goals for hat trick detection
+                game_goals = {p.id: 0 for p in dressed_skaters}
+            
+                # Distribute goals and assists
+                goals_to_distribute = team_goals
+                # P1 (scoring calibration 2026-09-29): NHL-shaped assists per
+                # goal -- 68% two, 30% one, 2% unassisted (A/G ~1.66). The
+                # assister selection below stays ovr-weighted and unchanged.
+                assists_to_distribute = sum(
+                    random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                    for _ in range(team_goals))
+            
+                # Weight players by rating for stat distribution
+                weighted_players = []
+                for player in dressed_skaters:
+                    weight = player.overall_rating() / 100.0
+                    if player.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
+                        weight *= 1.5  # Forwards score more
+                    weighted_players.append((player, weight))
+            
+                # Distribute goals
+                for _ in range(goals_to_distribute):
+                    if weighted_players:
+                        weights = [w[1] for w in weighted_players]
+                        player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
+                    
+                        player.stats.goals += 1
+                        player.stats.shots += 1  # Goal counts as shot
+                        game_goals[player.id] += 1
+                    
+                        # Check for hat trick (3+ goals in THIS game)
+                        if game_goals[player.id] == 3:
+                            print(f"🎩 HAT TRICK! {player.first_name} {player.last_name} scores 3 goals!")
+                            # GUI has no per-game event feed; stash on a best-effort list
+                            notable = getattr(self, 'notable_events', None)
+                            if notable is None:
+                                notable = self.notable_events = []
+                            notable.append({
+                                'time': 3600, 'period': 3, 'team': team.team_name,
+                                'player': player, 'event': 'Hat Trick'
+                            })
+                    
+                        self._check_player_records(player)
+            
+                # Distribute assists (1-2 per goal, not to the scorer)
+                for _ in range(assists_to_distribute):
+                    if weighted_players:
+                        # Pick assister (can be same as scorer for simplicity, or exclude)
+                        weights = [w[1] for w in weighted_players]
+                        player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
+                        player.stats.assists += 1
+                        self._check_player_records(player)
+            
+                # Penalty minutes (NHL: ~6-10 PIM per team per game)
+                penalty_minutes = random.randint(6, 14)
+                pim_remaining = penalty_minutes
+                while pim_remaining > 0 and dressed_skaters:
+                    player = random.choice(dressed_skaters)
+                    pim = min(pim_remaining, random.choice([2, 2, 2, 4, 5]))
+                    player.stats.penalties += 1
+                    player.stats.penalties_in_minutes += pim
+                    pim_remaining -= pim
+            
+                # Shots: distribute among skaters, track total for goalie reconciliation
+                # NHL: ~30 shots per team per game
+                total_shots = max(team_goals, random.randint(25, 35))  # At least as many shots as goals
+                team_shots[team.team_name] = total_shots
+            
+                for _ in range(total_shots):
+                    # Forwards get 75% of shots, defense 25%
+                    if random.random() < 0.75 and forwards:
+                        player = random.choice(forwards)
+                    elif defensemen:
+                        player = random.choice(defensemen)
+                    else:
+                        player = random.choice(dressed_skaters)
+                    player.stats.shots += 1
+            
+                # Games played: ONLY dressed players (18 skaters)
+                for player in dressed_skaters:
+                    player.stats.games_played += 1
+                    self._check_player_records(player)
+
+                # Defensive record: every dressed skater leaves a hits /
+                # takeaways / blocks trail (shutdown defensemen need a
+                # performance record, not just points). Same shared roll as
+                # every other sim path, so evaluator thresholds are uniform.
+                try:
+                    from game_classes import roll_defensive_game_stats as _rdg
+                    for player in dressed_skaters:
+                        _h, _t, _b = _rdg(player)
+                        player.stats.hits += _h
+                        player.stats.takeaways += _t
+                        player.stats.blocked_shots += _b
+                except Exception:
+                    pass
+        
+            # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
+            for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
+                starting_goalie = self._select_starting_goalie(team)
+                if not starting_goalie:
+                    continue
+                opp_team_name = away_team.team_name if team == home_team else home_team.team_name
+            
+                # Shots against = opposing team's total shots (from team_shots dict)
+                shots_against = team_shots.get(opp_team_name, random.randint(25, 35))
+                saves = max(0, shots_against - opp_goals)
+            
+                won = (team_goals > opp_goals)
+                shutout = (opp_goals == 0)
+            
+                starting_goalie.stats.saves += saves
+                starting_goalie.stats.shots_against += shots_against
+                starting_goalie.stats.goals_against += opp_goals
+                starting_goalie.stats.games_played += 1
+                # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
+                if hasattr(starting_goalie.stats, 'wins'):
+                    if won:
+                        starting_goalie.stats.wins += 1
+                    else:
+                        starting_goalie.stats.losses += 1
+                    if shutout:
+                        starting_goalie.stats.shutouts += 1
+            
+                self._check_player_records(starting_goalie)
+            
+                if shutout:
+                    print(f"🥅 SHUTOUT! {starting_goalie.first_name} {starting_goalie.last_name} records a shutout!")
+
+
+        def _late_six_on_five_news(self, home_team, away_team, ctx,
+                                     trailing_team_is_home=False):
+            """One headline when the late 6v5 produces the tying goal (ot_drama).
+
+            Single hook: uses the existing GameManager -> GUI news path
+            (add_news lives on the GUI; the manager only holds it via .app).
+            No-op headless. Never raises.
+            """
+            try:
+                _drivers = (ctx or {}).get("drivers") or []
+                _flavor = _drivers[0] if _drivers else "Sheer desperation"
+                _trail_team = home_team if trailing_team_is_home else away_team
+                _lead_team = away_team if trailing_team_is_home else home_team
+                _trailing = (getattr(_trail_team, "team_name", "")
+                             or "The visitors")
+                _story = (
+                    f"\u00a9 LATE EQUALIZER: {_trailing} pull the goalie and force "
+                    f"overtime against {getattr(_lead_team, 'team_name', 'the hosts')} -- "
+                    f"{_flavor.lower()} willed it to OT.")
+                _add = getattr(self, "add_news", None) or getattr(
+                    getattr(self, "app", None), "add_news", None)
+                if callable(_add):
+                    _add(_story)
+            except Exception:
+                pass
+
+
+
+    def _calculate_star_player_effects(self, team, situation_score=None):
+        """Calculate individual star player effects on game outcome"""
+        effects = {
+            'offensive_boost': 0.0,
+            'defensive_reduction': 0.0,
+            'clutch_factor': 0.0
+        }
+        
+        # Get top players by position -- only dressed players move the
+        # needle. Suspended or injured stars don't boost the team from
+        # the press box (same exclusion the strength calc uses).
+        available = [p for p in team.roster
+                     if not getattr(p, 'is_injured', False)
+                     and not (getattr(p, 'suspension_games_remaining', 0)
+                              or 0)]
+        sorted_roster = sorted(available, key=lambda p: p.overall_rating(), reverse=True)
+        top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:3]
+        top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:2]
+        top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
+        
+        # Elite forwards boost offensive production
+        # D28 (Wave A, 2026-10-01, Muck): retiered to the true 1-100
+        # talent bands. The old thresholds (52/50/47/44) handed nearly
+        # every rostered forward the max effect -- a flat +0.4 for all 32
+        # teams, the opposite of a hierarchy. Now aligned with the talent
+        # tiers: Generational 92+ -> 0.25, Elite 88+ -> 0.18,
+        # Very good 84+ -> 0.10, Good 80+ -> 0.05.
+        for forward in top_forwards:
+            rating = forward.overall_rating()
+            if rating >= 92:  # Generational
+                effects['offensive_boost'] += 0.25
+            elif rating >= 88:  # Elite
+                effects['offensive_boost'] += 0.18
+            elif rating >= 84:  # Very good
+                effects['offensive_boost'] += 0.10
+            elif rating >= 80:  # Good
+                effects['offensive_boost'] += 0.05
+        
+        # Elite defensemen reduce opponent scoring
+        # (native 1-100 scale: ~84+ is a top-pair NHL defender)
+        # (clutch moved to team_clutch.py -- shared dynamic factor)
+        for defenseman in top_defense:
+            rating = defenseman.overall_rating()
+            if rating >= 93:  # Elite defender (Norris level)
+                effects['defensive_reduction'] += 0.25
+            elif rating >= 90:  # Very good defender
+                effects['defensive_reduction'] += 0.15
+            elif rating >= 87:  # Good defender
+                effects['defensive_reduction'] += 0.08
+            elif rating >= 84:  # Decent defender
+                effects['defensive_reduction'] += 0.03
+        
+        # Elite goalies have major defensive impact
+        # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
+        # Factor-calibrated 2026-09-29 vs the event sim: the event engine's
+        # goalie response is ~2x the old tiers (weak goalie 86->30: +0.37
+        # there vs +0.13 here; elite 87->95: -0.30 there vs -0.20 here).
+        # Steepened through the NHL range and extended below it -- a bad
+        # goalie actively bleeds goals (negative reduction), matching the
+        # event sim's continuous (unfloored) goalie skill response.
+        for goalie in top_goalies:
+            rating = goalie.overall_rating()
+            if rating >= 95:  # Generational goalie
+                effects['defensive_reduction'] += 0.60
+            elif rating >= 91:  # Elite goalie (Vezina level)
+                effects['defensive_reduction'] += 0.48
+            elif rating >= 88:  # Very good goalie
+                effects['defensive_reduction'] += 0.36
+            elif rating >= 85:  # Good goalie
+                effects['defensive_reduction'] += 0.25
+            elif rating >= 82:  # Decent goalie
+                effects['defensive_reduction'] += 0.16
+            elif rating >= 79:  # Fringe starter
+                effects['defensive_reduction'] += 0.08
+            elif rating >= 76:  # Replacement level
+                effects['defensive_reduction'] += 0.0
+            else:  # Below replacement: actively costs goals
+                effects['defensive_reduction'] -= 0.12
+        
+        # Cap the effects to prevent unrealistic swings
+        effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
+        effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
+        # Clutch: dynamic per-team factor (team_clutch.py), shared with the
+        # advanced engine so factor parity holds by construction. Replaces
+        # the old saturated accumulation (forward tiers were on the wrong
+        # rating scale -- 1.00 for every club).
+        try:
+            from team_clutch import team_clutch_factor
+            effects['clutch_factor'] = team_clutch_factor(
+                team, league=getattr(self, 'league', None),
+                situation_score=situation_score)
+        except Exception:
+            effects['clutch_factor'] = 1.0
+        
+        return effects
+
+    def _career_morale_modifier(self, team) -> float:
+        """FM-style squad-confidence modifier from average morale.
+
+        Native 1-100 morale: 70 is neutral, each point moves expectations
+        0.03% -- factor-calibrated 2026-09-29 vs the event sim, whose
+        per-shot morale channel moves a fully toxic room only ~-1.3%
+        (the old 0.1%/pt, +/-3% intent, overstated it ~2.5x). Own channel
+        next to the situations factor: situations reads room structure,
+        bench buy-in and hunger counts; this reads the squad's raw
+        confidence level. Applied only in the lightweight quick-sim.
+        """
+        try:
+            roster = getattr(team, "roster", []) or []
+            if not roster:
+                return 1.0
+            avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
+            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.0003))
+        except Exception:
+            return 1.0
+
+    def _generate_player_stats(self, home_team, away_team, home_goals, away_goals):
+        """Generate realistic individual player statistics from team game results.
+        
+        Ensures statistical coherence:
+        - Team shots = sum of skater shots = opposing goalie shots_against
+        - Hat tricks properly detected (3+ goals in one game)
+        - Only dressed players (18 skaters + 1 goalie) get GP
+        """
+        import random
+        
+        # Track team shot totals for reconciliation
+        team_shots = {}
+        
+        for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
+            # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
+            # Injured or suspended players don't dress
+            healthy = [p for p in team.roster
+                       if not getattr(p, 'is_injured', False)
+                       and not (getattr(p, 'suspension_games_remaining', 0)
+                                or 0)]
+            forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
+            defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
+            dressed_skaters = forwards + defensemen  # 18 skaters
+            
+            # Track per-player game goals for hat trick detection
+            game_goals = {p.id: 0 for p in dressed_skaters}
+            
+            # Distribute goals and assists
+            goals_to_distribute = team_goals
+            # P1 (scoring calibration 2026-09-29): NHL-shaped assists per
+            # goal -- 68% two, 30% one, 2% unassisted (A/G ~1.66). The
+            # assister selection below stays ovr-weighted and unchanged.
+            assists_to_distribute = sum(
+                random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                for _ in range(team_goals))
+            
+            # Weight players by rating for stat distribution
+            weighted_players = []
+            for player in dressed_skaters:
+                weight = player.overall_rating() / 100.0
+                if player.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']:
+                    weight *= 1.5  # Forwards score more
+                weighted_players.append((player, weight))
+            
+            # Distribute goals
+            for _ in range(goals_to_distribute):
+                if weighted_players:
+                    weights = [w[1] for w in weighted_players]
+                    player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
+                    
+                    player.stats.goals += 1
+                    player.stats.shots += 1  # Goal counts as shot
+                    game_goals[player.id] += 1
+                    
+                    # Check for hat trick (3+ goals in THIS game)
+                    if game_goals[player.id] == 3:
+                        print(f"🎩 HAT TRICK! {player.first_name} {player.last_name} scores 3 goals!")
+                        # GUI has no per-game event feed; stash on a best-effort list
+                        notable = getattr(self, 'notable_events', None)
+                        if notable is None:
+                            notable = self.notable_events = []
+                        notable.append({
+                            'time': 3600, 'period': 3, 'team': team.team_name,
+                            'player': player, 'event': 'Hat Trick'
+                        })
+                    
+                    self._check_player_records(player)
+            
+            # Distribute assists (1-2 per goal, not to the scorer)
+            for _ in range(assists_to_distribute):
+                if weighted_players:
+                    # Pick assister (can be same as scorer for simplicity, or exclude)
+                    weights = [w[1] for w in weighted_players]
+                    player = random.choices([w[0] for w in weighted_players], weights=weights)[0]
+                    player.stats.assists += 1
+                    self._check_player_records(player)
+            
+            # Penalty minutes (NHL: ~6-10 PIM per team per game)
+            penalty_minutes = random.randint(6, 14)
+            pim_remaining = penalty_minutes
+            while pim_remaining > 0 and dressed_skaters:
+                player = random.choice(dressed_skaters)
+                pim = min(pim_remaining, random.choice([2, 2, 2, 4, 5]))
+                player.stats.penalties += 1
+                player.stats.penalties_in_minutes += pim
+                pim_remaining -= pim
+            
+            # Shots: distribute among skaters, track total for goalie reconciliation
+            # NHL: ~30 shots per team per game
+            total_shots = max(team_goals, random.randint(25, 35))  # At least as many shots as goals
+            team_shots[team.team_name] = total_shots
+            
+            for _ in range(total_shots):
+                # Forwards get 75% of shots, defense 25%
+                if random.random() < 0.75 and forwards:
+                    player = random.choice(forwards)
+                elif defensemen:
+                    player = random.choice(defensemen)
+                else:
+                    player = random.choice(dressed_skaters)
+                player.stats.shots += 1
+            
+            # Games played: ONLY dressed players (18 skaters)
+            for player in dressed_skaters:
+                player.stats.games_played += 1
+                self._check_player_records(player)
+
+            # Defensive record: every dressed skater leaves a hits /
+            # takeaways / blocks trail (shutdown defensemen need a
+            # performance record, not just points). Same shared roll as
+            # every other sim path, so evaluator thresholds are uniform.
+            try:
+                from game_classes import roll_defensive_game_stats as _rdg
+                for player in dressed_skaters:
+                    _h, _t, _b = _rdg(player)
+                    player.stats.hits += _h
+                    player.stats.takeaways += _t
+                    player.stats.blocked_shots += _b
+            except Exception:
+                pass
+        
+        # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
+        for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
+            starting_goalie = self._select_starting_goalie(team)
+            if not starting_goalie:
+                continue
+            opp_team_name = away_team.team_name if team == home_team else home_team.team_name
+            
+            # Shots against = opposing team's total shots (from team_shots dict)
+            shots_against = team_shots.get(opp_team_name, random.randint(25, 35))
+            saves = max(0, shots_against - opp_goals)
+            
+            won = (team_goals > opp_goals)
+            shutout = (opp_goals == 0)
+            
+            starting_goalie.stats.saves += saves
+            starting_goalie.stats.shots_against += shots_against
+            starting_goalie.stats.goals_against += opp_goals
+            starting_goalie.stats.games_played += 1
+            # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
+            if hasattr(starting_goalie.stats, 'wins'):
+                if won:
+                    starting_goalie.stats.wins += 1
+                else:
+                    starting_goalie.stats.losses += 1
+                if shutout:
+                    starting_goalie.stats.shutouts += 1
+            
+            self._check_player_records(starting_goalie)
+            
+            if shutout:
+                print(f"🥅 SHUTOUT! {starting_goalie.first_name} {starting_goalie.last_name} records a shutout!")
+
+    def _late_six_on_five_news(self, home_team, away_team, ctx,
+                                 trailing_team_is_home=False):
+        """One headline when the late 6v5 produces the tying goal (ot_drama).
+
+        Single hook: uses the existing GameManager -> GUI news path
+        (add_news lives on the GUI; the manager only holds it via .app).
+        No-op headless. Never raises.
+        """
+        try:
+            _drivers = (ctx or {}).get("drivers") or []
+            _flavor = _drivers[0] if _drivers else "Sheer desperation"
+            _trail_team = home_team if trailing_team_is_home else away_team
+            _lead_team = away_team if trailing_team_is_home else home_team
+            _trailing = (getattr(_trail_team, "team_name", "")
+                         or "The visitors")
+            _story = (
+                f"\u00a9 LATE EQUALIZER: {_trailing} pull the goalie and force "
+                f"overtime against {getattr(_lead_team, 'team_name', 'the hosts')} -- "
+                f"{_flavor.lower()} willed it to OT.")
+            _add = getattr(self, "add_news", None) or getattr(
+                getattr(self, "app", None), "add_news", None)
+            if callable(_add):
+                _add(_story)
+        except Exception:
+            pass
     def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
         """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
 
