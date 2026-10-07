@@ -26,10 +26,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
     QTableWidgetItem, QFrame, QScrollArea, QComboBox, QLineEdit, QDialog,
     QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QInputDialog,
-    QHeaderView, QAbstractItemView, QGridLayout, QShortcut, QApplication,
+    QHeaderView, QAbstractItemView, QGridLayout, QApplication,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QShortcut
 
 from .base import BaseScreen
 

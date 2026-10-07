@@ -138,6 +138,10 @@ class GameManager:
         # Initialize AI team manager (for CPU team decisions)
         self._ai_manager = None
 
+        # Phase 2 systems (ported from HockeyManagerGUI._initialize_phase2_systems)
+        self.memory_optimizer = None
+        self.lazy_manager = None
+
         # --- Attributes referenced by moved sim methods (safe defaults) ---
         self._abort_day_sim = False
         self._continue_after_bundle = False
@@ -153,7 +157,7 @@ class GameManager:
         self._fantasy_draft_deferred = False
         self._game_day_resolution = None
         self._refresh_dashboard = False
-        self.end_of_season = False
+        self._end_of_season_flag = False
         self.mp_host = None
         self.mp_client = None
         # MP event-handling state (extracted from HockeyManagerGUI, Bot #19).
@@ -174,6 +178,11 @@ class GameManager:
         # UI-compat shims: HockeyManagerGUI sets these; on a bare GameManager
         # they are safe no-ops so moved methods don't AttributeError.
         self.open_windows = {}
+        # Career shim: headless has no GM career object; provide safe defaults
+        # so self.career.prompts_enabled and self.career.board.sacked work.
+        from types import SimpleNamespace as _SN
+        self.career = _SN(prompts_enabled=False,
+                          board=_SN(sacked=False))
         self.dashboard = None  # UI shim: headless has no dashboard
         self._season_end_handled_year = None
         self.game_manager = self  # self-reference for gm.X compatibility
@@ -4846,6 +4855,34 @@ NHL League Office""",
                 _utm = getattr(self, "user_team", None)
                 if _utm is not None:
                     _rl.user_roster_compliance(_utm)
+            except Exception:
+                pass
+
+            # AI roster safety net: every AI club maintains >=18 on NHL
+            # roster. AI trades can leave rosters short; auto-recall best
+            # available from AHL. Guarded: never breaks day advancement.
+            try:
+                _league = getattr(self, "league", None)
+                _utm2 = getattr(self, "user_team", None)
+                if _league is not None:
+                    for _team in (getattr(_league, "teams", None) or []):
+                        if _team is _utm2:
+                            continue
+                        try:
+                            _roster = getattr(_team, "roster", None) or []
+                            if len(_roster) >= 18:
+                                continue
+                            _ahl = getattr(_team, "ahl_roster", None) or []
+                            _need = 18 - len(_roster)
+                            _sorted = sorted(
+                                _ahl,
+                                key=lambda p: getattr(p, "overall", 50) or 50,
+                                reverse=True)
+                            for _p in _sorted[:_need]:
+                                _ahl.remove(_p)
+                                _roster.append(_p)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -13495,6 +13532,2572 @@ NHL League Office""",
         manager, so a single assignment suffices.
         """
         self.current_date = d
+
+    def update_inbox_notification(self):
+        """Update the inbox button notification (UI shim: routes via _ui_notify)."""
+        self._ui_notify('inbox_notification_updated')
+
+    def _slate_deterministic_result(self, home_team, away_team, game_date):
+        """Deterministic last-resort result (slate-guarantee tier 2).
+
+        Compares average roster overall_rating with a small home-ice edge,
+        rolls a seeded RNG (game date + team names -- reproducible), and
+        produces a plausible scoreline: winner 2-5, loser 0..winner-1,
+        occasional overtime (then a one-goal game). Team-symmetric apart
+        from the home edge -- swapping the clubs swaps the outcome
+        distribution. Writes no stats and touches no systems; the normal
+        post-processing (standings etc.) treats it like any result. This
+        is a FALLBACK, never a cheat path: every use is logged loudly via
+        _log_slate_fallback and counted in _slate_fallbacks.
+        """
+        import random
+
+        def _avg_overall(team):
+            try:
+                _rs = []
+                for _p in (getattr(team, 'roster', None) or []):
+                    try:
+                        _rs.append(float(_p.overall_rating()))
+                    except Exception:
+                        pass
+                if _rs:
+                    return sum(_rs) / len(_rs)
+            except Exception:
+                pass
+            return 75.0  # neutral rating when the roster is unreadable
+
+        _hn = getattr(home_team, 'team_name', None) or '?'
+        _an = getattr(away_team, 'team_name', None) or '?'
+        _home = _avg_overall(home_team) + 1.5  # small home-ice edge, rating pts
+        _away = _avg_overall(away_team)
+        _rng = random.Random(f"slate-guarantee|{game_date}|{_hn}|{_an}")
+        # Logistic win probability on the rating gap; symmetric in the two
+        # clubs apart from the home edge. ~8 rating points ~= 70/30.
+        _p_home = 1.0 / (1.0 + 10.0 ** (-(_home - _away) / 8.0))
+        _p_home = max(0.10, min(0.90, _p_home))
+        _home_wins = _rng.random() < _p_home
+        _wg = _rng.randint(2, 5)
+        _ot = _rng.random() < 0.22
+        _lg = _wg - 1 if _ot else _rng.randint(0, _wg - 1)
+        if _home_wins:
+            return home_team, away_team, (_wg, _lg), _ot, None
+        return away_team, home_team, (_lg, _wg), _ot, None
+
+    def _hold_draft_lottery(self, year):
+        """Televised draft lottery (May 8). Real weighted odds, inbox card
+        with a watch-the-reveal action, fan/room reactions for the user."""
+        from draft_lottery import (run_lottery, lottery_reveal_text,
+                                   apply_user_reactions)
+        league = self.league
+        league.initialize_all_draft_picks()
+        rows = run_lottery(league, year)
+        if not rows:
+            return
+        # Stash for the inbox "watch the reveal" action (the inbox reads it
+        # off game_manager).
+        _gm = getattr(self, "game_manager", None) or self
+        _gm._pending_lottery_reveal = {
+            "year": year, "rows": rows, "app": self,
+        }
+        summary = lottery_reveal_text(rows, year)
+        try:
+            from headlines import make_headline, deliver
+            msg = make_headline("lottery_results", self.current_date, year=year,
+                                summary=summary)
+            if msg is not None:
+                deliver(self, msg)
+        except Exception:
+            try:
+                self.add_news(summary)
+            except Exception:
+                pass
+        apply_user_reactions(self, rows)
+        # Ledger memory: the lottery is a league event worth remembering.
+        try:
+            from narrative_ledger import active_ledger
+            led = active_ledger()
+            if led is not None:
+                winner = rows[0]["team"]
+                _dup = any(e.get("kind") == "draft_lottery"
+                           and e.get("facts", {}).get("year") == year
+                           for e in led.events)
+                if not _dup:
+                    led.record(
+                        "draft_lottery", teams=[winner], weight=40,
+                        facts={"year": year, "winner": winner,
+                               "second": rows[1]["team"] if len(rows) > 1 else ""},
+                        text=(f"{winner} won the {year} draft lottery "
+                              f"(#1 overall)."))
+        except Exception:
+            pass
+
+    def _hold_entry_draft(self, year):
+        """Hold the annual entry draft"""
+        print(f"🏒 ENTRY DRAFT {year} BEGINS! 🏒")
+        
+        # Generate draft prospects if they don't exist. The class is stamped
+        # with its draft year: if last year's draft never ran (board never
+        # opened), the stale class must NOT be reused for this year's draft.
+        _prospect_year = getattr(self.league, 'draft_prospects_year', None)
+        if not self.league.draft_prospects or _prospect_year != year:
+            print("Generating draft prospects...")
+            from draft_generator import generate_draft_class
+            draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
+            # Undrafted re-entry (real NHL rule): undrafted prospects are
+            # automatically eligible again while still draft-eligible for
+            # the new draft year (NA 18-20, Europeans 18-22 on Sept 15).
+            # Aged-out undrafted players become free agents instead of
+            # re-entering the draft pool.
+            _undrafted = list(getattr(self.league, "undrafted_pool", None) or [])
+            self.league.undrafted_pool = []
+            if _undrafted:
+                try:
+                    from draft_generator import is_draft_eligible as _elig
+                    _fa = getattr(self.league, "free_agents", None)
+                    for _up in _undrafted:
+                        try:
+                            if _elig(getattr(_up, "birth_date", ""),
+                                     getattr(_up, "nationality", ""), year):
+                                _re = getattr(self.league, "draft_reentries",
+                                              None)
+                                if not isinstance(_re, list):
+                                    _re = []
+                                    self.league.draft_reentries = _re
+                                if _up not in _re:
+                                    _re.append(_up)
+                                try:
+                                    _up.draft_reentry = True
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    _up.team_name = "Free Agent"
+                                except Exception:
+                                    pass
+                                # Belt-and-suspenders: an aged-out player is a
+                                # true free agent -- no stale rights stamps or
+                                # re-entry flags may survive on him.
+                                try:
+                                    _up.rights_team = ""
+                                    _up.rights_expiry_year = 0
+                                    _up.rights_type = ""
+                                    _up.camp_invite = False
+                                    _up.draft_reentry = False
+                                    _up.draft_reentry_from = ""
+                                except Exception:
+                                    pass
+                                if isinstance(_fa, list) and \
+                                        _up not in _fa:
+                                    _fa.append(_up)
+                        except Exception:
+                            continue
+                except Exception as _ure:
+                    print(f"Undrafted re-entry processing failed: {_ure}")
+            # draft_year / reentries params land with the draft_worker pass;
+            # only pass what the installed signature accepts so un-patched
+            # generators (and old saves) keep working.
+            _gen_kwargs = {"num_prospects": 336, "quality": draft_quality}
+            try:
+                import inspect as _inspect
+                _params = _inspect.signature(generate_draft_class).parameters
+                if "draft_year" in _params:
+                    _gen_kwargs["draft_year"] = year
+                if "reentries" in _params:
+                    _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None)
+            except Exception:
+                pass
+            self.league.draft_prospects = generate_draft_class(**_gen_kwargs)
+            print(f"Generated {len(self.league.draft_prospects)} draft prospects")
+            self.league.draft_prospects_year = year
+            # Re-entries were folded into the class above; clear so they are
+            # never double-added in a later draft.
+            self.league.draft_reentries = []
+            # Draft Story Engine: assign storylines to top prospects
+            try:
+                from draft_stories import assign_prospect_storylines, deliver_prospect_stories
+                storylines = assign_prospect_storylines(self.league.draft_prospects)
+                # Store on league for draft-day drama (projected ranks)
+                self.league.prospect_storylines = storylines
+                # Projected rank = index in the public consensus order
+                # (draft_ranking), not current overall -- the projection is
+                # about where the prospect is expected to GO.
+                ranked = sorted(self.league.draft_prospects,
+                                key=lambda p: getattr(p, 'draft_ranking', 0),
+                                reverse=True)
+                self.league.prospect_projected_rank = {
+                    id(p): i + 1 for i, p in enumerate(ranked)
+                }
+                deliver_prospect_stories(self, storylines)
+            except Exception as _dse:
+                print(f"Draft storylines failed (non-fatal): {_dse}")
+            # Part 3: headline storylines for the class -- posted as news
+            # items ("title — text"), following the add_news pattern below.
+            # Fully guarded: a missing news path never breaks the draft.
+            try:
+                from draft_stories import assign_headline_storylines as _ahsl
+                for _story in (_ahsl(self.league.draft_prospects, year) or []):
+                    try:
+                        self.add_news(
+                            "%s — %s" % (_story.get('title', 'Draft'),
+                                         _story.get('text', '')))
+                    except Exception:
+                        pass
+            except Exception as _ahse:
+                print(f"Draft headline storylines failed (non-fatal): {_ahse}")
+        
+        # Ensure draft picks are set up
+        self.league.initialize_all_draft_picks()
+        
+        # Simulate draft lottery for first round
+        self.league.simulate_draft_lottery(year)
+
+        # Draft-day market: the lottery set the order, so every GM knows
+        # where they're picking -- the phones light up like the trade
+        # deadline. AI clubs trade up for need fits, and rebuilding clubs
+        # shop veterans to contenders holding late firsts. (Never runs for
+        # fantasy drafts: no trading there, by design.)
+        try:
+            from draft_day_trades import run_draft_day_trading
+            _ddt_deals = run_draft_day_trading(self.league, year, app=self)
+            if _ddt_deals:
+                self.add_news(
+                    f"DRAFT BUZZ: {len(_ddt_deals)} draft-day deal(s) go down "
+                    f"as GMs jockey for position.")
+        except Exception as _dde:
+            print(f"Draft-day trading failed (non-fatal): {_dde}")
+        
+        # Add news story about the draft
+        draft_story = f"The {year} NHL Entry Draft begins today! Teams will select from a pool of {len(self.league.draft_prospects)} eligible prospects over 7 rounds."
+        self.add_news(draft_story)
+        # NOTE: no UI is opened here. The draft-day hub prompt (Draft Day
+        # Central) follows immediately and its buttons open the draft board,
+        # so draft day has a single entry point instead of two popups.
+
+    def _calculate_season_awards(self, all_players):
+        """Calculate award winners using the awards_race voting model.
+
+        The same rankings the user sees in the Award Races tab decide the
+        actual trophies -- no more display-vs-reality split. Each race
+        mirrors real voting history (Hart: points + team success, Norris:
+        modern offense-first D voting, Vezina: SV%/GAA/wins + GSAx, etc.).
+        """
+        awards = {}
+        try:
+            import awards_race as ar
+        except ImportError:
+            return awards
+
+        players = [p for p in (all_players or []) if p is not None]
+        teams = list(getattr(getattr(self, "league", None), "teams", []) or [])
+
+        # Authoritative team strength map for Hart voting (from standings,
+        # not player.team_name which may be stale).
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+        # Authoritative player -> team map from roster membership. The
+        # roster is the truth; player.team_name is just a label.
+        roster_map = ar.roster_team_map(teams)
+
+        def _info(entry):
+            """Normalize a race entry to the {name, team, stats} contract."""
+            if not entry:
+                return None
+            p = entry.get("player")
+            if p is None:
+                # Team-level award (Jennings, Adams)
+                return {"name": entry.get("team") or entry.get("coach") or "?",
+                        "team": entry.get("team", "?"),
+                        "stats": ""} if entry else None
+            name = getattr(p, "full_name", getattr(p, "name", "?"))
+            try:
+                _pid = int(getattr(p, "id", -1) or -1)
+            except Exception:
+                _pid = -1
+            team = roster_map.get(_pid) or getattr(p, "team_name", "Unknown") or "Unknown"
+            return {"name": name, "team": team, "stats": ""}
+
+        def _top(race, award_name=None):
+            try:
+                r = race()
+                top = r[0] if r else None
+                # Rivalry lifecycle: a photo-finish award race gets
+                # personal -- but only when at least one man has the
+                # personality to take it personally (record_award_race
+                # gates on base_controversy / fiery temperament).
+                # Top two within 5% on the race's own score reads as a
+                # genuinely contested vote. Runaways don't make enemies.
+                # Additive: rivalries only.
+                if award_name and r and len(r) >= 2:
+                    try:
+                        s1 = float(r[0].get("score", 0) or 0)
+                        s2 = float(r[1].get("score", 0) or 0)
+                        if s1 > 0 and (s1 - s2) / s1 < 0.05:
+                            p1, p2 = r[0].get("player"), r[1].get("player")
+                            if p1 is not None and p2 is not None \
+                                    and p1 is not p2:
+                                from reputation_system import \
+                                    record_award_race as _rar
+                                _rivs = getattr(
+                                    getattr(self, "league", None),
+                                    "rivalries", None)
+                                if isinstance(_rivs, list):
+                                    _rar(_rivs, p1, p2, award_name)
+                    except Exception:
+                        pass
+                return top
+            except Exception:
+                return None
+
+        # Hart Trophy - MVP (points + team success)
+        e = _top(lambda: ar.hart_race(players, team_pct,
+                                   roster_map=roster_map), "Hart Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
+        awards["Hart Trophy (MVP)"] = info
+
+        # Ted Lindsay - most outstanding player, voted by the players
+        # (less team-success bias than the Hart)
+        e = _top(lambda: ar.lindsay_race(players, team_pct,
+                                      roster_map=roster_map),
+                 "Ted Lindsay Award")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
+        awards["Ted Lindsay Award (Most Outstanding Player)"] = info
+
+        # Art Ross - pure points
+        e = _top(lambda: ar.art_ross_race(players), "Art Ross Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = (f"{getattr(p, 'goals', 0)}G "
+                             f"{getattr(p, 'assists', 0)}A = {e['points']} pts")
+        awards["Art Ross Trophy (Scoring Leader)"] = info
+
+        # Rocket Richard - pure goals
+        e = _top(lambda: ar.rocket_race(players), "Rocket Richard Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['goals']} goals"
+        # Canonical: one identifier, one display label. The real trophy
+        # is the Maurice "Rocket" Richard Trophy -- no duplicates.
+        awards['Maurice "Rocket" Richard Trophy'] = info
+
+        # Vezina - DECIDED BY GM VOTE (31 AI GMs + human ballot).
+        # The race models the profile GMs look for, but the 5-3-1 tally
+        # in league.vezina_votes is authoritative once the vote is held.
+        e = _top(lambda: ar.vezina_race(players), "Vezina Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            sv = getattr(p, "saves", 0) / max(1, getattr(p, "shots_against", 0) or 1)
+            info["stats"] = f".{int(sv * 1000)} SV%, {getattr(p, 'wins', 0)}W"
+        # Override with the voted winner when the vote has been held.
+        try:
+            _vv = getattr(getattr(self, "league", None), "vezina_votes",
+                          None) or {}
+            _syr = str(int(getattr(getattr(self, "league", None),
+                                   "season_year", -1) or -1))
+            _voted = _vv.get(_syr)
+            if _voted and _voted.get("winner_id") not in (None, -1):
+                _wid = int(_voted["winner_id"])
+                for _pl in players:
+                    try:
+                        if int(getattr(_pl, "id", -2) or -2) == _wid:
+                            info = _info({"player": _pl})
+                            if info:
+                                _sv = getattr(_pl, "saves", 0) / max(
+                                    1, getattr(_pl, "shots_against", 0) or 1)
+                                info["stats"] = (
+                                    f".{int(_sv * 1000)} SV%, "
+                                    f"{getattr(_pl, 'wins', 0)}W "
+                                    f"(GM vote)")
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        awards["Vezina Trophy (Best Goalie)"] = info
+
+        # Norris - best defenseman (modern offense-first voting)
+        e = _top(lambda: ar.norris_race(players), "Norris Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts"
+        awards["Norris Trophy (Best Defenseman)"] = info
+
+        # Selke - best defensive forward
+        e = _top(lambda: ar.selke_race(players), "Selke Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['score']:.1f} defensive score"
+        awards["Selke Trophy (Defensive Forward)"] = info
+
+        # Lady Byng - skill + sportsmanship (points discounted by PIM)
+        e = _top(lambda: ar.byng_race(players), "Lady Byng Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = f"{e['points']} pts, {getattr(p, 'pim', 0)} PIM"
+        awards["Lady Byng Trophy (Sportsmanship)"] = info
+
+        # Calder - rookie of the year (NHL rookie eligibility)
+        _syr = ar.calder_season_year(getattr(self, "current_date", None))
+        e = _top(lambda: ar.calder_race(players, season_year=_syr), "Calder Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts (rookie)"
+        awards["Calder Trophy (Rookie of the Year)"] = info
+
+        # Jennings - fewest team goals against
+        e = _top(lambda: ar.jennings_race(teams))
+        if e:
+            awards["Jennings Trophy (Fewest GA)"] = {
+                "name": e["team"], "team": e["team"],
+                "stats": f"{e['goals_against']} GA"}
+        else:
+            awards["Jennings Trophy (Fewest GA)"] = None
+
+        # Jack Adams - most overachieving coach
+        e = _top(lambda: ar.adams_race(teams))
+        if e:
+            awards["Jack Adams (Best Coach)"] = {
+                "name": e["coach"], "team": e["team"],
+                "stats": f"+{e['score']:.3f} vs expectation"}
+        else:
+            awards["Jack Adams (Best Coach)"] = None
+
+        return awards
+
+    def _guarantee_offseason_tentpoles(self):
+        """Run the draft lottery + entry draft when the calendar skipped them.
+
+        The lottery (May 8) and entry draft (June 23-25) are date-triggered in
+        _check_for_event_day, but _start_offseason jumps straight from the Cup
+        to July 1 -- so in every path that completes the playoffs those dates
+        are never simulated and the lottery + draft would be silently skipped
+        (no prospects would ever enter the league). Run them here when the
+        date-based path didn't; the per-year guards (lottery_held_years /
+        draft_held_years) make this a no-op otherwise. Dates are set first so
+        headlines, inbox cards and news land on the right day.
+        """
+        try:
+            league = self.league
+            # Season continuity (Muck 2026-10-02): draft_year derives from
+            # GAME STATE, not date arithmetic. This method runs pre-rollover
+            # (called from _start_offseason before league.end_of_season()),
+            # so league.season_year is the just-completed season and its
+            # entry draft is held in calendar year season_year + 1.
+            # Manual date manipulation around the playoff gap can no longer
+            # skip a season or mis-year the lottery/draft.
+            draft_year = int(getattr(league, "season_year", 0) or 0) + 1
+            # Sanity backstop: if the wall date disagrees with game state
+            # by more than a year, the date was manipulated -- trust game
+            # state and log the discrepancy loudly.
+            try:
+                _date_year = int(getattr(self.current_date, "year", 0) or 0)
+                if _date_year and abs(_date_year - draft_year) > 1:
+                    try:
+                        self.add_news(
+                            f"⚠️ Season continuity: wall date "
+                            f"({self.current_date}) disagrees with league "
+                            f"season {getattr(league, 'season_year', '?')} -- "
+                            f"using game state for the {draft_year} draft.")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # 1. Lottery -- fully automatic, no user input needed.
+            lotto_done = set(getattr(league, 'lottery_held_years', None) or [])
+            if draft_year not in lotto_done:
+                self._set_current_date(date(draft_year, 5, 8))
+                try:
+                    self._hold_draft_lottery(draft_year)
+                except Exception:
+                    debug_print("Tentpole lottery failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'lottery_held_years', None) or [])
+                    held.add(draft_year)
+                    league.lottery_held_years = sorted(held)
+            # 2. Entry draft -- setup (class, lottery order, news, storylines).
+            # Skip entirely when the year's picks were already conducted
+            # (interactive war room): regenerating the class would orphan
+            # the drafted prospects and the conductor is idempotent anyway.
+            draft_done = set(getattr(league, 'draft_held_years', None) or [])
+            conducted = set(
+                getattr(league, 'draft_conducted_years', None) or [])
+            if draft_year not in draft_done and draft_year not in conducted:
+                self._set_current_date(date(draft_year, 6, 24))
+                try:
+                    self._hold_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole draft setup failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'draft_held_years', None) or [])
+                    held.add(draft_year)
+                    league.draft_held_years = sorted(held)
+                # 3. Conduct the picks. Headless auto-draft mirrors the draft
+                # board's AI logic (ai_make_pick) for every club.
+                # Design follow-up: interactive per-pick drafting via Draft Day
+                # Central instead of auto-conducting the user's picks.
+                try:
+                    self._auto_conduct_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole auto-draft failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+        except Exception:
+            debug_print("Offseason tentpole guarantee failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+    def _career_matchday_pre(self):
+        """Matchday morning: scout report to inbox + optional pre-match presser."""
+        from game_classes import EmailMessage
+        matchup = self._career_user_game_today()
+        if not matchup:
+            return
+        home, away = matchup
+        opponent = away if home == self.user_team else home
+        # Scout report -> inbox (no popup)
+        report = manager_career.generate_opposition_report(opponent, self.league.standings)
+        lines = [f"SCOUT REPORT: {report['team']} (Danger: {report['danger_level']})",
+                 f"Record: {report['record']}", "", "Strengths:"]
+        lines += ["• " + s for s in report["strengths"]]
+        lines.append("Weaknesses:")
+        lines += ["• " + w for w in report["weaknesses"]]
+        lines.append("Tactical advice:")
+        lines += ["• " + a for a in report["tactical_advice"]]
+        # Adaptive Rivals: has the opponent scouted your systems and
+        # installed a hockey answer for tonight?
+        try:
+            from adaptive_rivals import adaptation_report_lines
+            _adapt_lines = adaptation_report_lines(
+                opponent, self.user_team, getattr(self, 'game_results', []))
+            if _adapt_lines:
+                lines.append("")
+                lines.append("Their answer to your systems:")
+                lines += ["• " + _l for _l in _adapt_lines]
+        except Exception:
+            pass
+        self.send_email_to_user(EmailMessage(
+            sender="Chief Scout", sender_type="Scout",
+            subject=f"Opposition report: {report['team']}",
+            content="\n".join(lines), date_sent=self.current_date,
+            category="Scouting"))
+        # Pre-match presser now lives in the game-day inbox bundle
+        # (delivered when Continue is pressed) -- no modal popup here.
+
+    # ------------------------------------------------------------------
+    # Game-day inbox bundle: pre-match presser + team talk + Watch Live /
+    # Quick Sim choice delivered as ONE interactive inbox message instead
+    # of the old modal chain (presser popup, game-mode popup, team-talk
+    # popup). Post-match pressers arrive the same way. The gameplay
+    # events themselves are unchanged -- only the delivery moved.
+    # ------------------------------------------------------------------
+
+    def _career_star_of_game(self, sim_engine, team) -> str:
+        """Best performer name for the presser."""
+        try:
+            stats = getattr(sim_engine, "stats", {}) or {}
+            team_stats = stats.get(team.team_name, {})
+            best_id, best_g = None, -1
+            for pid, st in team_stats.items():
+                g = st.get("goals", 0) if isinstance(st, dict) else 0
+                if g > best_g:
+                    best_g, best_id = g, pid
+            if best_id is not None:
+                for p in (getattr(team, "roster", []) or []):
+                    if p.id == best_id:
+                        return f"{p.first_name} {p.last_name}"
+        except Exception:
+            pass
+        # Fallback: captain or random skater
+        for p in (getattr(team, "roster", []) or []):
+            if getattr(p, "captaincy", None) == "C":
+                return f"{p.first_name} {p.last_name}"
+        return "your top line"
+    
+    def _career_team_games(self) -> int:
+        b = self.career.board
+        return b.season_wins + b.season_losses + b.season_otl
+
+    def _career_team_strength(self, team) -> float:
+        """Rough 0-100 squad strength for board expectations."""
+        try:
+            ratings = [manager_career._player_rating(p)
+                       for p in (getattr(team, "roster", []) or [])]
+            if not ratings:
+                return 50.0
+            return max(0.0, min(100.0, sum(ratings) / len(ratings) * 5.0))
+        except Exception:
+            return 50.0
+
+    def _career_user_game_today(self):
+        """Return (home_team, away_team) if the user plays today, else None."""
+        team = self.user_team
+        today = self.current_date
+        for item in (self.league.schedule or []):
+            try:
+                if isinstance(item, dict):
+                    d, h, a = item.get("date"), item.get("home_team"), item.get("away_team")
+                elif isinstance(item, (tuple, list)) and len(item) >= 3:
+                    d, h, a = item[0], item[1], item[2]
+                else:
+                    continue
+                if d == today and (h == team or a == team):
+                    return h, a
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _career_weekly_update(self):
+        """Happiness/concerns, training morale & injury risk, assistant advice."""
+        from game_classes import EmailMessage
+        team = self.user_team
+        team_games = self._career_team_games()
+        noteworthy = []
+        for p in (getattr(team, "roster", []) or []):
+            try:
+                noteworthy.extend(manager_career.update_player_happiness(p, team_games, team=team))
+            except Exception:
+                continue
+        # Farm confidence: AHL production -> morale / attitude / call-up
+        # buzz, once a week (ahl_system.weekly_farm_confidence). The morale
+        # moves feed the existing call-up readiness "Confidence right now"
+        # term and the happiness chain downstream; notes go to the inbox.
+        try:
+            import ahl_system
+            _league = getattr(self.game_manager, "league", None)
+            if _league is not None:
+                for _note in ahl_system.weekly_farm_confidence(
+                        _league, user_team=team):
+                    try:
+                        self.send_email_to_user(_note)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        # Fan sentiment (Wave C D34): slow weekly drift toward the
+        # results baseline keeps the persistent fanbase mood honest
+        # between the discrete presser/win nudges.
+        try:
+            from fan_sentiment import tick_fan_sentiment
+            tick_fan_sentiment(team, current_date=self.current_date)
+        except Exception:
+            pass
+        # Bucket 5 (Muck 2026-10-02): fan-driven narratives fire on
+        # sentiment tier changes / extreme tiers (with cooldown).
+        try:
+            from fan_narratives import maybe_fire_fan_narrative
+            maybe_fire_fan_narrative(team, game_manager=self,
+                                     current_date=self.current_date)
+        except Exception:
+            pass
+        # L4 wire (Muck 2026-10-02): boardroom narratives -- the board
+        # pressure nudge made visible ("Ownership losing patience...").
+        # Same weekly cadence, own cooldown.
+        try:
+            from fan_narratives import maybe_fire_board_narrative
+            maybe_fire_board_narrative(team, game_manager=self,
+                                       current_date=self.current_date)
+        except Exception:
+            pass
+        # Training effects: morale + injury risk
+        fx = self.career.training.weekly_effects()
+        if fx["morale_delta"]:
+            for p in (getattr(team, "roster", []) or []):
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if fx["morale_delta"] > 0 else -5)))
+        import random as _r
+        if _r.random() < 0.02 * fx["injury_risk_mult"]:
+            candidates = [p for p in (getattr(team, "roster", []) or [])
+                          if not getattr(p, "is_injured", False)]
+            if candidates:
+                # W3->W4 contract: the tired/worn player picks up the
+                # training knock, not a uniform draw. Defensive: falls back
+                # to the old uniform choice if condition_system is missing.
+                try:
+                    from condition_system import (
+                        fatigue_injury_risk_mult as _w3_risk)
+                    _weights = [max(0.2, float(_w3_risk(p)))
+                                for p in candidates]
+                    victim = _r.choices(candidates, weights=_weights, k=1)[0]
+                except Exception:
+                    victim = _r.choice(candidates)
+                victim.is_injured = True
+                victim.injury_type = "Training knock"
+                victim.games_remaining_injured = _r.randint(1, 4)
+                # Muck 2026-10-02: record to injury_history (was missing on this path)
+                try:
+                    _hist = getattr(victim, "injury_history", None)
+                    if not isinstance(_hist, list):
+                        _hist = []
+                    _hist.append({"type": "Training knock", "region": "?",
+                                 "games": victim.games_remaining_injured,
+                                 "concussion": False})
+                    victim.injury_history = _hist[-8:]
+                except Exception:
+                    pass
+                self.add_news(f"🤕 {victim.first_name} {victim.last_name} injured in training "
+                              f"({victim.games_remaining_injured} games).")
+        # Player concerns -> inbox (max 2 per week)
+        concerns = manager_career.check_squad_concerns(team)[:2]
+        for player, text in concerns:
+            action_hint = ("Reply via Manager Hub → Squad tab to hold a private chat."
+                           if not getattr(player, "transfer_requested", False)
+                           else "Urgent: discuss his future in the Manager Hub → Squad tab.")
+            self.send_email_to_user(EmailMessage(
+                sender=f"{player.first_name} {player.last_name}",
+                sender_type="Player",
+                subject="Squad concern" + (" — TRANSFER REQUEST" if getattr(player, "transfer_requested", False) else ""),
+                content=f"{text}\n\n{action_hint}",
+                date_sent=self.current_date, category="Contracts",
+                is_important=getattr(player, "transfer_requested", False),
+                related_player_id=str(getattr(player, "id", ""))))
+        for note in noteworthy[:3]:
+            self.add_news(f"📋 {note}")
+        # Occasional assistant coach advice
+        if _r.random() < 0.25:
+            advice = self._career_assistant_advice()
+            if advice:
+                self.send_email_to_user(EmailMessage(
+                    sender="Assistant Coach", sender_type="Staff",
+                    subject="Training & squad advice",
+                    content=advice, date_sent=self.current_date,
+                    category="General"))
+
+    def _consume_team_talk_session(self, session_id):
+        """Consume-once: remove a team-talk session after its answer applied."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            if session_id in sessions:
+                del sessions[session_id]
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _create_awards_section(self, parent):
+        """Create the awards section of the season summary."""
+        # Get all players for award calculations
+        all_players = []
+        for team in self.league.teams:
+            all_players.extend(team.roster)
+        
+        # Calculate award winners
+        awards = self._calculate_season_awards(all_players)
+        
+        # Display awards in a grid
+        ttk.Label(parent, text="NHL Award Winners", 
+                 font=(self.FONT_FAMILY, 16, 'bold'), style='Title.TLabel').pack(pady=(10, 20))
+        
+        awards_grid = ttk.Frame(parent, style='Panel.TFrame')
+        awards_grid.pack(fill='x', padx=20)
+        
+        row = 0
+        for award_name, winner_info in awards.items():
+            # Award name
+            ttk.Label(awards_grid, text=f"{award_name}", 
+                     font=(self.FONT_FAMILY, 11, 'bold'), 
+                     style='Header.TLabel').grid(row=row, column=0, sticky='w', pady=5, padx=10)
+            
+            # Winner info
+            if winner_info:
+                winner_text = f"{winner_info['name']} ({winner_info['team']}) - {winner_info['stats']}"
+            else:
+                winner_text = "N/A"
+            ttk.Label(awards_grid, text=winner_text, 
+                     style='TLabel').grid(row=row, column=1, sticky='w', pady=5, padx=10)
+            row += 1
+            
+    def _create_leaders_section(self, parent):
+        """Create league leaders section."""
+        ttk.Label(parent, text="League Statistical Leaders", 
+                 font=(self.FONT_FAMILY, 16, 'bold'), style='Title.TLabel').pack(pady=(10, 20))
+        
+        # Get all players
+        all_players = []
+        for team in self.league.teams:
+            all_players.extend(team.roster)
+        
+        skaters = [p for p in all_players if hasattr(p, 'stats') and p.primary_position.name != 'GOALIE']
+        
+        # Sort by points
+        top_scorers = sorted(skaters, key=lambda p: getattr(p.stats, 'points', 0), reverse=True)[:10]
+        
+        # Create treeview
+        columns = ('rank', 'name', 'team', 'gp', 'goals', 'assists', 'points')
+        tree = ttk.Treeview(parent, columns=columns, show='headings', height=10)
+        
+        tree.heading('rank', text='#')
+        tree.heading('name', text='Player')
+        tree.heading('team', text='Team')
+        tree.heading('gp', text='GP')
+        tree.heading('goals', text='G')
+        tree.heading('assists', text='A')
+        tree.heading('points', text='P')
+        
+        tree.column('rank', width=40)
+        tree.column('name', width=180)
+        tree.column('team', width=80)
+        tree.column('gp', width=50)
+        tree.column('goals', width=50)
+        tree.column('assists', width=50)
+        tree.column('points', width=50)
+        
+        for i, player in enumerate(top_scorers, 1):
+            tree.insert('', 'end', values=(
+                i,
+                player.full_name,
+                getattr(player, 'team_name', 'UNK')[:3].upper(),
+                getattr(player.stats, 'games_played', 0),
+                getattr(player.stats, 'goals', 0),
+                getattr(player.stats, 'assists', 0),
+                getattr(player.stats, 'points', 0)
+            ))
+        
+        tree.pack(fill='both', expand=True, padx=20, pady=10)
+        
+    def _create_team_summary_section(self, parent):
+        """Create team summary section."""
+        team = self.user_team
+        team_stats = self.league.standings.get(team.team_name, {})
+        
+        ttk.Label(parent, text=f"Your Team: {team.team_name}", 
+                 font=(self.FONT_FAMILY, 16, 'bold'), style='Title.TLabel').pack(pady=(10, 20))
+        
+        # Team record
+        record_frame = ttk.Frame(parent, style='Panel.TFrame')
+        record_frame.pack(fill='x', padx=20, pady=10)
+        
+        wins = team_stats.get('Wins', 0)
+        losses = team_stats.get('Losses', 0)
+        otl = team_stats.get('OTL', 0)
+        points = team_stats.get('Points', 0)
+        
+        ttk.Label(record_frame, text=f"Record: {wins}-{losses}-{otl} ({points} pts)", 
+                 font=(self.FONT_FAMILY, 14), style='Header.TLabel').pack(anchor='w')
+        
+        # Calculate league position
+        sorted_standings = sorted(self.league.standings.items(), 
+                                 key=lambda x: x[1].get('Points', 0), reverse=True)
+        position = next((i+1 for i, (name, _) in enumerate(sorted_standings) if name == team.team_name), '?')
+        
+        ttk.Label(record_frame, text=f"League Position: {position} of {len(self.league.teams)}", 
+                 font=(self.FONT_FAMILY, 12), style='TLabel').pack(anchor='w', pady=5)
+        
+        # Top team scorers
+        ttk.Label(parent, text="Top Scorers", 
+                 font=(self.FONT_FAMILY, 12, 'bold'), style='Header.TLabel').pack(pady=(20, 10), anchor='w', padx=20)
+        
+        team_players = sorted(team.roster, 
+                             key=lambda p: getattr(p.stats, 'points', 0) if hasattr(p, 'stats') else 0, 
+                             reverse=True)[:5]
+        
+        for player in team_players:
+            stats = getattr(player, 'stats', None)
+            if stats:
+                pts = getattr(stats, 'points', 0)
+                g = getattr(stats, 'goals', 0)
+                a = getattr(stats, 'assists', 0)
+                _tsl = ttk.Label(parent, text=f"  {player.full_name}: {g}G {a}A = {pts} pts", 
+                         style='TLabel')
+                _tsl.pack(anchor='w', padx=20)
+                # EHM/FM24: right-click a scorer -> player menu.
+                try:
+                    from player_context_menu import bind_player_context
+                    bind_player_context(_tsl, player, self)
+                except Exception:
+                    pass
+    
+    def _daily_international_window(self, today, year, league) -> None:
+        """Fire the day's international window legs (Olympics announce /
+        resolve, Worlds) with catch-up semantics: a skipped Feb 9, Feb 22
+        or May 12 still fires late. Each leg is idempotent via
+        league.intl_announced / league.intl_held, and medal day self-heals
+        by announcing first when the prep is missing."""
+        from international import (
+            OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY,
+            OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY,
+            WORLDS_MONTH, WORLDS_DAY,
+            is_olympic_year, announce_olympics, resolve_olympics,
+            hold_worlds)
+        _md = (today.month, today.day)
+        _oly = is_olympic_year(year)
+        _ann = (getattr(league, "intl_announced", None) or [])
+        if (_md >= (OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY)
+                and _oly and year not in _ann):
+            _story = announce_olympics(self, year)
+            if _story:
+                self.news_log.append({'date': self.current_date,
+                                      'story': _story})
+        if (_md >= (OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY)
+                and _oly):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "olympics", [])
+            if year not in _held:
+                _res = resolve_olympics(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
+        if _md >= (WORLDS_MONTH, WORLDS_DAY):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "worlds", [])
+            if year not in _held:
+                _res = hold_worlds(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
+
+        # Hub prompt: once per (event, year)
+        try:
+            event = get_todays_event(today)
+        except Exception as e:
+            debug_print(f"Event-day detection failed: {e}")
+            return
+        if not event:
+            return
+        prompted = [tuple(p) for p in (getattr(league, 'event_day_prompted', None) or [])]
+        key = (event, year)
+        if key in prompted:
+            return
+        prompted.append(key)
+        league.event_day_prompted = [list(p) for p in prompted]
+        # Defer the prompt so the daily sim UI finishes updating first
+        self.after(500, lambda ev=event: self._prompt_event_day_safe(ev))
+
+    def _get_developable_attributes(self, player):
+        """Get list of attributes that can develop for a player"""
+        from game_classes import PlayerPosition
+        
+        # Core attributes that all players can develop
+        core_attrs = ['skating', 'checking', 'positioning', 'hockey_iq']
+        
+        # Position-specific developable attributes
+        if hasattr(player, 'primary_position'):
+            if player.primary_position == PlayerPosition.GOALIE:
+                return core_attrs + ['goaltending', 'reflexes', 'rebound_control', 'composure']
+            elif player.primary_position in [PlayerPosition.CENTER]:
+                return core_attrs + ['passing', 'faceoffs', 'shooting', 'vision']
+            elif player.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
+                return core_attrs + ['shooting', 'shooting_accuracy', 'speed', 'puck_protection']
+            else:  # Defense
+                return core_attrs + ['blocking', 'stick_checking', 'strength', 'passing']
+        
+        return core_attrs
+
+    def _league_sim_detail(self, league_key):
+        """Return the configured sim detail for a league ('full' | 'quick' | 'scores').
+
+        Set by the new-game setup wizard (gm.sim_detail). Defaults: the user's
+        league runs full, everything else runs quick.
+
+        NOTE (2026-09-29, BUG-025): sim_detail and user_league live on the
+        GameManager (gm), not on the app. Reading them from self (the GUI)
+        always missed, so every batch game silently ran 'quick'.
+        """
+        _gm = getattr(self, 'game_manager', None)
+        detail = getattr(_gm, 'sim_detail', None) or {}
+        if league_key in detail:
+            return detail[league_key]
+        user_league = getattr(_gm, 'user_league', None)
+        if league_key and user_league and league_key == user_league:
+            return 'full'
+        return 'quick'
+
+    def _mp_offer_to_host(self, proposal, team, partner, out_players,
+                          in_players, out_picks, in_picks):
+        """The proposal targets the host's own club: ask the host with the
+        same prompt the trade screen uses (waivers first, then accept)."""
+        # Web UI (Batch E, 2026-10-06): no blocking Tk dialogs on the web
+        # host -- the web layer sets _mp_web_host_offers (a dict) and the
+        # offer surfaces in /api/mp/game for an in-page Accept/Reject.
+        # Desktop path below is untouched.
+        _web_offers = getattr(self, "_mp_web_host_offers", None)
+        if isinstance(_web_offers, dict):
+            try:
+                import uuid as _uuid
+                _oid = _uuid.uuid4().hex[:10]
+                _web_offers[_oid] = {
+                    "proposal": proposal,
+                    "offer_id": _oid,
+                }
+                return (True,
+                        f"Offer sent to {getattr(partner, 'team_name', 'you')} "
+                        f"-- awaiting their answer.",
+                        False)
+            except Exception:
+                pass
+        import trade_engine as te
+        from popup_system import messagebox
+        league = getattr(self, "league", None)
+        # Host's own clause players: single-player askyesnocancel.
+        kept_in = list(in_players)
+        try:
+            for _v in te.trade_vetoes(partner, team, list(in_players),
+                                      league):
+                _p = _v["player"]
+                _pname = getattr(_p, "full_name", "player")
+                _ans = messagebox.askyesnocancel(
+                    "No-trade clause",
+                    f"{_pname} has a {_v.get('detail', 'clause')}.\n\n"
+                    f"Ask him to waive it for a move to {team.team_name}?\n\n"
+                    "Yes = ask him  |  No = remove him from the offer  |  "
+                    "Cancel = stop")
+                if _ans is None:
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, "You cancelled the offer.", True
+                if _ans is False:
+                    kept_in = [p for p in kept_in if p is not _p]
+                    continue
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if _ok:
+                    try:
+                        _p.contract.ntc_waiver_for = team.team_name
+                    except Exception:
+                        pass
+                    messagebox.showinfo("Waiver granted", _why)
+                else:
+                    messagebox.showwarning(
+                        "Waiver refused",
+                        f"{_why}\n\nHe's staying put -- the offer is dead.")
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, \
+                        f"{_pname} refused to waive -- offer dead.", True
+        except Exception:
+            pass
+        proposal["_in_players"] = kept_in
+        if not kept_in and not in_picks:
+            self._mp_clear_proposal_waivers(proposal)
+            return False, "Nothing left to ask for.", True
+
+        def _names(plist):
+            return ", ".join(getattr(p, "full_name", "?") for p in plist) \
+                or "none"
+
+        def _knames(klist):
+            return ", ".join(
+                f"{getattr(k, 'year', '?')} R{getattr(k, 'round', '?')}"
+                for k in klist) or "none"
+
+        try:
+            accept = messagebox.askyesno(
+                f"Trade offer from {proposal['manager']}",
+                f"{proposal['manager']} ({team.team_name}) offers:\n\n"
+                f"YOU RECEIVE: {_names(out_players)}\n"
+                f"Picks: {_knames(out_picks)}\n\n"
+                f"YOU SEND: {_names(kept_in)}\n"
+                f"Picks: {_knames(in_picks)}\n\n"
+                "Accept this trade?")
+        except Exception:
+            accept = False
+        if not accept:
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"rejected by {partner.team_name}.")
+            except Exception:
+                pass
+            return False, "You rejected the offer.", True
+        ok, detail = self._mp_execute_mp_trade(proposal)
+        return ok, detail, True
+
+    def _mp_serialize_offer(self, proposal, out_players, in_players,
+                            out_picks, in_picks):
+        import trade_engine as te
+
+        def _p(p):
+            kind = ""
+            try:
+                kind = (te.clause_of(p) or ("", ""))[0] or ""
+            except Exception:
+                pass
+            pos = getattr(getattr(p, "primary_position", None), "value",
+                          "?")
+            return {"id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": pos,
+                    "ovr": int(getattr(p, "overall", 0) or 0),
+                    "salary": int(getattr(getattr(p, "contract", None),
+                                          "salary", 0) or 0),
+                    "clause": kind}
+
+        def _k(k):
+            return {"id": str(getattr(k, "id", "")),
+                    "desc": (f"{getattr(k, 'year', '?')} "
+                             f"Round {getattr(k, 'round', '?')} "
+                             f"({getattr(k, 'original_team', '')})")}
+
+        return {"players_out": [_p(p) for p in out_players],
+                "players_in": [_p(p) for p in in_players],
+                "picks_out": [_k(k) for k in out_picks],
+                "picks_in": [_k(k) for k in in_picks],
+                "retention": dict(proposal.get("retention") or {}),
+                "pick_protection": dict(proposal.get("pick_protection")
+                                        or {})}
+
+    def _mp_swapped_user_team(self, team):
+        """Context manager: run a block with the acting team as user_team
+        (for machinery that addresses app.user_team), then restore."""
+        import contextlib as _cl
+
+        @ _cl.contextmanager
+        def _ctx():
+            _orig_ut = getattr(self, "user_team", None)
+            _gm = getattr(self, "game_manager", None)
+            _orig_gm_ut = getattr(_gm, "user_team", None) \
+                if _gm is not None else None
+            try:
+                self.user_team = team
+                if _gm is not None:
+                    _gm.user_team = team
+                yield
+            finally:
+                self.user_team = _orig_ut
+                if _gm is not None:
+                    _gm.user_team = _orig_gm_ut
+        return _ctx()
+
+    def _offseason_board_review(self):
+        """Year-end board reckoning + season rollover (BUG-011 fix).
+
+        Gives BoardSystem.season_review() the first real caller it has
+        ever had, then stashes the facts on the app for the season-review
+        inbox card (season_review.py builds the full story: big moments,
+        standouts, prospects, the four-corner season score).
+        """
+        career = getattr(self, 'career', None)
+        board = getattr(career, 'board', None)
+        if board is None or not hasattr(board, 'season_review'):
+            return
+        made, rounds, cup = self._user_playoff_result()
+        headline, body, delta = board.season_review(made, rounds, cup)
+        self._season_review_board = {
+            "headline": headline, "body": body, "delta": delta,
+            "made_playoffs": made, "playoff_rounds_won": rounds,
+            "won_cup": cup,
+            "expectation": getattr(board, 'expectation', None),
+            "confidence": getattr(board, 'confidence', None),
+            "season_number": getattr(board, 'season_number', None),
+        }
+        try:
+            self.add_news(f"Board season review: {headline} "
+                          f"(confidence {board.confidence}/100).")
+        except Exception:
+            pass
+        # The season-review card: big moments, standouts/tough-go, story of
+        # the year, prospect pipeline report, four-corner season score --
+        # delivered to the inbox. Must run before league.end_of_season()
+        # wipes the per-season stats it reads. Guarded: a card bug must
+        # never break the season rollover.
+        try:
+            from season_review import deliver_season_review
+            deliver_season_review(self)
+        except Exception:
+            pass
+
+    def _offseason_immortality(self):
+        """Retirements, HOF vote, retired numbers, era arguments. One pass."""
+        import immortality as _im
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        year = int(getattr(league, "season_year", 2026) or 2026)
+        hist = getattr(self, "league_history", None)
+
+        # 1. Hang them up.
+        retired = _im.process_retirements(league, year)
+        for snap in retired:
+            try:
+                if _im.career_score(snap) >= 60.0:
+                    self.add_news(
+                        f"{snap['name']} hangs them up: "
+                        f"{snap['games']} games, {snap['points']} points"
+                        f"{', ' + str(snap['wins']) + ' wins' if snap.get('goalie') else ''}. "
+                        f"A career worthy of the Hall conversation.")
+            except Exception:
+                pass
+
+        # 2. Raise the numbers.
+        for snap in retired:
+            try:
+                if not _im.number_worthy(snap):
+                    continue
+                team = next(
+                    (t for t in (getattr(league, "teams", None) or [])
+                     if getattr(t, "team_name", "") == snap.get("team_name")),
+                    None)
+                if team is not None and _im.retire_number(team, snap, year):
+                    try:
+                        from headlines import deliver_spec as _deliver_spec
+                        _deliver_spec(self, {
+                            "kind": "special_event",
+                            "event_kind": "jersey_retirement",
+                            "text": f"{getattr(team, 'team_name', '')} will retire "
+                                    f"{snap['name']}'s No. {snap['number']} -- "
+                                    f"a pregame ceremony at the next home game.",
+                            "home": getattr(team, 'team_name', ''),
+                            "involved": (getattr(team, 'team_name', ''),),
+                        })
+                    except Exception:
+                        pass
+                    self.add_news(
+                        f"{getattr(team, 'team_name', '')} will retire "
+                        f"{snap['name']}'s No. {snap['number']} -- "
+                        f"a pregame ceremony at the next home game.")
+            except Exception:
+                continue
+
+        # 3. The Hall calls (or doesn't).
+        if hist is not None:
+            report = _im.hof_ballot(league, hist, year)
+            for ind in report.get("inducted", []):
+                try:
+                    _years = ind.get("ballot_years", 1)
+                    _arc = (f" -- after {_years} years on the ballot, "
+                            f"the wait is over" if _years > 1 else "")
+                    self.add_news(
+                        f"Hall of Fame: {ind['name']} is in "
+                        f"({ind['votes']}/12 votes){_arc}.")
+                except Exception:
+                    pass
+            for bl in report.get("borderline", []):
+                try:
+                    self.add_news(
+                        f"Hall of Fame debate: {bl['name']} falls short "
+                        f"({bl['votes']}/12) -- the room is split between "
+                        f"the compilers and the peak-value crowd. "
+                        f"Back on the ballot next year.")
+                except Exception:
+                    pass
+
+            # 4. Greatest team ever? Only when there's a real argument.
+            arg = _im.era_argument(hist)
+            if arg is not None:
+                news = _im.era_argument_news(arg)
+                if news:
+                    self.add_news(news)
+
+    def _present_team_talk_screen(self, sess, wake, epoch):
+        """(Re-)present the team-talk screen for a Tier-B session.
+
+        `wake` is the day-sim waiter to release on answer, or None when
+        there is no live waiter (e.g. resumed after save/load -- the
+        answer then parks in the session and the next Continue applies
+        it pre-game, no re-ask). The view always rebuilds from the
+        session's stored context: returning resumes the exact session.
+        """
+        from manager_hub_window import TeamTalkView
+        session_id = (sess or {}).get("id") if isinstance(sess, dict) else None
+        tt = ((sess or {}).get("team_talk") or {}) if isinstance(sess, dict) else {}
+        context = dict(tt.get("context") or {})
+        if not context:
+            context = {"situation": tt.get("situation", "even"),
+                       "opponent_name": tt.get("opponent_name", "the opposition")}
+        try:
+            if self.user_team is not None:
+                _team = self.user_team
+            else:
+                _team = None
+        except Exception:
+            _team = None
+        # Revalidate the opponent against the live league (pattern:
+        # revalidation on re-present). Falls back to the stored name.
+        try:
+            _opp = self._resolve_team_talk_opponent(tt)
+            if _opp is not None:
+                context["opponent_name"] = getattr(
+                    _opp, "team_name",
+                    context.get("opponent_name", "the opposition"))
+        except Exception:
+            pass
+
+        def _on_done(result):
+            try:
+                # View contract: (option, reaction, boost) tuple, or None
+                # for "say nothing". Record the answer no matter what --
+                # a malformed result still counts as answered (dismiss is
+                # a separate path that never calls on_done).
+                boost = 1.0
+                if result:
+                    try:
+                        _opt, _reaction, boost = result
+                    except (TypeError, ValueError):
+                        try:
+                            boost = float(result)
+                        except (TypeError, ValueError):
+                            boost = 1.0
+                from popup_system import get_pending_session as _gps
+                s2 = _gps(self, session_id)
+                if s2 is not None:
+                    s2["dialogs"]["talk"] = {
+                        "answered": True,
+                        "boost": float(boost or 1.0),
+                    }
+                    t2 = s2.get("team_talk")
+                    if isinstance(t2, dict):
+                        t2["parked"] = False
+            except Exception:
+                pass
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+            if wake is not None:
+                try:
+                    # Don't wake a stale frame: if a load bumped the
+                    # epoch after we presented, the waiter is already
+                    # released and this answer belongs to the session.
+                    if getattr(self, "_team_talk_epoch", 0) == epoch:
+                        wake.set(True)
+                except Exception:
+                    pass
+
+        try:
+            view = self.show_screen("team_talk", "Pre-Match Team Talk",
+                                    TeamTalkView, _team,
+                                    "prematch", context,
+                                    on_done=_on_done, fresh=True)
+        except Exception:
+            return None
+        # Park-on-navigation: destroying the view WITHOUT an answer
+        # parks the session (context preserved) and surfaces the resume
+        # chip. The waiter is deliberately NOT released -- the day sim
+        # stays paused on the talk. Dismiss = defer, never an answer.
+        try:
+            view.bind(
+                "<Destroy>",
+                lambda e, v=view, s=session_id:
+                    self._on_team_talk_destroyed(e, v, s),
+                add="+")
+        except Exception:
+            pass
+        return view
+
+    def _prune_team_talk_sessions(self, keep_date):
+        """Drop team-talk sessions that can never resume (other dates)."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            for sid in list(sessions.keys()):
+                try:
+                    sess = sessions.get(sid)
+                    if not isinstance(sess, dict) or sess.get("kind") != "team_talk":
+                        continue
+                    tt = sess.get("team_talk") or {}
+                    if tt.get("date") != keep_date:
+                        del sessions[sid]
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _record_season_to_history(self):
+        """Record the completed season to League Memory.
+
+        Called from _start_offseason after the champion is resolved but
+        before league.end_of_season() wipes stats. Purely additive —
+        records outcomes, never changes them.
+        """
+        from league_history import LeagueHistory
+        # Get or create the history object on the career
+        hist = getattr(self, 'league_history', None)
+        if hist is None:
+            hist = LeagueHistory()
+            self.league_history = hist
+
+        year = getattr(getattr(self, 'league', None), 'season_year', 2026)
+
+        # Champion, runner-up, series score from the playoff bracket
+        champion = None
+        runner_up = None
+        series_score = None
+        try:
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') and pw.winfo_exists():
+                _wb = getattr(pw, 'playoff_bracket', None)
+                _lb = getattr(getattr(self, 'league', None),
+                              'playoff_bracket', None)
+                # BUG-REVIEW-002: ignore a stale decided bracket lingering
+                # on the never-torn-down playoffs view; the league's bracket
+                # is the live one (same identity invariant as above).
+                bracket = _wb if (_wb is not None and _wb is _lb) else _lb
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if bracket is not None:
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion = getattr(champ, 'team_name', None)
+                # Final series for runner-up and score
+                finals = (getattr(bracket, 'playoff_series', {}) or {}).get(
+                    'stanley_cup_final', [])
+                if finals:
+                    s = finals[0]
+                    winner = getattr(s, 'winner', None)
+                    if winner is not None:
+                        wname = getattr(winner, 'team_name', None)
+                        # Runner-up is the other team
+                        t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                        t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                        runner_up = t2 if wname == t1 else t1
+                        ww = s.team1_wins if wname == t1 else s.team2_wins
+                        lw = s.team2_wins if wname == t1 else s.team1_wins
+                        series_score = f"{ww}-{lw}"
+        except Exception:
+            pass
+
+        # Awards (calculate from current stats before wipe)
+        awards = {}
+        try:
+            all_players = []
+            for team in self.league.teams:
+                all_players.extend(team.roster)
+            raw_awards = self._calculate_season_awards(all_players)
+            # Normalize to {award_name: player_name}
+            for award_name, winner in raw_awards.items():
+                if winner is not None:
+                    if isinstance(winner, dict):
+                        awards[str(award_name)] = winner.get('name', '?')
+                    else:
+                        awards[str(award_name)] = getattr(
+                            winner, 'full_name', getattr(winner, 'name', str(winner)))
+        except Exception:
+            pass
+
+        # Conn Smythe: decided at Cup-win time and stashed on the bracket
+        # (playoff_system._decide_conn_smythe) -- the awards calculator only
+        # covers the regular season, so inject it here for the history book.
+        try:
+            smythe_name = getattr(bracket, "conn_smythe_name", None)
+            if smythe_name:
+                awards["Conn Smythe"] = smythe_name
+        except Exception:
+            pass
+
+        # Presidents' Trophy: best regular-season record
+        presidents = None
+        standings_snapshot = []
+        try:
+            best_pts = -1
+            for team in self.league.teams:
+                st = self.league.standings.get(team.team_name, {})
+                w = st.get('W', st.get('Wins', 0))
+                l = st.get('L', st.get('Losses', 0))
+                otl = st.get('OTL', 0)
+                pts = w * 2 + otl
+                if pts > best_pts:
+                    best_pts = pts
+                    presidents = team.team_name
+                standings_snapshot.append({
+                    "team": team.team_name,
+                    "w": w, "l": l, "otl": otl, "pts": pts,
+                })
+            # Sort by points and keep ALL 32 clubs with their final rank --
+            # history should remember a 29th-place finish, not just the
+            # playoff field.
+            standings_snapshot.sort(key=lambda x: x["pts"], reverse=True)
+            for _rank, _row in enumerate(standings_snapshot, 1):
+                _row["rank"] = _rank
+        except Exception:
+            pass
+
+        # Conn Smythe: from awards if present, else None
+        conn_smythe = awards.get("Conn Smythe")
+
+        hist.record_season(
+            year=year,
+            champion=champion,
+            runner_up=runner_up,
+            series_score=series_score,
+            presidents_trophy=presidents,
+            conn_smythe=conn_smythe,
+            awards=awards,
+            standings_snapshot=standings_snapshot,
+        )
+
+        # Franchise records: fold each team's season into the record book.
+        # Runs before end_of_season() wipes per-season stats.
+        try:
+            season_label = f"{year}-{str(year + 1)[-2:]}"
+            for team in self.league.teams:
+                hist.franchise_records.update_from_season(team, season_label)
+                try:
+                    _streak = int(getattr(team, "longest_win_streak", 0) or 0)
+                    if _streak >= 3:
+                        hist.franchise_records.record_streak(
+                            team.team_name, "win", _streak, season_label)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _simulate_game_full_batch(self, home_team, away_team):
+        """Full event-by-event sim for batch games in 'full'-detail leagues.
+
+        Uses simulation.GameSim (the hooked engine). Player season stats —
+        goals, assists, and games played — are updated by the engine itself.
+        Returns (winner, loser, scores, went_to_ot, sim).
+        """
+        from simulation import GameSim
+        from arena_atmosphere import crowd_hype_for_tension
+        _atm = _pregame_atmosphere(
+            home_team, away_team,
+            league=getattr(self, "league", None),
+            milestone_home=home_team.team_name in
+            getattr(self, "_milestone_watch_teams", set()),
+            ceremony=bool(getattr(home_team, "_pending_ceremony", None)))
+        sim = GameSim(home_team, away_team, atmosphere=_atm,
+                      crowd_hype=crowd_hype_for_tension(
+                          _atm.get("energy", 50.0), _atm.get("mood", 30.0)))
+        # Deployment directive: feed today's trade-deadline stances to the
+        # ice-time ecosystem so coaches read team direction (buyer/seller).
+        # Additive; the stance model lives in trade_storylines.
+        try:
+            from deployment_policy import set_team_direction as _set_tdir
+            import trade_storylines as _ts
+            _set_tdir({home_team.team_name: _ts.stance(self, home_team.team_name),
+                       away_team.team_name: _ts.stance(self, away_team.team_name)})
+        except Exception:
+            pass
+        periods = set()
+        had_shootout = {'v': False}
+
+        def _sniff(ev):
+            if isinstance(ev, dict):
+                periods.add(ev.get('period', 1))
+                if ev.get('type') == 'shootout_end':
+                    had_shootout['v'] = True
+
+        sim.pbp_listeners.append(_sniff)
+        # Pregame ceremony (if one is queued).
+        try:
+            import immortality as _im3
+            _im3.consume_ceremony(self, home_team, sim)
+        except Exception:
+            pass
+        winner, loser, scores, _game_log, _notable = sim.run()
+        went_to_ot = any(p > 3 for p in periods)
+        return winner, loser, scores, went_to_ot, sim
+
+    def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
+        """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
+
+        preseason: skip the individual season-stat pass -- exhibition
+        scores stand, nobody's season line moves."""
+        import random
+        
+        # Calculate base team strengths
+        home_strength = self._calculate_team_strength(home_team) + 0.05  # Home ice advantage
+        away_strength = self._calculate_team_strength(away_team)
+
+        # Situations, once per team per game: the situations channel below
+        # and the clutch factor both read it; resolving the room twice per
+        # team would double its cost for no new information (pure read).
+        try:
+            from reputation_system import situations_factor as _sff
+            _home_sit = _sff(home_team, {}) or {}
+            _away_sit = _sff(away_team, {}) or {}
+        except Exception:
+            _home_sit, _away_sit = {}, {}
+
+        # Add individual star player effects
+        home_star_effects = self._calculate_star_player_effects(
+            home_team, _home_sit.get("score"))
+        away_star_effects = self._calculate_star_player_effects(
+            away_team, _away_sit.get("score"))
+        
+        # Apply star player bonuses to team strength
+        home_strength += home_star_effects['offensive_boost']
+        away_strength += away_star_effects['offensive_boost']
+        
+        # Base goal expectation for NHL-like scoring
+        base_goals = 2.11  # Parity-calibrated 2026-09-29 vs the event sim
+        # (~3.05 goals/team/game healthy). Note: offensive_boost (+0.40) and
+        # the home bonus (+0.05) sit INSIDE the strength term, so the 2.5
+        # slope scales them too; the anchor absorbs that level shift while
+        # the slope carries the team-quality spread. (Recalibrated +0.24
+        # when the harness started deep-copying teams per game -- the old
+        # aggregate was injury-depressed; the true healthy reference level
+        # is ~3.05, not ~2.9.)
+        home_goal_expectation = base_goals + (home_strength - 0.75) * 2.5
+        away_goal_expectation = base_goals + (away_strength - 0.75) * 2.5
+        
+        # Apply defensive effects (elite goalies/defense reduce opponent scoring)
+        home_goal_expectation -= away_star_effects['defensive_reduction']
+        away_goal_expectation -= home_star_effects['defensive_reduction']
+        
+        # Allow for low-scoring games but maintain reasonable averages
+        home_goal_expectation = max(1.0, min(4.5, home_goal_expectation))
+        away_goal_expectation = max(1.0, min(4.5, away_goal_expectation))
+
+        # Installed NHL systems (tactics.py): the single shared tactics
+        # channel -- the same matchup_modifiers() the event sims apply per
+        # shot. (Factor parity 2026-09-29: the old additive _tactic_shifts
+        # double-counted tactics here -- the legacy slider already folds
+        # into tactics.py's resolution -- making rush/trap responses ~2x
+        # the event sim's. Removed; both engines now read one channel.)
+        # Your attack vs their structure; pace moves total goals;
+        # PP/PK systems nudge season-level expectations (there is no
+        # per-man-advantage state in the lightweight path).
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+            _mm = _tx.matchup_modifiers(home_team, away_team)
+            home_goal_expectation *= _mm["home_goals"] * _mm["pace"]
+            away_goal_expectation *= _mm["away_goals"] * _mm["pace"]
+            home_goal_expectation *= 1.0 + (_mm["home_pp"] - 1.0) * 0.15
+            away_goal_expectation *= 1.0 + (_mm["away_pp"] - 1.0) * 0.15
+            # Tactics x home-ice interaction (parity 2026-09-29, lightweight
+            # only): in the event sim, rush hockey's extra shot volume
+            # interacts with home-ice edges (last change, crowd) so the HOME
+            # side converts the extra chances at a higher rate -- the away
+            # team's rush boost is partly eaten. The additive lightweight
+            # misses this emergent effect; model it as a small dampener on
+            # the AWAY tactic multiplier. It fires only when the AWAY team
+            # commits to an offensive game (their even-strength tactic --
+            # generated clubs all play "Balanced", so ordinary baselines and
+            # trap games are exactly untouched), scaled by the actual event
+            # level (pace) and their shot volume. The home side is untouched.
+            # A few arithmetic ops.
+            _es_away = (getattr(away_team, "tactic_even_strength", "Balanced")
+                        or "Balanced")
+            _rush_posture = {"Very Offensive": 1.0, "Offensive": 0.5}.get(
+                _es_away, 0.0)
+            if _rush_posture > 0.0:
+                _rush_volume = max(0.0, _mm["pace"] - 1.0)
+                _away_shot_volume = max(0.0, _mm["away_shot_vol"] - 1.0)
+                if _rush_volume > 0.0 and _away_shot_volume > 0.0:
+                    _rxhi = (_RUSH_X_HOME_ICE_K * _rush_posture
+                             * _rush_volume * _away_shot_volume
+                             * _HOME_ICE_EDGE)
+                    away_goal_expectation *= max(0.70, 1.0 - _rxhi)
+        except Exception:
+            pass
+
+        # Situations channel: room + bench + hunger move goal expectation a
+        # few percent either way -- the same factor the detailed engines
+        # (GameSim, AdvancedGameSim) apply per shot. Computed once per team
+        # per game here (see _home_sit/_away_sit above); applies to every
+        # team in the league, user or AI.
+        # (Replaces the old squad-morale modifier, which situations subsumes.)
+        try:
+            home_goal_expectation *= float(_home_sit.get("xg_mult", 1.0))
+            away_goal_expectation *= float(_away_sit.get("xg_mult", 1.0))
+        except Exception:
+            pass
+
+        # FM-style squad confidence: raw morale average nudges expectations
+        # +/-3% (own channel -- situations reads room structure, this reads
+        # the squad's raw confidence level).
+        home_goal_expectation *= self._career_morale_modifier(home_team)
+        away_goal_expectation *= self._career_morale_modifier(away_team)
+
+        # In-game fatigue (team_fatigue.py): the event sim scales each
+        # shooter's shot/deke/pass volume by shift fatigue, paced by the
+        # stamina/endurance/durability blend (condition_system, canonical).
+        # The ~20% mean scoring drag is already absorbed in the calibrated
+        # base_goals; this adds ONLY the team-level variation (iron-lung
+        # rooms generate more volume than fragile ones), mean-neutral by
+        # construction so the baseline doesn't move. Guarded -> 1.0 when
+        # rosters/attributes are missing (exhibition, old saves). Applies
+        # to every team, user or AI.
+        try:
+            from team_fatigue import team_fatigue_factor as _tff
+            home_goal_expectation *= _tff(home_team)
+            away_goal_expectation *= _tff(away_team)
+        except Exception:
+            pass
+        
+        # Generate goals with realistic NHL distribution
+        # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
+        # σ=2.05 (parity 2026-09-29, recalibrated 2026-09-30 on Caleb's new
+        # tree): the event sim's score spread widened post-eb5101b (talent-
+        # gradient restepening) to ~2.05; σ tracks it so the lightweight's
+        # measured stddev (~2.0 after round/clip) matches. Team differences
+        # carry the systematic variance; σ carries the game-level noise.
+        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 2.05))))
+        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 2.05))))
+        
+        # Apply clutch performance factors in close games
+        if abs(home_goals - away_goals) <= 1:
+            home_clutch = home_star_effects['clutch_factor']
+            away_clutch = away_star_effects['clutch_factor']
+            
+            # Star players can tip the balance in close games
+            if home_clutch > away_clutch and random.random() < (home_clutch - away_clutch) * 0.3:
+                if random.random() < 0.6:  # Add goal
+                    home_goals += 1
+                else:  # Prevent goal  
+                    away_goals = max(0, away_goals - 1)
+            elif away_clutch > home_clutch and random.random() < (away_clutch - home_clutch) * 0.3:
+                if random.random() < 0.6:
+                    away_goals += 1
+                else:
+                    home_goals = max(0, home_goals - 1)
+        
+        # Handle ties (NHL: 5-min 3v3 OT, then shootout)
+        # Track if game went to OT for OTL point
+        went_to_ot = False
+        _drama_ctx = None  # ot_drama context; computed lazily, only when needed
+        def _drama():
+            # Local lazy loader: keeps the fast path fast when the game is
+            # decided in regulation by 2+.
+            nonlocal _drama_ctx
+            if _drama_ctx is None:
+                try:
+                    from ot_drama import ot_context
+                    _drama_ctx = ot_context(
+                        home_team, away_team,
+                        league=getattr(self, "league", None),
+                        atmosphere=_pregame_atmosphere(
+                            home_team, away_team,
+                            league=getattr(self, "league", None)))
+                except Exception:
+                    _drama_ctx = {"ot_mult": 1.0, "home_win_edge": 0.0,
+                                  "drama01": 0.3, "drivers": []}
+            return _drama_ctx
+        if home_goals == away_goals:
+            went_to_ot = True
+        elif abs(home_goals - away_goals) == 1:
+            # OT drama, live lever (ot_drama): the trailing coach pulls the
+            # goalie and the end-game 6v5 resolves honestly -- tying goal
+            # (game goes to OT), empty-netter (lead grows), or nothing.
+            # Both scoring outcomes are real goals; nothing is manufactured.
+            # Regulation scoring means are never touched.
+            try:
+                from ot_drama import late_six_on_five as _l65
+                _6v5_ctx = _drama()
+                _trailing_is_home = home_goals < away_goals
+                _seg, _pull_secs = _l65(
+                    _6v5_ctx, trailing_team_is_home=_trailing_is_home)
+                if _seg == "tie":
+                    went_to_ot = True
+                    if _trailing_is_home:
+                        home_goals += 1
+                    else:
+                        away_goals += 1
+                    self._late_six_on_five_news(
+                        home_team, away_team, _6v5_ctx,
+                        trailing_team_is_home=_trailing_is_home)
+                elif _seg == "empty_net":
+                    if _trailing_is_home:
+                        away_goals += 1
+                    else:
+                        home_goals += 1
+            except Exception:
+                pass
+        if went_to_ot:
+            _ctx = _drama()
+            # Chris 2026-09-29 tuning: dynamic factors decide OT, not a fixed
+            # home handout. Base is a coin flip; clutch counts as
+            # home-minus-away (both rooms' big-game players matter); the
+            # drama edge already nets home vs away morale/situations/crowd.
+            # Hard 60/40 cap either way.
+            # Clutch 2026-09-29: dynamic per-team factor (team_clutch.py),
+            # shared with the advanced engine. Matchup heat lets big-game
+            # rooms lift in heated OT; fragile rooms get nothing extra.
+            try:
+                from team_clutch import team_clutch_factor as _tcf
+                _clutch_heat = float(_ctx.get("drama01", 0.0) or 0.0) * 100.0
+                _clutch_lg = getattr(self, "league", None)
+                clutch_edge = ((_tcf(home_team, league=_clutch_lg,
+                                     matchup_heat=_clutch_heat,
+                                     situation_score=_home_sit.get("score"))
+                                - _tcf(away_team, league=_clutch_lg,
+                                       matchup_heat=_clutch_heat,
+                                       situation_score=_away_sit.get("score"))) * 0.08)
+            except Exception:
+                clutch_edge = ((home_star_effects['clutch_factor']
+                                - away_star_effects['clutch_factor']) * 0.08)
+            home_ot_chance = (0.50 + clutch_edge
+                              + _ctx.get("home_win_edge", 0.0))
+            # OT drama, live lever (ot_drama): 3v3 matchup choices. The
+            # coach's personnel acumen plus the room/crowd edge tilt OT
+            # finishing a touch, bounded small.
+            try:
+                from ot_drama import ot_matchup_tilt as _omt
+                from game_classes import StaffRole as _SR
+                _hc = (home_team.get_staff_by_role(_SR.HEAD_COACH) or [None])[0]
+                _ac = (away_team.get_staff_by_role(_SR.HEAD_COACH) or [None])[0]
+                home_ot_chance += _omt(_ctx, home_coach=_hc, away_coach=_ac)
+            except Exception:
+                pass
+            home_ot_chance = max(0.40, min(0.60, home_ot_chance))
+            if random.random() < home_ot_chance:
+                home_goals += 1
+            else:
+                away_goals += 1
+        
+        # Determine winner
+        if home_goals > away_goals:
+            winner = home_team
+            loser = away_team
+        else:
+            winner = away_team
+            loser = home_team
+        
+        # Generate realistic individual player stats (skipped for
+        # preseason -- exhibitions don't touch season lines).
+        if not preseason:
+            self._generate_player_stats(home_team, away_team, home_goals, away_goals)
+
+        # Gameplay injuries (grounded W4 rate: injury_data.QUICK_ENGINE_GENERAL_RATE
+        # = 0.31/team/game -- Rotowire 2024-25; same shared decision as the
+        # detailed sim, one decision two fidelities)
+        try:
+            import injury_data as _injury_data
+            _inj_rate = _injury_data.QUICK_ENGINE_GENERAL_RATE
+        except Exception:
+            _inj_rate = 0.31
+        for team in (home_team, away_team):
+            if random.random() < _inj_rate:
+                hurt = roll_game_injury(team)
+                if hurt is not None and hasattr(self, 'notable_events'):
+                    try:
+                        self.notable_events.append({
+                            'time': 3600, 'period': 3, 'team': team.team_name,
+                            'player': hurt, 'event': 'Injury',
+                            'details': f'{hurt.injury_type} ({hurt.games_remaining_injured} games)'
+                        })
+                    except Exception:
+                        pass
+        
+        return winner, loser, (home_goals, away_goals), went_to_ot
+
+    def _try_ai_ai_deadline_deal(self, initiator, teams, te, tsl, mgr):
+        """One AI-initiated deadline deal. Seller moves a veteran for a
+        pick/prospect; the buyer side goes through the real AI evaluation
+        (ai_consider_trade + situational context). Returns True on a deal."""
+        import random
+        from game_classes import DraftPick
+        iname = getattr(initiator, 'team_name', '')
+        stance = tsl.stance(self, iname)
+        # Pair sellers with buyers; anyone else shops opportunistically.
+        partners = [t for t in teams if t is not initiator]
+        random.shuffle(partners)
+        seller, buyer = None, None
+        if stance == 'seller':
+            seller = initiator
+            buyer = next((t for t in partners
+                          if tsl.stance(self, getattr(t, 'team_name', ''))
+                          in ('buyer', 'bubble')), None)
+        else:
+            buyer = initiator
+            seller = next((t for t in partners
+                           if tsl.stance(self, getattr(t, 'team_name', ''))
+                           == 'seller'), None)
+        if seller is None or buyer is None:
+            return False
+        # Seller's piece: highest-value veteran (30+) on an expiring-ish deal.
+        # Clause-aware: a veteran whose NTC/NMC vetoes the move to this
+        # buyer is skipped unless he'd waive for them (waiver stamped so
+        # the trade preflight honors it).
+        vets = [p for p in getattr(seller, 'roster', [])
+                if getattr(p, 'age', 0) >= 29]
+        if not vets:
+            vets = list(getattr(seller, 'roster', []))
+        if not vets:
+            return False
+        try:
+            vets.sort(key=lambda p: te.player_trade_value(p), reverse=True)
+        except Exception:
+            pass
+        piece = None
+        for _vet in vets:
+            _vetoes = te.trade_vetoes(seller, buyer, [_vet])
+            if not _vetoes:
+                piece = _vet
+                break
+            _ok, _why = te.will_waive_ntc(_vet, seller, buyer)
+            if _ok:
+                try:
+                    _vet.contract.ntc_waiver_for = getattr(
+                        buyer, 'team_name', '')
+                except Exception:
+                    pass
+                piece = _vet
+                break
+            print(f"deadline: {getattr(_vet, 'full_name', '?')} vetoed "
+                  f"a move to {getattr(buyer, 'team_name', '?')} ({_why})")
+        if piece is None:
+            return False
+        # Buyer's payment: a mid-round pick they own, else a prospect.
+        payment = None
+        try:
+            for yr, picks in getattr(buyer, 'draft_picks', {}).items():
+                for pk in picks:
+                    if (isinstance(pk, DraftPick)
+                            and getattr(pk, 'current_team', '')
+                            == getattr(buyer, 'team_name', '')
+                            and pk.round in (2, 3, 4)):
+                        payment = pk
+                        break
+                if payment:
+                    break
+        except Exception:
+            payment = None
+        if payment is None:
+            prospects = [p for p in getattr(buyer, 'roster', [])
+                         if getattr(p, 'age', 99) <= 23]
+            try:
+                prospects.sort(key=lambda p: te.player_trade_value(p))
+            except Exception:
+                pass
+            payment = prospects[0] if prospects else None
+        if payment is None:
+            return False
+        sname = getattr(seller, 'team_name', '')
+        bname = getattr(buyer, 'team_name', '')
+        try:
+            sit = tsl.situational_context(self, buyer, seller)
+            # NOTE: user_assets = what the buyer RECEIVES ([piece]),
+            # partner_assets = what the buyer GIVES ([payment]).
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
+                                        user_team=seller, patience=1.0,
+                                        situational=sit)
+        except TypeError:
+            # Older ai_consider_trade without the situational kwarg
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
+                                        user_team=seller, patience=1.0)
+        except Exception:
+            return False
+        if resp.decision != 'accept':
+            # Deal died: the stamped single-use waiver must not survive it.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            return False
+        try:
+            trade = te.execute_trade(seller, buyer, [piece], [payment],
+                                     date_str=self.current_date.isoformat(),
+                                     league=getattr(self, "league", None))
+        except Exception:
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            return False
+        if getattr(trade, 'summary', '').startswith("BLOCKED:"):
+            # Clause veto at completion -- nothing moved, announce nothing.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            print(f"deadline deal blocked: {trade.summary}")
+            return False
+        # (Fresh start + steal watch now fire authoritatively inside
+        # trade_engine.execute_trade -- every trade path gets them.)
+        # Break the news: ticker + inbox.
+        pay_label = te.asset_label(payment)
+        piece_label = te.asset_label(piece)
+        story = (f"TRADE: {bname} acquires {piece_label} from {sname} "
+                 f"for {pay_label}.")
+        try:
+            mgr.breaking_news.append({'time': mgr.clock_display(),
+                                      'story': story})
+        except Exception:
+            pass
+        try:
+            from email_generator import EmailGenerator
+            email = EmailGenerator.create_league_announcement_email(
+                f"🚨 Deadline Deal: {piece_label} to {bname}", story)
+            email.is_urgent = True
+            email.priority = 4
+            self.send_email_to_user(email)
+        except Exception:
+            pass
+        try:
+            mgr.deadline_stats['total_trades'] += 1
+            mgr.deadline_stats['players_moved'] += 1
+        except Exception:
+            pass
+        print(f"⏰ {story}")
+        return True
+
+    def _update_offseason_reputations(self):
+        """Offseason rollover: controversy cooldown, staff rep, Cup bonus.
+
+        MUST run before league.end_of_season() -- standings (win%) are wiped
+        by initialize_standings() inside it.
+        """
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        # Resolve the Cup champion from the playoff window, if one was played.
+        champion_name = None
+        bracket = None
+        champ = None
+        try:
+            pw = self.open_windows.get('playoffs')
+            if pw is not None and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is not None:
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion_name = getattr(champ, 'team_name', None)
+        except Exception:
+            pass
+        # Bucket 5 (Muck 2026-10-02): cross-season fanbase memory.
+        # Cup wins buy goodwill; missing playoffs extends the losing streak.
+        try:
+            from fan_narratives import apply_season_memory
+            playoff_teams = set()
+            try:
+                if bracket is not None:
+                    # Collect playoff participants from the bracket
+                    for rnd in getattr(bracket, 'rounds', []) or []:
+                        for series in getattr(rnd, 'series', []) or []:
+                            for t in (getattr(series, 'home_team', None),
+                                     getattr(series, 'away_team', None)):
+                                tn = getattr(t, 'team_name', getattr(t, 'name', None))
+                                if tn:
+                                    playoff_teams.add(str(tn))
+            except Exception:
+                pass
+            for _t in getattr(getattr(self, 'league', None), 'teams', []) or []:
+                try:
+                    _tn = str(getattr(_t, 'name', ''))
+                    _won = bool(champion_name and _tn == str(champion_name))
+                    _po = _tn in playoff_teams or _won
+                    apply_season_memory(_t, won_cup=_won, made_playoffs=_po)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # League-average scoring pace for the reputation recompute below.
+        league_avg_ppg = 0.8
+        try:
+            _tp = _tg = 0
+            for _t in self.league.teams:
+                for _p in getattr(_t, 'roster', []) or []:
+                    _s = getattr(_p, 'stats', None)
+                    _g = int(getattr(_s, 'games_played', 0) or 0)
+                    if _g > 0:
+                        _tg += _g
+                        _tp += int(getattr(_s, 'goals', 0) or 0) + int(
+                            getattr(_s, 'assists', 0) or 0)
+            if _tg > 0:
+                league_avg_ppg = _tp / _tg
+        except Exception:
+            pass
+        # Jack Adams: most overachieving coach -- the same race the awards
+        # ceremony uses. Matched to a Staff object once, up front.
+        adams_staff = None
+        try:
+            import coach_records as _cr0
+            from awards_race import adams_race as _ar0
+            _race = _ar0(self.league.teams)
+            if _race:
+                adams_staff = _cr0.find_coach(
+                    self.league.teams, _race[0].get("coach"),
+                    _race[0].get("team"))
+        except Exception:
+            pass
+        season_start = f"{self.league.season_year}-09-01"
+        for team in self.league.teams:
+            st = self.league.standings.get(team.team_name, {})
+            w = st.get('W', st.get('Wins', 0))
+            l = st.get('L', st.get('Losses', 0))
+            otl = st.get('OTL', 0)
+            win_pct = w / max(1, w + l + otl)
+            is_champ = champion_name is not None and team.team_name == champion_name
+            # Playoff result for the record book + playoff-success reputation.
+            # 4 = Cup, 3 = lost Final, 2 = lost Division Finals, 1 = lost
+            # earlier, 0 = missed.
+            playoff_rounds_won = 0
+            playoff_result = "Missed playoffs"
+            try:
+                import coach_records as _crp
+                playoff_result = _crp.playoff_result_for_team(
+                    team, bracket, champ)
+                playoff_rounds_won = {
+                    "Won Stanley Cup": 4, "Lost Stanley Cup Final": 3,
+                    "Lost Division Finals": 2, "Lost Division Semifinals": 1,
+                }.get(playoff_result, 0)
+            except Exception:
+                pass
+            try:
+                import accolades as _acc
+                import coach_records as _crr
+                _syr = getattr(self.league, "season_year", 0)
+                _slabel = _crr.season_label(_syr)
+                # Trophy-case year labels banked this season: ceremony year
+                # ("2027") for the awards show, season label ("2026-27")
+                # for the Cup/Smythe. Both count as "this season".
+                _season_labels = {str(_syr + 1), _slabel}
+            except Exception:
+                _season_labels = set()
+            # Captaincy growth: the room's regime figure for mentorship
+            # (best letter-wearer's leadership). Computed once per team,
+            # before any leadership moves, so every learner sees the same
+            # number regardless of roster order.
+            _cg_mentor_lead = None
+            try:
+                for _cap in team.roster:
+                    if getattr(_cap, "captaincy", "") in ("C", "A"):
+                        _cl = float(getattr(_cap, "leadership", 0) or 0)
+                        _cg_mentor_lead = max(_cl, _cg_mentor_lead or 0)
+            except Exception:
+                pass
+            for p in team.roster:
+                incidents = sum(
+                    1 for e in getattr(p, 'controversy_history', []) or []
+                    if isinstance(e, dict) and e.get('date', '') >= season_start
+                )
+                rs.decay_controversy(p, incidents_this_season=incidents,
+                                     team=team,
+                                     coach=getattr(team, 'head_coach', None),
+                                     win_pct=win_pct)
+                if is_champ:
+                    rs.award_championship(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0)
+                            or 0))  # +8, ratchet-safe, season-idempotent
+                    # The captain who lifts the Cup banks a little extra
+                    # standing -- leading a champion is the signature
+                    # leadership credential.
+                    try:
+                        import captaincy_growth as _cg1
+                        _cg1.cup_captain_rep_bonus(
+                            p, is_champ=is_champ,
+                            season_year=int(
+                                getattr(self.league, "season_year", 0)
+                                or 0))
+                    except Exception:
+                        pass
+                    # Trophy case: bank the Cup on every champion-roster
+                    # player, labeled by season (e.g. "2026-27").
+                    # Idempotent -- re-runs never duplicate.
+                    try:
+                        import accolades as _acc
+                        _syr = getattr(self.league, "season_year", 0)
+                        if _acc.bank_accolade(
+                                p, "stanley_cup",
+                                f"{_syr}-{str(_syr + 1)[-2:]}"):
+                            # Legacy counter: career Cups. Idempotent via
+                            # bank_accolade's True-on-new-add return, so
+                            # immortality snapshots see the real total.
+                            p.stanley_cups = int(
+                                getattr(p, "stanley_cups", 0) or 0) + 1
+                    except Exception:
+                        pass
+                # Playoff success builds reputation for every playoff team,
+                # scaled by round. Recomputed from the trophy case (single
+                # source of truth) so the Conn Smythe stacks with
+                # regular-season awards instead of overwriting them.
+                # Ratchet-safe: reputation never decreases.
+                if playoff_rounds_won > 0:
+                    try:
+                        _awards = [
+                            e.get("award")
+                            for e in getattr(p, 'career_accolades', []) or []
+                            if isinstance(e, dict)
+                            and str(e.get("year")) in _season_labels]
+                        _ps = getattr(p, 'stats', None)
+                        rs.update_player_reputation(
+                            p,
+                            season_points=int(
+                                getattr(_ps, 'goals', 0) or 0) + int(
+                                getattr(_ps, 'assists', 0) or 0),
+                            games_played=int(
+                                getattr(_ps, 'games_played', 0) or 0),
+                            league_avg_ppg=league_avg_ppg,
+                            awards=_awards,
+                            playoff_rounds_won=playoff_rounds_won)
+                    except Exception:
+                        pass
+                # Captaincy forges leaders: tenure + team results + personal
+                # impact grow leadership (the Toews/Crosby arc). Additive --
+                # the development engine is never touched. Season-stamped
+                # inside the module, so re-runs are safe.
+                try:
+                    import captaincy_growth as _cg2
+                    _cg_res = _cg2.apply_captaincy_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        league_avg_ppg=league_avg_ppg)
+                    _cg_story = _cg_res.get("milestone_story")
+                    if _cg_story:
+                        # add_news lives on the GUI; the manager only holds
+                        # it via .app.
+                        _cg_add = getattr(getattr(self, "app", None),
+                                          "add_news", None)
+                        if callable(_cg_add):
+                            _cg_add(_cg_story)
+                    # The Yzerman effect: young letter-less players absorb
+                    # leadership from an elite, winning room.
+                    _cg2.apply_mentorship_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        best_letter_leadership=_cg_mentor_lead)
+                    # Legendary captain: the completed Toews/Crosby/Yzerman
+                    # arc. Stamped once (flags + team icon status); the
+                    # story fires exactly once.
+                    try:
+                        _cg_syr = int(
+                            getattr(self.league, "season_year", 0) or 0)
+                    except Exception:
+                        _cg_syr = 0
+                    if _cg2.stamp_legendary_captain(
+                            p, getattr(team, "team_name", "") or "",
+                            season_year=_cg_syr):
+                        _cg_add2 = getattr(getattr(self, "app", None),
+                                           "add_news", None)
+                        if callable(_cg_add2):
+                            _cg_nm = getattr(p, "full_name", None) \
+                                or "The captain"
+                            _cg_tn = getattr(team, "team_name", "") \
+                                or "the franchise"
+                            _cg_add2(
+                                f"\u00a9 {_cg_nm} has completed the "
+                                f"captain's arc: a LEGENDARY CAPTAIN, the "
+                                f"face of {_cg_tn}.")
+                except Exception:
+                    pass
+            for s in getattr(team, 'staff', []) or []:
+                is_adams = adams_staff is not None and s is adams_staff
+                # +12 for a Cup on the 0-100 career scale; +8 for a Jack
+                # Adams; win% moves the rest.
+                rs.update_staff_reputation(s, team_win_pct=win_pct,
+                                           championships=1 if is_champ else 0,
+                                           jack_adams=is_adams)
+                # Year-by-year coaching record (head coaches AND assistants):
+                # the hiring/firing evidence on the staff card Record tab.
+                # Idempotent per (season, team).
+                try:
+                    import coach_records as _cr2
+                    import accolades as _acc2
+                    if _cr2.is_coaching_role(s):
+                        _syr2 = getattr(self.league, "season_year", 0)
+                        _slabel2 = _cr2.season_label(_syr2)
+                        _cr2.record_staff_season(
+                            s, _slabel2, team.team_name, w, l, otl,
+                            playoff_result, jack_adams=is_adams)
+                        if is_adams:
+                            _acc2.bank_accolade(s, "jack_adams", _slabel2)
+                        if is_champ:
+                            _acc2.bank_accolade(s, "stanley_cup", _slabel2)
+                except Exception:
+                    pass
+                # Another year with the club: the shelf-life clock ticks.
+                try:
+                    s.years_with_team = (getattr(s, 'years_with_team', 0) or 0) + 1
+                except Exception:
+                    pass
+                # Coach volatility: losing humbles, a new sweater reforms.
+                rs.decay_controversy(s, team=team, win_pct=win_pct)
+                # Coach influence: recent success builds it, losing burns it.
+                rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
+                                           roster=team.roster)
+            # Stash team results for the staff breakthrough roll: it runs
+            # inside league.end_of_season(), after the standings are wiped,
+            # so the season's shape has to be captured here. One-shot cache
+            # -- the rollover consumes and clears it.
+            try:
+                _src = getattr(self.league, "_staff_results_cache", None)
+                if not isinstance(_src, dict):
+                    _src = {}
+                    self.league._staff_results_cache = _src
+                _src[team.team_name] = {
+                    "w": w, "l": l, "otl": otl, "win_pct": win_pct,
+                    "playoff": playoff_result, "champ": bool(is_champ),
+                    "adams_id": getattr(adams_staff, "id", None),
+                }
+            except Exception:
+                pass
+            # Roster churn snapshot for next season's situations factor
+            # (gelling vs battle-tested core). Once per team per offseason.
+            try:
+                rs.snapshot_roster_churn(team)
+            except Exception:
+                pass
+
+    def _validate_season_continuity(self) -> bool:
+        """Guard: season year must follow recorded history without gaps.
+
+        Season transition (Muck 2026-10-02): the season year derives from
+        actual game state, not date arithmetic. This validates that
+        league.season_year is continuous with the seasons recorded in
+        league_history -- no skipped seasons, no double-counting.
+
+        Called from _start_offseason before the rollover. Returns True
+        when continuous (or when there's no history yet to check against);
+        returns False and logs loudly when a break is detected. Never
+        raises, never mutates -- detection only, so a false positive can
+        never corrupt numbering.
+        """
+        try:
+            league = getattr(self, "league", None)
+            if league is None:
+                return True
+            season_year = int(getattr(league, "season_year", 0) or 0)
+            hist = getattr(self, "league_history", None)
+            seasons = list(getattr(hist, "seasons", None) or [])
+            if not seasons or not season_year:
+                return True  # new career or no history -- nothing to check
+            years = sorted(int(s.get("year", 0) or 0) for s in seasons
+                           if isinstance(s, dict))
+            years = [y for y in years if y]
+            if not years:
+                return True
+            last_recorded = years[-1]
+            # Normal mid-season state: the current season (season_year) is
+            # in progress and not yet recorded, so it should be exactly
+            # one past the last recorded season.
+            # At _start_offseason post-record: _record_season_to_history
+            # runs before the rollover, so season_year may EQUAL the
+            # last recorded year (the just-finished season).
+            # Either way, a gap of 2+ means a season was skipped.
+            ok_continuous = (season_year == last_recorded or       # just recorded
+                            season_year == last_recorded + 1)   # mid-season
+            if not ok_continuous:
+                try:
+                    self.add_news(
+                        f"⚠️ Season continuity break: league season_year is "
+                        f"{season_year} but league history's last recorded "
+                        f"season is {last_recorded}. A season may have been "
+                        f"skipped by date manipulation -- numbering will "
+                        f"not auto-correct; check the save.")
+                except Exception:
+                    pass
+                return False
+            # Internal gap check: recorded history itself must be gapless.
+            for prev, cur in zip(years, years[1:]):
+                if cur != prev + 1:
+                    try:
+                        self.add_news(
+                            f"⚠️ Season history gap: recorded seasons jump "
+                            f"from {prev} to {cur}.")
+                    except Exception:
+                        pass
+                    return False
+            return True
+        except Exception:
+            return True  # never block the transition on a guard failure
+
+    def _weekly_coaching_mults(self, team, player, attrs, _cache,
+                               assignment="nhl"):
+        """Per-attribute coaching multipliers for the weekly all-team
+        development tick. Same practice_breakdown math as practice
+        sessions (drill knowledge, archetype affinity, attitude, fit,
+        system) -- one mechanic for all 32 clubs, user and AI alike.
+        D8: `assignment` ("nhl" | "ahl" | "overseas") splits the quality
+        behind the bench by roster. Additive: returns 1.0 for anything it
+        can't price. Never raises.
+        """
+        try:
+            import coach_practice as _cp
+        except Exception:
+            return {}
+        out = {}
+        for attr in attrs:
+            drill = _cp.attribute_drill(attr)
+            if drill is None or not hasattr(player, attr):
+                continue
+            # Keyed by team AND assignment too: the same player object must
+            # never borrow another club's staff pricing or another
+            # roster's bench quality.
+            key = (id(team), id(player), drill, assignment)
+            mult = _cache.get(key)
+            if mult is None:
+                try:
+                    mult = float(_cp.practice_breakdown(
+                        team, player, drill,
+                        assignment=assignment).get("total_mult", 1.0))
+                except Exception:
+                    mult = 1.0
+                _cache[key] = mult
+            out[attr] = mult
+        return out
+
+    def generate_trade_package(self, team, player_wanted, target_value):
+        """Generate a trade package from the specified team targeting the given value."""
+        # Sort team's roster by value (descending)
+        team_players = sorted(team.roster, key=self.calculate_player_value, reverse=True)
+        
+        # Don't offer top 3 players unless getting a superstar
+        if player_wanted.overall_rating() < 85:
+            team_players = team_players[3:]
+            
+        # Don't offer more than 3 players
+        max_players_to_offer = 3
+        
+        # Start with empty package
+        package = []
+        package_value = 0
+        
+        # Try to find a single player close to the target value
+        for potential_player in team_players:
+            player_value = self.calculate_player_value(potential_player)
+            
+            # Ideal single-player trade (within 10% of target)
+            if 0.9 * target_value <= player_value <= 1.1 * target_value:
+                return [potential_player]
+        
+        # If no ideal single player, build a package
+        for potential_player in team_players:
+            if len(package) >= max_players_to_offer:
+                break
+                
+            player_value = self.calculate_player_value(potential_player)
+            
+            # Don't add players worth too little
+            if player_value < target_value * 0.1:
+                continue
+                
+            # Add player to package
+            package.append(potential_player)
+            package_value += player_value
+            
+            # If we've reached or exceeded target value, we're done
+            if package_value >= target_value * 0.9:
+                break
+        
+        # Only return package if it's worth at least 85% of target value
+        if package and package_value >= target_value * 0.85:
+            return package
+            
+        return None
+    
+    def present_trade_offers(self, offers):
+        """Route AI trade offers to the inbox as negotiable proposals.
+
+        FM24/EHM-style: no blocking modal. Each offer becomes a live
+        negotiation the user can accept, decline, or counter on their own
+        time -- closing everything in between answers nothing.
+        """
+        if not offers:
+            return
+        import trade_negotiation as tn
+
+        # Group offers by player
+        offers_by_player = {}
+        for offer in offers:
+            player = offer['player_wanted']
+            if player not in offers_by_player:
+                offers_by_player[player] = []
+            offers_by_player[player].append(offer)
+
+        # Add to news log
+        self.news_log.append({
+            'date': self.current_date,
+            'story': f"Trade offers received for {len(offers_by_player)} player(s) on your trade block."
+        })
+
+        # One live negotiation per offer, delivered to the inbox
+        for player, player_offers in offers_by_player.items():
+            for offer in player_offers:
+                try:
+                    tn.incoming_offer(self, offer['team'],
+                                      offer['offer'], player_wanted=player)
+                except Exception as e:
+                    print(f"incoming trade offer failed (non-fatal): {e}")
+    
+    def _log_slate_fallback(self, home_team, away_team, game_date, err,
+                            tier, detail=""):
+        """LOUD logging for every slate-guarantee fallback. Never silent.
+
+        Prints a 🛟 SLATE-GUARANTEE line with game, error and fallback
+        tier (plus the BUG-001 full traceback), bumps the
+        self._slate_fallbacks counter, and appends to the news log when
+        one exists.
+        """
+        try:
+            self._slate_fallbacks = \
+                int(getattr(self, '_slate_fallbacks', 0) or 0) + 1
+        except Exception:
+            self._slate_fallbacks = 1
+        _hn = getattr(home_team, 'team_name', '?')
+        _an = getattr(away_team, 'team_name', '?')
+        _line = (f"🛟 SLATE-GUARANTEE [{tier}] {game_date} {_an} @ {_hn}: "
+                 f"{err}"
+                 + (f" -- {detail}" if detail else "")
+                 + f" (fallback #{self._slate_fallbacks})")
+        print(_line)
+        try:
+            import traceback as _tb
+            _tb.print_exc()
+        except Exception:
+            pass
+        try:
+            _nl = getattr(self, 'news_log', None)
+            if isinstance(_nl, list):
+                _d = getattr(self, 'current_date', None) or game_date
+                _nl.append({
+                    'date': _d,
+                    'story': (f"🛟 Slate guarantee ({tier}): {_an} @ {_hn} "
+                              f"simmed via fallback sim ({err}).")})
+        except Exception:
+            pass
+
+    def career(self):
+        """Lazy FM-style career state, stored on the GameManager so it survives."""
+        gm = self.game_manager
+        career = getattr(gm, "career", None)
+        if career is None:
+            career = manager_career.CareerState()
+            gm.career = career
+        # Apply the "GM can be sacked" setting (Muck's flag)
+        try:
+            can_sack = self.get_settings().get('career', {}).get('gm_can_be_sacked', True)
+            career.board.can_be_sacked = bool(can_sack)
+        except Exception:
+            pass
+        return career
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
+
+    def prompts_enabled(self, *args, **kwargs):
+        """Generic shim: no-op (auto-generated, method not found in main.py)."""
+        self._ui_notify('prompts_enabled', *args, **kwargs)
 
 
 

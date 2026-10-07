@@ -556,7 +556,10 @@ class StandingsScreen(BaseScreen):
                                             self._render_division()))
         inner = pillbox.layout()
         while inner.count():
-            lay.addWidget(inner.takeAt(0).widget())
+            _item = inner.takeAt(0)
+            _w = _item.widget() if _item else None
+            if _w:
+                lay.addWidget(_w)
         pillbox.deleteLater()
 
     def _render_division(self):

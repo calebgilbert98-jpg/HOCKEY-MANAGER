@@ -228,6 +228,46 @@ class DatabaseManager:
                         int(player.contract.salary * scale // 25000 * 25000))
 
         print("NHL teams populated successfully")
+        # Post-pass: guarantee 2 NHL goalies per team. The roster-size trim
+        # above can demote a team's 2nd goalie to the AHL, which triggers
+        # a day-one dress_minimum blocker. Recall from AHL if needed.
+        # BUG FIX (2026-10-07): if the team has ZERO goalies in both NHL
+        # and AHL (random generation can do this), GENERATE new ones --
+        # the old code just gave up (break) leaving the team goalie-less.
+        _gen = PlayerGenerator()
+        for team in teams:
+            def _is_g(p):
+                return str(getattr(getattr(p, 'primary_position', None), 'value', '')) == 'G'
+            nhl_goalies = [p for p in (team.roster or []) if _is_g(p)]
+            while len(nhl_goalies) < 2:
+                ahl_goalies = [p for p in (getattr(team, 'ahl_roster', []) or []) if _is_g(p)]
+                if ahl_goalies:
+                    # Recall the best AHL goalie
+                    best = max(ahl_goalies, key=lambda p: p.overall_rating())
+                    team.ahl_roster.remove(best)
+                    team.roster.append(best)
+                    nhl_goalies.append(best)
+                else:
+                    # No goalies anywhere: generate a new one
+                    try:
+                        new_g = _gen.create_player(
+                            skill_tier="NHL_DEPTH",
+                            age_category="PRIME",
+                            position=PlayerPosition.GOALIE,
+                            team_name=getattr(team, 'team_name', ''))
+                        team.roster.append(new_g)
+                        nhl_goalies.append(new_g)
+                    except Exception:
+                        break  # generator failed; avoid infinite loop
+                # Stay at 23: demote lowest-rated skater to make room
+                if len(team.roster) > 23:
+                    skaters = [p for p in team.roster if not _is_g(p)]
+                    if skaters:
+                        worst = min(skaters, key=lambda p: p.overall_rating())
+                        team.roster.remove(worst)
+                        if not hasattr(team, 'ahl_roster') or team.ahl_roster is None:
+                            team.ahl_roster = []
+                        team.ahl_roster.append(worst)
         self._print_roster_summary(teams)
     
     def populate_ahl_teams(self, ahl_teams: List[Team]) -> None:
