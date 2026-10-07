@@ -2274,6 +2274,1809 @@ NHL League Office""",
                     delattr(person, _attr)
             except Exception:
                 pass
+
+    def _execute_waiver_claim(self, player, claiming_team):
+        """Complete a waiver claim transfer (shared by AI and user wins).
+
+        Removes the player from his original club, adds him to the
+        claiming club, fires the rivalry/dressing-room hooks, resets
+        waiver state, and drops the claimant to the bottom of the waiver
+        priority order (waiver_logic.note_waiver_claim).
+        """
+        original_team = next(
+            (t for t in self.league.teams
+             if t.team_name == player.team_name), None)
+        if original_team:
+            if player in original_team.roster:
+                original_team.remove_player(player)
+            elif hasattr(original_team, 'ahl_roster') and \
+                    player in original_team.ahl_roster:
+                original_team.ahl_roster.remove(player)
+
+        # Add to claiming team
+        claiming_team.add_player(player)
+        player.team_name = claiming_team.team_name
+
+        # Pending claims are spent when they resolve -- fulfilled or
+        # beaten by a higher-priority club. The legacy host flag keeps its
+        # behavior; client clubs track in player.mp_claim_teams.
+        try:
+            _user_pending = bool(getattr(player, "user_claim_pending", False))
+        except Exception:
+            _user_pending = False
+        try:
+            player.user_claim_pending = False
+        except Exception:
+            pass
+        try:
+            import game_classes as _gc
+            _user_won = bool(_gc.is_human_managed(claiming_team))
+        except Exception:
+            _user_won = bool(getattr(claiming_team, 'is_user_team', False))
+        if _user_pending and not _user_won:
+            try:
+                import waiver_logic as _wl
+                _rank = _wl.waiver_priority_rank(
+                    self.league, claiming_team, self.current_date)
+                self.add_news(
+                    f"Your waiver claim for {player.full_name} was beaten "
+                    f"by {claiming_team.team_name} "
+                    f"(waiver priority #{_rank}).")
+            except Exception:
+                pass
+        try:
+            _mp_pending = list(getattr(player, "mp_claim_teams", None) or [])
+        except Exception:
+            _mp_pending = []
+        for _loser in _mp_pending:
+            if _loser == getattr(claiming_team, "team_name", ""):
+                continue
+            try:
+                self.add_news(
+                    f"{_loser}'s waiver claim for {player.full_name} was "
+                    f"beaten by {claiming_team.team_name} (priority order).")
+            except Exception:
+                pass
+        try:
+            player.mp_claim_teams = []
+        except Exception:
+            pass
+
+        # Successful claim: the club drops to the bottom of the waiver
+        # priority order (NHL rule -- priority spent).
+        try:
+            import waiver_logic as _wl
+            _wl.note_waiver_claim(self.league, claiming_team)
+        except Exception:
+            pass
+
+        # Rivalry lifecycle: a waiver claim is a transfer -- his
+        # personal beefs follow him; ambient noise stays behind.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None),
+                            "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original_team,
+                     to_team=claiming_team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                claiming_team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+
+        # Reset waiver status
+        player.on_waivers = False
+        player.waiver_days = 0
+
+        # Add to news log
+        self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
+
+    def _mp_propose_trade(self, params, team, manager):
+        """Route a client's trade proposal: validate + resolve assets
+        against canonical state, clear movement-clause waivers (the
+        single-player askyesnocancel flow, over the wire), then send the
+        offer to an AI club, the host's club, or another human's club."""
+        import trade_engine as te
+        partner = self._mp_find_team(params.get("partner_team_id", ""))
+        if partner is None:
+            return False, "Unknown partner team."
+        if partner is team:
+            return False, "You can't trade with yourself."
+        # Event boundary: the trade freeze / deadline applies to MP
+        # proposals exactly like the SP trade UI (te.trades_allowed).
+        try:
+            if not te.trades_allowed(str(getattr(self, "current_date", "")),
+                                     getattr(self, "league", None)):
+                return False, ("Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
+        offer = params.get("offer") or {}
+        if not isinstance(offer, dict):
+            return False, "Malformed offer."
+
+        def _ids(key):
+            v = offer.get(key) or []
+            return [str(x) for x in v] if isinstance(v, list) else []
+
+        out_pids, in_pids = _ids("players_out"), _ids("players_in")
+        out_kids, in_kids = _ids("picks_out"), _ids("picks_in")
+        if not out_pids and not out_kids:
+            return False, "You're not offering anything."
+        if not in_pids and not in_kids:
+            return False, "You're not asking for anything."
+        out_players = [self._mp_team_player(team, pid) for pid in out_pids]
+        in_players = [self._mp_team_player(partner, pid) for pid in in_pids]
+        out_picks = [self._mp_team_pick(team, kid) for kid in out_kids]
+        in_picks = [self._mp_team_pick(partner, kid) for kid in in_kids]
+        if any(p is None for p in out_players):
+            return False, "One of your offered players isn't on your roster."
+        if any(p is None for p in in_players):
+            return False, \
+                "One of the requested players isn't on their roster."
+        if any(k is None for k in out_picks):
+            return False, "One of your offered picks isn't yours."
+        if any(k is None for k in in_picks):
+            return False, "One of the requested picks isn't theirs."
+        retention = {}
+        for pid, pct in (offer.get("retention") or {}).items():
+            try:
+                pct = float(pct)
+            except (TypeError, ValueError):
+                return False, "Invalid retention term."
+            if not 0 < pct <= 50:
+                return False, "Retention must be 1-50%."
+            if str(pid) not in out_pids:
+                return False, "Retention on a player you're not moving."
+            retention[str(pid)] = pct
+        protection = {}
+        for kid, prot in (offer.get("pick_protection") or {}).items():
+            if prot not in ("", "top-3", "top-10", "lottery"):
+                return False, f"Unknown pick protection: {prot}."
+            if prot and str(kid) not in out_kids:
+                return False, "Protection on a pick you're not moving."
+            if prot:
+                protection[str(kid)] = prot
+
+        proposal = {
+            "proposer_team_id": team.team_name,
+            "partner_team_id": partner.team_name,
+            "manager": manager,
+            "players_out": out_pids,
+            "players_in": in_pids,
+            "picks_out": out_kids,
+            "picks_in": in_kids,
+            "retention": retention,
+            "pick_protection": protection,
+        }
+        # Movement-clause preflight on the proposer's own players, exactly
+        # like the trade screen's askyesnocancel: ask him / remove him /
+        # cancel. Over the wire this becomes NTC_WAIVER_REQUEST prompts.
+        league = getattr(self, "league", None)
+        try:
+            vetoes = te.trade_vetoes(team, partner, out_players, league)
+        except Exception:
+            vetoes = []
+        if vetoes:
+            return self._mp_begin_waiver_flow(proposal, team, partner,
+                                              vetoes, manager)
+        return self._mp_route_trade_offer(proposal)
+
+    def accept_contract_counter(self, message):
+        """Inbox action: accept the agent's counter-offer as-is."""
+        data = message.action_data or {}
+        # MP: route to host instead of mutating the snapshot.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _pid = str(getattr(self._find_inbox_player(data), "id", ""))
+            if _route(self, "extend_contract", {
+                    "player_id": _pid,
+                    "salary": data.get("asking_price", 0),
+                    "years": data.get("years", 1),
+            }):
+                message.action_done = True
+                return True
+        person = self._find_inbox_player(data)
+        if person is None:
+            message.action_done = True
+            return False
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+        extension = data.get("is_extension", False)
+        # The counter travels through the same gates as a fresh offer:
+        # an agent can't smuggle in a sub-minimum, over-max, over-term,
+        # over-cap, or draft-sidestepping deal via the inbox.
+        ok, err = self._validate_contract_terms(person, asking, years,
+                                                extension=bool(extension))
+        if not ok:
+            self._inbox_contract_result(
+                "rejected", person,
+                getattr(person, "full_name", "The player"),
+                asking, years, asking, extension,
+                clause_kind="none", clause_list_size=10,
+                reject_note=(
+                    f"The league office rejected {getattr(person, 'full_name', 'the player')}'s "
+                    f"counter-offer of ${int(asking):,} x {int(years)} year(s): {err}\n\n"
+                    f"Illegal terms can't be filed -- his camp will need to come back "
+                    f"with a compliant number."))
+            message.action_done = True
+            return False
+        # The clause the user offered travels with the counter: re-stage it
+        # so the signed deal carries the protection, then clear (single-use).
+        person.offered_clause_kind = data.get("clause_kind", "none") or "none"
+        try:
+            person.offered_clause_list_size = int(
+                data.get("clause_list_size", 10) or 10)
+        except Exception:
+            person.offered_clause_list_size = 10
+        # UFA consideration period (Muck 2026-10-02): accepting the
+        # counter opens a bidding window -- it doesn't sign instantly.
+        # Extensions keep the instant path.
+        if not extension:
+            try:
+                import ufa_consideration as _uc
+                _cons = _uc.submit_ufa_offer(
+                    self, getattr(self, "league", None), person,
+                    getattr(self, "user_team", None),
+                    asking, years, is_user=True,
+                    clause_kind=person.offered_clause_kind,
+                    clause_size=person.offered_clause_list_size)
+                if _cons is not None:
+                    _uc.notify_consideration_started(
+                        self, person, asking, years,
+                        int(_cons.get("days_left", 4) or 4))
+                    self._clear_offered_clause(person)
+                    message.action_done = True
+                    return True
+            except Exception:
+                pass
+        self._finalize_contract_signing(person, asking, years, asking,
+                                        extension)
+        self._inbox_contract_result("accepted", person,
+                                    getattr(person, "full_name", "The player"),
+                                    asking, years, asking, extension,
+                                    clause_kind=person.offered_clause_kind,
+                                    clause_list_size=
+                                    person.offered_clause_list_size)
+        self._clear_offered_clause(person)
+        message.action_done = True
+        return True
+
+    def add_news(self, story):
+        """Add a news item to the news log."""
+        self.news_log.append({'date': self.current_date, 'story': story})
+        # Mirror into the canonical list that save files and multiplayer
+        # snapshots carry, so every manager sees the same league lore.
+        stories = None
+        try:
+            gm = getattr(self, 'game_manager', None)
+            stories = getattr(gm, 'news_stories', None)
+            if stories is None and gm is not None:
+                gm.news_stories = stories = []
+            if stories is not None:
+                d = self.current_date
+                stories.append({'date': d.isoformat() if hasattr(d, 'isoformat') else d,
+                                'story': story})
+        except Exception:
+            pass
+        # Bound the feed: keep the most recent stories so the log (and the
+        # save file) can't grow unbounded across seasons.
+        try:
+            import headlines as _hl
+            cap = _hl.NEWS_LOG_CAP
+        except Exception:
+            cap = 500
+        if stories is not None and len(stories) > cap:
+            del stories[:len(stories) - cap]
+        if len(self.news_log) > cap:
+            del self.news_log[:len(self.news_log) - cap]
+        # Update news window if it's open
+        if 'news' in self.open_windows and self.open_windows['news'].winfo_exists():
+            self.open_windows['news'].populate_news()
+        # Update front page news panel
+        self.update_news_panel()
+
+    def apply_arbitration_walkaway_decision(self, message, walk_away):
+        """Inbox action: walk away from an arbitration award (48h window)."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "arbitration_walkaway", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "walk_away": bool(walk_away)}):
+                message.action_done = True
+                return True
+            return False
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        aav = int(data.get("award_aav", 0) or 0)
+        term = int(data.get("term_years", 1) or 1)
+        player_id = data.get("player_id")
+        if not walk_away:
+            # Accept: sign at the awarded terms.
+            person = self._find_inbox_player(data)
+            if person is not None:
+                c = getattr(person, "contract", None)
+                if c is not None:
+                    c.salary = aav
+                    c.years_remaining = term
+        res = _rfa.apply_walk_away(
+            self, self.league, self.user_team, player_id, bool(walk_away))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_buyout_decision(self, message, player_id, buyout):
+        """Inbox action: buy out (or keep) one flagged contract.
+
+        The message itself is the June 15-30 window authorization, so --
+        like the RFA actions -- this does NOT re-check the calendar gate
+        in transaction_windows (the user may resolve it after July 1).
+        """
+        # MP: route to host (buyout_player protocol action exists).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _data = getattr(message, "action_data", None) or {}
+            _person = self._find_inbox_player(_data)
+            if _route(self, "buyout_player", {
+                    "player_id": str(getattr(_person, "id", "")),
+            }):
+                message.action_done = True
+                return True
+        import buyout_window as _bw
+        data = message.action_data or {}
+        ok = False
+        if buyout:
+            person = self._find_inbox_player({"player_id": player_id})
+            team = getattr(self, "user_team", None)
+            if person is not None and team is not None \
+                    and person in (getattr(team, "roster", None) or []):
+                try:
+                    season_year = int(data.get("season_year") or
+                                     getattr(self.league, "season_year", 2026)
+                                     or 2026)
+                    total, annual, byears, _rows = _bw.execute_buyout(
+                        self.league, team, person,
+                        season_year=season_year)
+                    ok = True
+                    # D4: buying out a star is a board headline.
+                    try:
+                        import reputation_system as _rs4b
+                        _rs4b.note_star_departure(
+                            getattr(getattr(self, "career", None),
+                                    "board", None), person)
+                    except Exception:
+                        pass
+                    try:
+                        self.add_news(
+                            f"✂️ You bought out "
+                            f"{getattr(person, 'full_name', 'a player')} "
+                            f"(${int(total):,} over {int(byears)} years).")
+                    except Exception:
+                        pass
+                except Exception:
+                    ok = False
+            else:
+                ok = False
+        else:
+            ok = True  # "Keep" is always a valid decision
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(buyout)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
+
+    def apply_offer_sheet_match_decision(self, message, match):
+        """Inbox action: match an offer sheet or take the pick compensation."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_match", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "match": bool(match)}):
+                message.action_done = True
+                return True
+            return False
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_match(
+            self, self.league, data.get("player_id"), bool(match))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_offer_sheet_trade_alt_decision(self, message, accept):
+        """Inbox action: accept the sign-and-trade package or take the
+        pick compensation on a declined offer sheet."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_trade_alt", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "accept": bool(accept)}):
+                message.action_done = True
+                return True
+            return False
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_trade_alt(
+            self, self.league, data.get("player_id"), bool(accept))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_rfa_qualifying_decision(self, message, player_id, qualify):
+        """Inbox action: extend or decline a qualifying offer for one RFA."""
+        # MP: route to the host (authoritative); the host marks the
+        # canonical message done so the sync retires the buttons.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "rfa_qualify", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "player_id": str(player_id),
+                    "qualify": bool(qualify)}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(player_id)] = bool(qualify)
+                data["decided"] = decided
+                message.action_data = data
+                cards = data.get("cards", []) or []
+                if len(decided) >= len(cards):
+                    message.action_done = True
+                return True
+            return False
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_qualifying_decision(
+            self, self.league, self.user_team, player_id, bool(qualify))
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(qualify)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_staff_renewal_decision(self, message, staff_id, years):
+        """Inbox action: re-sign an expired staffer (years=1/2/3) or let
+        him walk to the free-agent pool (years=None).
+
+        The D5 tick held him employed pending this decision, so the club
+        is never caught short mid-decision; a walked head coach triggers
+        the in-house promote fallback, exactly like the automatic path.
+        """
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "staff_renew", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "staff_id": str(staff_id),
+                    "years": years}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(staff_id)] = years
+                data["decided"] = decided
+                message.action_data = data
+                offers = data.get("offers", []) or []
+                if len(decided) >= len(offers):
+                    message.action_done = True
+                return True
+            return False
+        import staff_renewals as _sr
+        data = message.action_data or {}
+        try:
+            ok, lines = _sr.apply_renewal_decision(
+                self.league, staff_id, years)
+        except Exception:
+            ok, lines = False, []
+        decided = data.get("decided", {}) or {}
+        decided[str(staff_id)] = years
+        data["decided"] = decided
+        message.action_data = data
+        offers = data.get("offers", []) or []
+        if len(decided) >= len(offers):
+            message.action_done = True
+        for _ln in lines or []:
+            try:
+                _emo = "✍️ " if years else "🚶 "
+                self.add_news(_emo + str(_ln))
+            except Exception:
+                pass
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
+
+    def calculate_player_value(self, player):
+        """Calculate a player's trade value based on attributes, age, contract, etc."""
+        # Base value based on overall rating
+        base_value = player.overall_rating() * 100000
+        
+        # Adjust for potential
+        potential_multiplier = {
+            'A': 1.5,
+            'B': 1.3,
+            'C': 1.1,
+            'D': 0.9,
+            'F': 0.7
+        }.get(player.potential_grade, 1.0)
+        
+        # Age adjustment - younger players are more valuable
+        age_factor = max(0.5, 1.2 - (player.age - 22) * 0.03)  # Peaks at age 22
+        
+        # Contract adjustment - lower salary and longer term is better
+        contract_factor = 1.0
+        if player.contract.years_remaining > 0:
+            # Value cheaper contracts higher
+            _lc = self.get_live_cap()
+            salary_cap_percentage = player.contract.salary / _lc if _lc else 0
+            if salary_cap_percentage < 0.05:  # Less than 5% of cap
+                contract_factor = 1.3
+            elif salary_cap_percentage < 0.1:  # Less than 10% of cap
+                contract_factor = 1.2
+            elif salary_cap_percentage > 0.15:  # More than 15% of cap
+                contract_factor = 0.8
+                
+            # Longer contracts for good players add value, for poor players reduce value
+            if player.overall_rating() >= 85 and player.contract.years_remaining >= 3:
+                contract_factor *= 1.2
+            elif player.overall_rating() < 75 and player.contract.years_remaining >= 3:
+                contract_factor *= 0.8
+        else:
+            # Unsigned players are worth less in trades
+            contract_factor = 0.7
+        
+        # Position adjustment - goalies and centers tend to be more valuable
+        position_factor = 1.0
+        if player.primary_position == PlayerPosition.GOALIE:
+            position_factor = 1.3
+        elif player.primary_position == PlayerPosition.CENTER:
+            position_factor = 1.15
+            
+        # Production adjustment - players who score more are more valuable
+        production_factor = 1.0
+        if player.stats.goals > 20 or player.stats.points > 50:
+            production_factor = 1.25
+            
+        # Calculate final value
+        final_value = int(base_value * potential_multiplier * age_factor * contract_factor * position_factor * production_factor)
+        
+        return final_value
+
+    def get_continue_state(self):
+        """Football Manager-style continue state.
+
+        Returns (label, blockers):
+          - ("Continue", [blockers]) when pressing tasks must be completed
+            before the day can advance.
+          - ("Next Day", []) when the day can advance freely.
+
+        Each blocker is a dict with 'id', 'title', 'detail' and an optional
+        'action' tuple (button label, callable) that takes the user to the
+        blocking task. Only REAL systems in this codebase are checked --
+        nothing is invented.
+        """
+        # Timing for web UI performance debugging (2026-10-06)
+        import time as _time
+        _t_start = _time.time()
+        def _tlog(_label):
+            try:
+                print(f"[blocker-timing] {_label}: {_time.time() - _t_start:.2f}s")
+            except Exception:
+                pass
+        blockers = []
+        gm = getattr(self, 'game_manager', None)
+        _tlog('start')
+        # The one hard day-advancement blocker in the codebase: an active
+        # fantasy draft must be finished before the calendar can move.
+        if gm is not None and getattr(gm, 'pending_fantasy_draft', False):
+            blockers.append({
+                'id': 'fantasy_draft',
+                'title': 'Fantasy draft in progress',
+                'detail': ('You must complete the fantasy draft before '
+                           'advancing the day.'),
+                'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
+            })
+        _tlog('fantasy_draft_done')
+        # DRAFT AGENCY (Muck 2026-10-02): a parked entry draft with unmade
+        # user picks blocks the day -- the rebuild's keystone moment never
+        # auto-resolves. The action opens the war room directly.
+        try:
+            _lg = getattr(self, 'league', None)
+            _sess = getattr(_lg, 'entry_draft_session', None) if _lg else None
+            if _sess is not None:
+                try:
+                    from draft_night import EntryDraftSession as _EDS
+                    _is_sess = isinstance(_sess, _EDS)
+                except Exception:
+                    _is_sess = False
+                if _is_sess and not _sess.is_complete():
+                    try:
+                        _ut = getattr(self, 'user_team', None)
+                        _uname = getattr(_ut, 'team_name', '') if _ut else ''
+                    except Exception:
+                        _uname = ''
+                    _upicks = []
+                    if _uname:
+                        try:
+                            _made = {int(p.get('overall', -1))
+                                     for p in (_sess.picks or [])}
+                        except Exception:
+                            _made = set()
+                        for _slot in (_sess.slots or []):
+                            try:
+                                if (str(_slot.get('owner', '')) == _uname
+                                        and int(_slot.get('overall', -1))
+                                        not in _made):
+                                    _upicks.append(int(_slot.get('overall')))
+                            except Exception:
+                                continue
+                    if _upicks:
+                        _upicks.sort()
+                        blockers.append({
+                            'id': 'entry_draft',
+                            'title': 'Entry draft awaiting your picks',
+                            'detail': (
+                                f"You hold {len(_upicks)} pick"
+                                f"{'s' if len(_upicks) != 1 else ''} in the "
+                                f"{getattr(_sess, 'year', '')} NHL Entry Draft "
+                                f"(first: #{_upicks[0]} overall). Your picks "
+                                f"are never auto-drafted -- make them in the "
+                                f"war room or Sim Pick via your head scout."),
+                            'action': ('Open Draft War Room',
+                                       self.open_draft_window),
+                        })
+        except Exception:
+            pass
+        _tlog('entry_draft_done')
+        # Salary cap compliance: an over-cap roster must shed salary before
+        # the day can advance (real NHL rule -- rosters must be cap-compliant).
+        try:
+            cap_blocker = self._cap_compliance_blocker()
+            if cap_blocker:
+                blockers.append(cap_blocker)
+        except Exception:
+            pass
+        _tlog('salary_cap_done')
+        # D46 (Wave B): the salary floor is a hard league rule -- the day
+        # can't advance while the club sits under it.
+        try:
+            floor_blocker = self._floor_compliance_blocker()
+            if floor_blocker:
+                blockers.append(floor_blocker)
+        except Exception:
+            pass
+        _tlog('salary_floor_done')
+        # R1 (roster limits, true NHL): the 23-man active max and the
+        # dressed-lineup minimum (18+2) are hard day gates for the user --
+        # the AI side is kept compliant by ai_roster_compliance. The 50 SPC
+        # total is advisory only (Chris's call 2026-10-02): only cap +
+        # active roster block games. Guarded
+        # import so a roster_limits bug can never break day advancement.
+        try:
+            import roster_limits as _rl
+            blockers.extend(_rl.roster_limit_blockers(self))
+        except Exception:
+            pass
+        # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --
+        # chosen by the user, never auto-repaired -- before the day can
+        # advance. The action opens the mandatory picker directly.
+        # Fantasy-draft deferral: after the draft, rosters are letter-less
+        # by design until the first preseason game day arms the picker, so
+        # the blocker stays suppressed for that window.
+        try:
+            if gm is not None and not gm._captaincy_blocker_suppressed():
+                _ut = getattr(gm, 'user_team', None)
+                if _ut is not None and (
+                        getattr(gm, '_captaincy_choice_pending', False)
+                        or gm._captaincy_needs_choice(_ut)):
+                    if not gm._captaincy_mandatory_window_open(_ut):
+                        # R1(a): season already underway -- the mandatory
+                        # picker must never fire mid-season, so it can
+                        # never block day advancement either. Repair
+                        # quietly (idempotent) instead of appending a
+                        # blocker.
+                        try:
+                            gm._ensure_captaincy(_ut)
+                        except Exception:
+                            pass
+                        gm._captaincy_choice_pending = False
+                    else:
+                        def _auto_captains(_t=_ut, _app=self):
+                            """Auto-resolve: pick C + 2 As by leadership/tenure."""
+                            try:
+                                from auto_resolve import auto_choose_captains
+                                result, err = auto_choose_captains(_t)
+                                if err:
+                                    _app.add_news(
+                                        f"Auto-captaincy failed: {err}")
+                                    return
+                                cap, alts = result
+                                # Apply via player.captaincy ('C'/'A'/None),
+                                # then clear any stale letters first.
+                                try:
+                                    for _p in (getattr(_t, 'roster', None)
+                                               or []):
+                                        if getattr(_p, 'captaincy', '') in (
+                                                'C', 'A'):
+                                            _p.captaincy = ''
+                                except Exception:
+                                    pass
+                                cap.captaincy = 'C'
+                                for _a in alts:
+                                    _a.captaincy = 'A'
+                                try:
+                                    gm._captaincy_choice_pending = False
+                                except Exception:
+                                    pass
+                                _names = ", ".join(
+                                    getattr(p, 'full_name', '?')
+                                    for p in alts)
+                                _app.add_news(
+                                    f"Auto-named captains: C "
+                                    f"{getattr(cap, 'full_name', '?')}, As "
+                                    f"{_names}.")
+                            except Exception as e:
+                                try:
+                                    _app.add_news(
+                                        f"Auto-captaincy failed: {e}")
+                                except Exception:
+                                    pass
+                        blockers.append({
+                            'id': 'captaincy_choice',
+                            'title': 'Name your captains',
+                            'detail': ('NHL Rule 6.1: your club needs exactly one '
+                                       'captain (C) and two alternates (A) before '
+                                       'the season can continue.'),
+                            'action': ('Choose Captains',
+                                       lambda: gm._require_captaincy_choice(_ut)),
+                            'auto_action': ('Auto-pick Captains', _auto_captains),
+                        })
+        except Exception:
+            pass
+        # Pre-season coach expectations meeting (Eastside-style, non-modal):
+        # the user can navigate anywhere; only day-advance is gated until
+        # the meeting is held. The blocker dict is built by
+        # coach_season_meeting.season_meeting_blocker (None when nothing is
+        # pending); _show_continue_blockers presents it automatically.
+        try:
+            from coach_season_meeting import season_meeting_blocker
+            _sm_blocker = season_meeting_blocker(self)
+            if _sm_blocker:
+                blockers.append(_sm_blocker)
+        except Exception:
+            pass
+        if blockers:
+            _tlog('done_with_blockers')
+            return ("Continue", blockers)
+        # SLATE GUARANTEE, Part 2 (2026-10-02): a short season slate is a
+        # hard stop -- the season cannot advance into awards/playoffs with
+        # missing games. Armed by _handle_slate_shortfall (GUI mode); no
+        # user action can clear it -- the detail names the short clubs and
+        # says to report it -- so there is deliberately no 'action' jump.
+        # Dismissing the card never clears it: it persists until the data
+        # is repaired.
+        try:
+            _sis = getattr(self, '_season_integrity_shortfall', None)
+            if _sis:
+                if isinstance(_sis, list):
+                    _sis_det = "; ".join(
+                        f"{_n} {_gp}/{_t} (short {_t - _gp})"
+                        for _n, _gp, _t in _sis)
+                else:
+                    _sis_det = ("One or more clubs finished short of the "
+                                "scheduled slate.")
+                blockers.append({
+                    'id': 'season_integrity',
+                    'title': 'Season slate incomplete -- season halted',
+                    'detail': ("The regular season ended with clubs short "
+                               "of their scheduled games: "
+                               f"{_sis_det}. This is a data-integrity stop, "
+                               "not a task to complete -- report it so the "
+                               "missing games can be investigated. The "
+                               "season will not advance."),
+                })
+        except Exception:
+            pass
+        # Gating T2-Phase 2: the pending-items registry is the unified read
+        # path. BLOCKS_ADVANCE and PAUSES_DAY entries gate the day exactly
+        # like the hardcoded blockers above; RESUMABLE entries never block
+        # (they surface via resume chips). No Tier-2 dialog may register a
+        # BLOCKS_ADVANCE entry -- dialogs never block the day, their parent
+        # flows might.
+        try:
+            from popup_system import (get_pending_items as _gpi,
+                                      BLOCKS_ADVANCE as _BA,
+                                      PAUSES_DAY as _PD)
+            for _it in _gpi(self, kinds=(_BA, _PD)):
+                _iid = _it.get("id")
+                if any(b.get("id") == _iid for b in blockers):
+                    continue
+                _screen = _it.get("screen_id")
+
+                def _jump(_s=_screen):
+                    try:
+                        self.show_screen(_s)
+                    except Exception:
+                        pass
+                    # The question is waiting where it was left: re-present
+                    # any unanswered card parked for that screen.
+                    try:
+                        from popup_system import represent_screen_questions
+                        represent_screen_questions(self, _s, parent=self)
+                    except Exception:
+                        pass
+
+                blockers.append({
+                    "id": _iid,
+                    "title": _it.get("title", "Pending item"),
+                    "detail": _it.get("detail", ""),
+                    "action": ("Go to it", _jump),
+                })
+        except Exception:
+            pass
+        if blockers:
+            return ("Continue", blockers)
+        # Trade deadline day: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET). Each press advances the clock one
+        # increment -- instant AI answers, league deals, countdown.
+        try:
+            if self.is_trade_deadline_day():
+                from trade_deadline_manager import get_deadline_manager
+                _mgr = get_deadline_manager(self.game_manager)
+                if not _mgr.clock_active(self.current_date):
+                    return ("Deadline Day", [])
+                if not _mgr._clock_store().get('expired'):
+                    return (f"+30m ({_mgr.clock_display()})", [])
+        except Exception:
+            pass
+        # Game-day label: pressing it opens the game-day inbox bundle
+        # (presser + team talk + Watch/Quick choice) instead of simming.
+        try:
+            if (self._career_prompts_allowed()
+                    and not getattr(self, '_game_day_resolution', None)
+                    and self._is_user_game_day()):
+                return ("Game Day", [])
+        except Exception:
+            pass
+        return ("Next Day", [])
+
+    def handle_contract_offer(self, person, extension=False, notify="popup"):
+        """UI wrapper: delegate to GameManager, handle notifications."""
+        gm = getattr(self, 'game_manager', None)
+        if gm is not None and hasattr(gm, 'handle_contract_offer'):
+            # Temporarily bind our _ui_notify to the game manager
+            orig = getattr(gm, '_ui_notify', None)
+            gm._ui_notify = self._ui_notify.__get__(gm, type(gm))
+            try:
+                return gm.handle_contract_offer(person, extension=extension, notify=notify)
+            finally:
+                if orig is not None:
+                    gm._ui_notify = orig
+        return False
+
+    def handle_elc_offer(self, player, salary, signing_bonus=0,
+                         performance_bonus=0, team=None):
+        """Negotiated ELC signing with an unsigned rights-held prospect.
+
+        Validates the ELC band (base inside [floor, ceiling], signing
+        bonus <= 10% of base, performance bonus <= $1M/yr), runs the
+        prospect handshake (accept / counter / reject), and on acceptance
+        finalizes through the league's canonical ELC path: contract with
+        bonuses, rights consumed, assigned to junior/AHL by eligibility.
+
+        Returns {verdict, counter, note}. "counter" carries the agent's
+        number for one-click acceptance in the view.
+        """
+        import salary_cap_system as _scs
+        league = getattr(self, 'league', None)
+        # MP: the host passes the acting manager's team; single-player and
+        # the host's own UI leave it None and use user_team as before.
+        if team is None:
+            team = getattr(self, 'user_team', None)
+        try:
+            season = getattr(league, 'season_year', None)
+        except Exception:
+            season = None
+        # Guard: only the user's unsigned rights-held prospect.
+        try:
+            _own = (getattr(player, 'contract', None) is None
+                    and (getattr(player, 'rights_team', '') or '')
+                    == getattr(team, 'team_name', ''))
+        except Exception:
+            _own = False
+        if not _own or league is None or team is None:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "He isn't your unsigned prospect."}
+        try:
+            age = int(getattr(player, 'age', 20) or 20)
+        except Exception:
+            age = 20
+        # CBA 9.2: ELC term and eligibility use the player's age on
+        # September 15 of the signing year, not his current age.
+        try:
+            _s15 = _age_on_sept15(getattr(player, 'birth_date', ''), season)
+        except Exception:
+            _s15 = None
+        _elc_age = _s15 if _s15 is not None else age
+        floor, ceil, years = _scs.elc_band(_elc_age, season)
+        if years <= 0:
+            return {"verdict": "invalid", "counter": None,
+                    "note": ("He isn't ELC-eligible: at 25+, the Entry "
+                             "Level System no longer applies (new CBA -- "
+                             "the old European 25-27 exception is gone). "
+                             "Sign him to a standard contract instead.")}
+        try:
+            salary = int(salary)
+            signing_bonus = int(signing_bonus or 0)
+            performance_bonus = int(performance_bonus or 0)
+        except Exception:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "Bonuses must be numbers."}
+        max_signing = int(round(salary * _scs.ELC_SIGNING_BONUS_PCT))
+        if not (floor <= salary <= ceil):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"ELC base must sit inside the band "
+                             f"${floor:,} - ${ceil:,}/yr.")}
+        if not (0 <= signing_bonus <= max_signing):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Signing bonus is capped at 10% of base "
+                             f"(${max_signing:,}/yr).")}
+        if not (0 <= performance_bonus <= _scs.ELC_PERF_BONUS_MAX):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Performance bonus is capped at "
+                             f"${_scs.ELC_PERF_BONUS_MAX:,}/yr.")}
+        # 9.3(a): base salary + signing bonus (+ games-played bonuses,
+        # not modeled) may not exceed the max annual compensation.
+        # Schedule-A performance bonuses are capped separately.
+        if salary + signing_bonus > _scs.elc_max_annual_comp(season):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Base + signing bonus may not exceed the ELC "
+                             f"max of "
+                             f"${_scs.elc_max_annual_comp(season):,}/yr.")}
+        ask = _scs.elc_prospect_ask(player, season)
+        res = _scs.elc_handshake(ask, salary, signing_bonus,
+                                 performance_bonus)
+        if res["verdict"] != "accepted":
+            return res
+        try:
+            ok = bool(league.finalize_elc_signing(
+                team, player, salary, years, signing_bonus,
+                performance_bonus))
+        except Exception:
+            ok = False
+        if not ok:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "The signing couldn't be completed."}
+        try:
+            self.add_news(
+                f"{player.full_name} signs an entry-level contract with "
+                f"{getattr(team, 'team_name', 'the club')} "
+                f"(${salary:,}/yr x {years} yrs, ${signing_bonus:,} signing "
+                f"bonus, ${performance_bonus:,}/yr in performance bonuses).")
+        except Exception:
+            pass
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return {"verdict": "accepted", "counter": None,
+                "note": (f"Signed: ${salary:,}/yr x {years} yrs "
+                         f"(+${signing_bonus:,} SB, "
+                         f"+${performance_bonus:,}/yr perf). He'll report to "
+                         f"{getattr(player, 'playing_where', 'the minors')}.")}
+
+    def open_fantasy_draft_window(self):
+        """Open the Fantasy Draft window."""
+        try:
+            from fantasy_draft import FantasyDraftView
+            
+            # Check if fantasy draft is available or needed
+            if not hasattr(self.game_manager, 'pending_fantasy_draft') or not self.game_manager.pending_fantasy_draft:
+                messagebox.showinfo("Fantasy Draft", 
+                                  "Fantasy draft is only available when starting a new game with the fantasy draft option enabled.")
+                return
+                
+            self.show_screen("fantasy_draft", "Fantasy Draft", FantasyDraftView,
+                             self.game_manager)
+        except Exception as e:
+            print(f"Error opening fantasy draft window: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Could not open fantasy draft window: {e}")
+
+    def process_trade_block_offers(self):
+        """Process trade offers for players on the trade block."""
+        if not self.trade_block:
+            return  # No players on trade block
+            
+        # Trade offer tracking
+        offers_received = []
+        
+        # For each player on the trade block
+        for player in self.trade_block:
+            # Calculate player's base value
+            base_value = self.calculate_player_value(player)
+            
+            # Apply discount for being on trade block (teams know you want to move them)
+            trade_block_discount = 0.85  # 15% discount
+            discounted_value = int(base_value * trade_block_discount)
+            
+            # Get teams potentially interested in the player
+            interested_teams = []
+            for team in self.league.teams:
+                if team == self.user_team:
+                    continue
+                    
+                # Check if team needs this position
+                pos_count = sum(1 for p in team.roster if p.primary_position == player.primary_position)
+                pos_need = pos_count < 3
+                
+                # Check cap space
+                has_cap_space = team.cap_space > player.contract.salary
+                
+                # Check if team is looking to improve (based on standings)
+                team_stats = self.league.standings.get(team.team_name, {'Points': 0})
+                try:
+                    team_rank = sorted(self.league.standings.values(), 
+                                     key=lambda x: x['Points'], 
+                                     reverse=True).index(team_stats)
+                    is_improving = team_rank > 16  # Bottom half of the league
+                except ValueError:
+                    is_improving = True  # Default to improving if team not found in standings
+                
+                # Calculate interest factor based on team needs
+                interest_level = 0
+                
+                if pos_need:
+                    interest_level += 30
+                    
+                if has_cap_space:
+                    interest_level += 20
+                    
+                if is_improving:
+                    interest_level += 20
+                    
+                # Adjust based on player quality relative to team
+                team_avg_ovr = sum(p.overall_rating() for p in team.roster) / len(team.roster) if team.roster else 70
+                if player.overall_rating() > team_avg_ovr + 5:
+                    interest_level += 30
+                    
+                # Positional need based on team composition
+                if player.primary_position == PlayerPosition.GOALIE and pos_count == 0:
+                    interest_level += 50  # Teams desperately need goalies
+                
+                # Teams more interested in younger players with potential
+                if player.age < 25 and player.potential_grade in ['A', 'B']:
+                    interest_level += 25
+                
+                # Track interested teams with their interest level
+                if interest_level >= 50 and has_cap_space:  # Only consider teams with significant interest
+                    interested_teams.append((team, interest_level))
+            
+            # Sort teams by interest level
+            interested_teams.sort(key=lambda x: x[1], reverse=True)
+            
+            # Have interested teams make offers
+            for team, interest_level in interested_teams[:3]:  # Top 3 interested teams
+                # Generate an offer based on interest level
+                willingness_to_pay = 1.0 + (interest_level - 50) / 100  # 1.0 to 1.5 based on interest
+                offer_value = int(discounted_value * willingness_to_pay)
+                
+                # Prepare trade package
+                trade_package = self.generate_trade_package(team, player, offer_value)
+                
+                if trade_package:
+                    offers_received.append({
+                        'team': team,
+                        'player_wanted': player,
+                        'offer': trade_package,
+                        'interest_level': interest_level
+                    })
+        
+        # If offers were received, present them to the user
+        if offers_received:
+            self.present_trade_offers(offers_received)
+
+    def send_email_to_user(self, message):
+        """Send an email message to the user's inbox."""
+        self.user_team.inbox.add_message(message)
+        self.update_inbox_notification()
+
+    def simulate_day(self):
+        """Completely reworked daily simulation that properly handles all scenarios"""
+        # MULTIPLAYER (Phase 2) advance gate: in host mode the day advances
+        # ONLY through the EHM ready gate (_mp_fire_authorized_advance sets
+        # _mp_advance_authorized). Any other path into here becomes a ready
+        # vote instead. Clients never advance -- they vote via Ready.
+        if getattr(self, 'mp_host', None) is not None \
+                and not getattr(self, '_mp_advance_authorized', False):
+            self._mp_toggle_host_ready()
+            return
+        if getattr(self, 'mp_client', None) is not None \
+                and getattr(self, 'mp_host', None) is None:
+            self._mp_toast("Only the host advances days -- "
+                           "use Ready to vote for the advance.")
+            return
+        # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
+        # be completed before the day advances. Show what is blocking and
+        # offer a jump to it -- never silently do nothing.
+        _label, blockers = self.get_continue_state()
+        if blockers:
+            # A blocker that appeared after the host readied must rescind
+            # the vote -- the day can't advance like this.
+            if getattr(self, '_mp_host_ready', False):
+                self._mp_host_ready = False
+                try:
+                    _payload = self.mp_host.broadcast_advance_status(False)
+                except Exception:
+                    _payload = None
+                self._mp_refresh_continue_ui(_payload)
+            self._show_continue_blockers(blockers)
+            return
+
+        # Prevent double-clicks: the dashboard helper also paints
+        # "Processing..." BEFORE the heavy work starts.
+        dashboard = getattr(self, 'dashboard', None)
+        if (dashboard is not None
+                and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
+            return  # Already processing, ignore this click
+        self._set_continue_feedback(True, "Starting simulation...")
+
+        # TRADE DEADLINE DAY: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET) instead of a full-day sim. Each press of
+        # Continue advances the clock one increment: AI GMs answer trade
+        # talks instantly, league deals break, and the countdown ticks
+        # toward the 3 PM close. When the clock expires the day finishes
+        # normally (games sim, date advances).
+        if self._maybe_run_deadline_clock_tick():
+            self._set_continue_feedback(False)
+            # MP: a clock tick IS the gated advance for deadline day -- sync
+            # the clients (trades break on ticks). Ready-cycle reset happens
+            # in _mp_fire_authorized_advance's finally block.
+            if getattr(self, 'mp_host', None) is not None \
+                    and getattr(self, '_mp_advance_authorized', False):
+                self._mp_after_deadline_tick()
+            return
+
+        # Resuming after the game-day inbox bundle: daily maintenance
+        # (scout report, career daily, ...) already ran before the bundle
+        # opened, so skip it -- the day must not double-process.
+        _resuming_after_bundle = bool(getattr(self, '_continue_after_bundle', False))
+        if _resuming_after_bundle:
+            self._continue_after_bundle = False
+
+        try:
+            # PLAYOFF PHASE (date-driven): once the bracket is alive, the
+            # date keeps advancing -- each Next Day sims that day's
+            # scheduled playoff games through the bracket. Bracket
+            # controls keep working: either path driving first wins
+            # (exactly-once is enforced in try_play_scheduled_game).
+            if self._playoffs_in_progress():
+                self._simulate_playoff_day()
+                return
+
+            # Check for season end by games completed (primary trigger).
+            # The date cutoff is only a safety net set AFTER the last scheduled
+            # game, since the generated schedule can run past April 15.
+            season_complete = self._check_season_complete()
+
+            if season_complete:
+                self.end_of_season()
+                self._set_continue_feedback(False)
+                return
+
+            last_game_date = getattr(self, '_season_last_game_date', None)
+            if last_game_date is None:
+                try:
+                    game_dates = [e.get('date') for e in self.league.schedule
+                                  if isinstance(e, dict) and e.get('date')]
+                    if game_dates:
+                        last_game_date = max(game_dates)
+                except Exception:
+                    last_game_date = None
+                self._season_last_game_date = last_game_date
+            if last_game_date and self.current_date > last_game_date + timedelta(days=7):
+                self.end_of_season()
+                self._set_continue_feedback(False)
+                return
+
+            # Process daily maintenance tasks FIRST (before checking games)
+            if not _resuming_after_bundle:
+                self._set_continue_feedback(True, "Processing daily tasks...")
+                self._process_daily_maintenance()
+            
+            # Get today's games - OPTIMIZED with early break and caching
+            todays_games = []
+            
+            # Use cached result if available (cache for current date)
+            cache_key = f"games_{self.current_date.isoformat()}"
+            if hasattr(self, '_schedule_cache') and cache_key in self._schedule_cache:
+                todays_games = self._schedule_cache[cache_key]
+            else:
+                # Create cache if it doesn't exist
+                if not hasattr(self, '_schedule_cache'):
+                    self._schedule_cache = {}
+                
+                # Process schedule with early termination
+                games_found = 0
+                max_games_per_day = 16  # NHL typically has max 16 games per day
+                
+                for item in self.league.schedule:
+                    # Early termination if we found enough games or past today's date
+                    if games_found >= max_games_per_day:
+                        break
+                        
+                    try:
+                        # Handle tuple format: (date, home_team, away_team) or (date, event_type, event_data)
+                        if isinstance(item, tuple) and len(item) >= 2:
+                            item_date = item[0]
+                            # Skip if date is past today (schedule is sorted)
+                            if hasattr(item_date, 'year') and item_date > self.current_date:
+                                break
+                            # Process if date matches today
+                            if item_date == self.current_date:
+                                # Only add if it's a game (not an NHL event)
+                                if len(item) >= 3 and item[1] != 'NHL_EVENT':
+                                    # Convert tuple to standardized dictionary format
+                                    game_dict = {
+                                        'date': item[0],
+                                        'home_team': item[1],
+                                        'away_team': item[2],
+                                        'event_type': 'GAME'
+                                    }
+                                    todays_games.append(game_dict)
+                                    games_found += 1
+                        # Handle dictionary format
+                        elif isinstance(item, dict):
+                            item_date = item.get('date')
+                            # Skip if date is past today
+                            if item_date and item_date > self.current_date:
+                                break
+                            # AHL (and any non-NHL league) games live on the
+                            # same schedule list but are NEVER day-simmed --
+                            # the minors get a lightweight generated ledger
+                            # (ahl_system), not game sims. Letting them into
+                            # todays_games burned the 16-game daily budget and
+                            # silently dropped real NHL games from the sim.
+                            if item.get('league', 'NHL') != 'NHL':
+                                continue
+                            # Playoff games live on the schedule for display
+                            # but are simmed through the playoff bracket --
+                            # never double-sim them here.
+                            if item.get('playoff'):
+                                continue
+                            # Process if date matches today
+                            if item_date == self.current_date and item.get('event_type') != 'NHL_EVENT':
+                                todays_games.append(item)
+                                games_found += 1
+                    except (AttributeError, TypeError, IndexError) as e:
+                        # Skip malformed schedule items
+                        continue
+                
+                # Cache the result for potential future use
+                self._schedule_cache[cache_key] = todays_games
+                
+                # Clean old cache entries to prevent memory bloat
+                if len(self._schedule_cache) > 7:  # Keep only last week
+                    oldest_key = min(self._schedule_cache.keys())
+                    del self._schedule_cache[oldest_key]
+            
+            # Game-day inbox bundle: pre-match presser + team talk +
+            # Watch/Quick choice as one interactive inbox message instead
+            # of modals. When it opens, the day waits for the user's pick.
+            # Preseason exhibitions skip the bundle -- they're quick-simmed
+            # quietly, like the real league treats September hockey.
+            _all_preseason = bool(todays_games) and all(
+                isinstance(g, dict) and g.get('preseason')
+                for g in todays_games)
+            if (not _resuming_after_bundle and not _all_preseason
+                    and self._maybe_open_game_day_bundle(todays_games)):
+                # Bundle opened: the day waits for the user's Watch/Quick
+                # pick. Dismiss the loading overlay so they can interact.
+                self._set_continue_feedback(False)
+                return
+
+            # NHL Rule 6.1: every club must have 1C+2As before opening night.
+            # Runs once per phase -- at the first preseason game day AND the
+            # first regular-season game day. Preseason: AI clubs auto-repair,
+            # human club gets a non-blocking reminder. Regular season: the
+            # mandatory picker blocks the human GM until captains are named.
+            # A valid existing captain is never overwritten.
+            if todays_games:
+                _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+                _phase = "preseason" if _all_preseason else "regular"
+                if (_sy is not None
+                        and getattr(self, '_captaincy_checked_phase', None)
+                        != (_sy, _phase)):
+                    self._captaincy_checked_phase = (_sy, _phase)
+                    _ut = getattr(self, 'user_team', None)
+                    # Fantasy-draft deferral ends here: the first game day
+                    # of preseason (or the regular season, if preseason was
+                    # skipped) is when captains get set.
+                    try:
+                        _dgm = getattr(self, 'game_manager', None)
+                        if _dgm is not None:
+                            _dgm._fantasy_draft_captaincy_deferred = False
+                            # Tell the captaincy check which phase we're in
+                            # so it knows whether to remind or block.
+                            _dgm._captaincy_check_phase = _phase
+                    except Exception:
+                        pass
+                    # NOTE (Item 7): the captaincy helpers live on
+                    # GameManager, but this is a HockeyManagerGUI method --
+                    # the old self._ensure_captaincy call here was dead
+                    # (AttributeError, swallowed by the except below), so
+                    # the opening-night check never ran. Route via the
+                    # game manager to make both paths live.
+                    _gm = getattr(self, 'game_manager', None)
+                    for _t in (getattr(getattr(self, 'league', None),
+                                       'teams', None) or []):
+                        try:
+                            if _gm is not None:
+                                _nc = _gm._opening_night_captaincy_check(
+                                    _t, _ut)
+                            else:
+                                _nc = None
+                            if _nc and _t is _ut:
+                                self.add_news(
+                                    f"© {_nc} has been named captain of the "
+                                    f"{getattr(_t, 'team_name', 'club')}.")
+                        except Exception:
+                            pass
+                    # Preseason reminder: if the human club still needs
+                    # captains, post a non-blocking inbox task. The
+                    # regular-season phase will enforce it with the picker.
+                    # Preseason reminder with visible timeline: the user sees
+                    # exactly how long they have before the picker blocks
+                    # at opening night.
+                    try:
+                        if (_phase == "preseason" and _gm is not None
+                                and getattr(_gm, "_captaincy_choice_pending",
+                                            False)):
+                            _days, _ddl = _gm.get_captaincy_deadline_info()
+                            if _days is not None and _ddl is not None:
+                                _when = (f"Opening night is in {_days} day"
+                                         f"{'s' if _days != 1 else ''} "
+                                         f"({_ddl.strftime('%b %d')})")
+                            else:
+                                _when = "before opening night"
+                            self.add_news(
+                                f"Ⓒ Preseason tasks: name your captain (C) and "
+                                f"two alternates (A) {_when}. "
+                                f"Open the roster to choose -- the picker "
+                                f"will block you at opening night if "
+                                f"it's still not done. You can also assign "
+                                f"jersey numbers from the roster.")
+                    except Exception:
+                        pass
+                    # Numbers finalized with the captaincy: freed favorites
+                    # get claimed unless the player started a legacy with
+                    # his current number. Old saves backfill retired
+                    # numbers first so nothing legal gets repaired away.
+                    try:
+                        import immortality as _im2
+                        for _t in (getattr(getattr(self, 'league', None),
+                                           'teams', None) or []):
+                            try:
+                                if (getattr(_t, 'league_name', '')
+                                        != "National Hockey League"):
+                                    continue
+                                _im2.seed_retired_numbers(_t)
+                                for _sw in _im2.finalize_team_numbers(_t, _sy):
+                                    if _t is _ut and _sw.get("reason") == "favorite":
+                                        _p = _sw.get("player")
+                                        self.add_news(
+                                            f"{getattr(_p, 'full_name', 'A player')} "
+                                            f"switches from No. {_sw.get('old')} to "
+                                            f"No. {_sw.get('new')} -- his favorite "
+                                            f"number freed up.")
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
+            # D5 follow-up: undecided staff renewal offers lapse at the
+            # first game day of the season (preseason or regular) -- the
+            # staffer walks to the free-agent pool. Once per season.
+            try:
+                _rsy = getattr(getattr(self, 'league', None),
+                               'season_year', None)
+                if (_rsy is not None
+                        and getattr(self, '_renewals_resolved_year', None)
+                        != _rsy):
+                    self._renewals_resolved_year = _rsy
+                    import staff_renewals as _srr
+                    for _rl in (_srr.resolve_pending_renewals(
+                            self.league) or []):
+                        try:
+                            self.add_news("🧑‍💼 " + str(_rl))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            self._set_continue_feedback(True, "Simulating games...")
+            # Process games if any exist
+            if todays_games:
+                # Rosters/tactics can change daily (trades, injuries, user tweaks):
+                # drop the cached team-strength values so sims stay current.
+                if hasattr(self, '_strength_cache'):
+                    self._strength_cache.clear()
+                # Milestone watches: one scan per day, pre-game presentation.
+                # Preseason exhibitions don't count toward career milestones.
+                self._milestone_pregame(
+                    [g for g in todays_games
+                     if not (isinstance(g, dict) and g.get('preseason'))])
+                # Narrative ignition: rivalry pregame hype for user games.
+                self._rivalry_pregame(
+                    [g for g in todays_games
+                     if not (isinstance(g, dict) and g.get('preseason'))])
+                self._process_todays_games(todays_games)
+                if getattr(self, '_abort_day_sim', False):
+                    # Mid-team-talk save/load orphaned this day sim (the
+                    # pre-load frame's objects are dead). Bail before
+                    # post-day processing; the parked talk resumes from
+                    # its session on the next Continue. The finally below
+                    # still restores the Continue button.
+                    self._abort_day_sim = False
+                    return
+            
+            self._set_continue_feedback(True, "Updating injuries...")
+            # Process injury recovery: countdown runs in GAMES MISSED, so only
+            # teams that played today tick down (and today's new injuries
+            # start counting with the next game).
+            teams_played = set()
+            for game in todays_games:
+                try:
+                    if isinstance(game, dict):
+                        teams_played.add(game.get('home_team'))
+                        teams_played.add(game.get('away_team'))
+                    else:
+                        teams_played.add(game[1])
+                        teams_played.add(game[2])
+                except Exception:
+                    pass
+            teams_played.discard(None)
+            self.game_manager._process_injury_recovery(teams_played or None)
+            self.game_manager._process_suspension_service(teams_played or None)
+            
+            self._set_continue_feedback(True, "Processing AI decisions...")
+            # Process AI team decisions (trades, signings, etc.)
+            # Only every 7 days (handled internally by ai_manager)
+            try:
+                if hasattr(self.league, 'free_agents'):
+                    free_agents = self.league.free_agents
+                else:
+                    free_agents = []
+                # Only run AI for NHL teams -- minor league teams don't need
+                # trade/FA/contract AI. This cuts 60 teams -> 32 (Small).
+                nhl_teams = [t for t in self.league.teams
+                             if getattr(t, 'league_name', 'National Hockey League') == 'National Hockey League']
+                decisions = self.game_manager.ai_manager.process_daily_decisions(
+                    nhl_teams, free_agents, self.current_date
+                )
+                # Log significant decisions
+                for d in decisions[:5]:  # Limit spam
+                    if hasattr(d, 'description'):
+                        print(f"🤖 AI: {d.description}")
+            except Exception as e:
+                # Don't crash the game if AI fails
+                print(f"AI manager error (non-fatal): {e}")
+            # AI trade market (trade_market.py, additive): year-round
+            # listings, bidding rounds, request shopping, trade blocks,
+            # shortlist nudges. Never raises; cheap no-op when idle.
+            try:
+                import trade_market
+                trade_market.process_market(
+                    self, getattr(self, "league", None), self.current_date)
+            except Exception as e:
+                print(f"Trade market error (non-fatal): {e}")
+            # AI signings write their own headlines (signings,
+            # market-setters, contract fallout) -- flush them into the
+            # news feed with today's date.
+            try:
+                _ai_mgr = getattr(getattr(self, "game_manager", None),
+                                  "ai_manager", None)
+                _drain = getattr(_ai_mgr, "drain_pending_news", None)
+                if callable(_drain):
+                    for _story in _drain():
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+            except Exception:
+                pass
+            
+            # ALWAYS advance date and update UI (whether games existed or not)
+            # Milestones hit today: ledger + four-viewpoint headlines, once
+            # the day's career totals are final.
+            self._milestone_postgame()
+            self.current_date += timedelta(days=1)
+
+            # Pre-season coach expectations meeting: training camp opens
+            # every September 1. The user club arms its season meeting;
+            # every AI club resolves immediately. Season-idempotent (the
+            # arm/resolve functions no-op when this season is done) and
+            # never raises -- the meeting itself gates the NEXT advance
+            # via the get_continue_state blocker, not this hook.
+            try:
+                if self.current_date.month == 9 and self.current_date.day == 1:
+                    from coach_season_meeting import on_training_camp
+                    on_training_camp(getattr(self, "game_manager", None) or self)
+            except Exception:
+                pass
+
+            # Quarterly coach check-ins: after games ~20/40/60 the GM's
+            # club arms a RESUMABLE check-in conversation (never blocks
+            # the day; expires when the next quarter arms). AI clubs
+            # resolve immediately -- no UI, never skipped. Season- and
+            # mandate-idempotent, and never raises.
+            try:
+                from coach_checkins import on_day_advanced
+                on_day_advanced(getattr(self, "game_manager", None) or self)
+            except Exception:
+                pass
+
+            # Offer-sheet match windows: a sheet whose 7-day clock ran out
+            # unanswered resolves as a decline -- the player goes to the
+            # offering club at the sheet terms (real CBA rule). Idempotent;
+            # only expired pending sheets are touched.
+            try:
+                import rfa_system as _rfa_os
+                _rfa_os.process_offer_sheet_deadlines(self, self.league)
+            except Exception:
+                pass
+
+            # Real-life jersey retirement ceremonies: the rafters match
+            # reality, on the real month/day of the first season.
+            # Idempotent -- a retired number never re-fires. Old saves
+            # without a schedule get past-dated numbers retired quietly.
+            try:
+                import immortality as _im_cer
+                _league = getattr(self, "league", None)
+                for _ct, _cc in _im_cer.ceremonies_due(
+                        _league, self.current_date):
+                    _story = _im_cer.stage_ceremony(_ct, _cc)
+                    if _story:
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+                for _note in _im_cer.retire_overdue_ceremonies(
+                        _league, self.current_date):
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _note})
+            except Exception:
+                pass
+            # Stanley Cup awarding recap: fires once, the night the Cup is
+            # won (flag-guarded; save/load safe via the league key).
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+
+            # All-Star weekend: rosters announced 5 days before the game
+            # (fan vote captains + hockey-ops selection, every club
+            # represented); the exhibition itself is presentation-only.
+            # Idempotent per season via league.all_star_rosters.
+            try:
+                import all_star as _as
+                _asg = _as.all_star_game_date(self.league)
+                if _asg is not None and hasattr(_asg, "toordinal"):
+                    _sy = int(getattr(self.league, "season_year", 2026))
+                    _label = f"{_sy}-{str(_sy + 1)[-2:]}"
+                    if self.current_date == _asg - timedelta(days=5):
+                        _rosters = _as.select_all_star_rosters(self.league)
+                        if _rosters:
+                            self.news_log.append({
+                                'date': self.current_date,
+                                'story': _as.announcement_copy(_rosters, _label)})
+                    elif self.current_date == _asg:
+                        _rosters = _as.resolve_rosters(self.league, _label)
+                        if _rosters:
+                            _rng = random.Random(f"allstar-{_label}")
+                            for _title, _who, _div in \
+                                    _as.skills_winners(_rosters, _rng):
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"⚡ Skills Competition -- {_title}: "
+                                             f"{_who} ({_div})."})
+                            _res = _as.play_all_star_game(_rosters, _rng)
+                            if _res:
+                                _champ_coach = (_rosters.get(
+                                    _res['champion'], {}) or {}).get(
+                                        "coach_name")
+                                _coach_bit = (f" {_champ_coach} gets the win "
+                                              f"behind the "
+                                              f"{_res['champion']} bench."
+                                              if _champ_coach else "")
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"🌟 All-Star Game: "
+                                             f"{_res['champion']} take the "
+                                             f"3v3 tournament "
+                                             f"{_res['score']} over "
+                                             f"{_res['finalists'][1]} in the "
+                                             f"final.{_coach_bit}"})
+            except Exception as _ase:
+                print(f"All-Star weekend skipped (non-fatal): {_ase}")
+
+            # Future 1st-round pick slots track the standings (regressed
+            # toward mid-round -- a projection, not a promise).
+            try:
+                import trade_engine as _te_ps
+                _te_ps.project_pick_slots(getattr(self, "league", None))
+            except Exception:
+                pass
+
+            # Trade talks: AI GMs answer due offers/counters via the inbox.
+            # Non-fatal by design -- a negotiation must never break the sim.
+            try:
+                import trade_negotiation as _tn
+                _tn.process_due_negotiations(self)
+            except Exception as _tne:
+                print(f"trade negotiation tick failed (non-fatal): {_tne}")
+
+            # Headline hygiene (cheap, once a day): expire inbox news older
+            # than 7 game-days unless the user saved it or it's a milestone
+            # for their team.
+            try:
+                self.user_team.inbox.prune_expired(self.current_date)
+            except Exception:
+                pass
+
+            # Media engine daily tick: narratives cool, beefs go quiet.
+            try:
+                import media_engine
+                media_engine.media_daily_tick(getattr(self, 'league', None))
+            except Exception:
+                pass
+            
+            # Daily news engine: 3-8 routine stories/day so the news feed
+            # never runs dry. Feed-only (no inbox, no headline cap).
+            try:
+                import daily_news
+                daily_news.generate_daily_news(self, self.current_date)
+            except Exception as _dne:
+                print(f"Daily news generation failed (non-fatal): {_dne}")
+            
+            # Clear caches periodically to prevent memory bloat
+            if self.current_date.day == 1:  # First day of each month
+                # Part 3: draft-season build-up beat (Jan-Jun, once per
+                # month per year) + rights-lifecycle news flush. Guarded
+                # internally; never breaks the tick.
+                try:
+                    self._post_draft_season_beat()
+                except Exception as _dbe:
+                    print(f"Draft season beat failed (non-fatal): {_dbe}")
+                if hasattr(self, '_schedule_cache'):
+                    self._schedule_cache.clear()
+                if hasattr(self, '_strength_cache'):
+                    self._strength_cache.clear()
+                # Monthly player development (ratings change -> strength recomputed)
+                try:
+                    self.game_manager._process_monthly_development()
+                except Exception as e:
+                    print(f"Player development error (non-fatal): {e}")
+                # B39 (fixed 2026-09-30): the fracture ladder's production
+                # caller. Runs BEFORE the trade-request check so the
+                # room's trade-risk multiplier applies in the same pass.
+                try:
+                    import reputation_system as _rs_tick
+                    _rs_tick.room_implications_monthly_tick(self)
+                except Exception as e:
+                    print(f"Room implications tick error (non-fatal): {e}")
+                # Monthly headline check: rare trade requests (risk-model
+                # driven, capped league-wide so it stays rare).
+                try:
+                    import headlines
+                    headlines.monthly_trade_request_check(self)
+                except Exception as e:
+                    print(f"Trade-request check error (non-fatal): {e}")
+                # Cup-ambition stars on sellers agitate monthly (additive;
+                # the check above is untouched).
+                try:
+                    import trade_market
+                    trade_market.ambition_agitation_tick(self)
+                except Exception as e:
+                    print(f"Agitation tick error (non-fatal): {e}")
+                # Monthly NHL awards: Player of the Month / Rookie of the
+                # Month from month splits; banked, announced, baselines
+                # re-stamped.
+                try:
+                    import stars as _stars_mo
+                    _stars_mo.monthly_awards_tick(self)
+                except Exception as e:
+                    print(f"Monthly awards error (non-fatal): {e}")
+            
+            # Update game_manager's current_date for dashboard synchronization
+            self.game_manager.current_date = self.current_date
+            
+            self._set_continue_feedback(True, "Updating dashboard...")
+            # Refresh the atmospheric dashboard with updated data
+            if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh_dashboard'):
+                self.dashboard.refresh_dashboard()
+            
+            # Muck 2026-10-02: post-advance landing -- game results only
+            # when games were actually played on the simmed day, otherwise
+            # the inbox. Deferred while auto-advance owns the flow (it
+            # applies the landing once when the loop stops).
+            if not getattr(self, '_auto_advance', False):
+                self._post_advance_landing()
+
+            # Use async update to prevent blocking
+            self.after_idle(self.update_all_views)
+
+            # Bound the ever-growing history logs (game_results ~1344/season,
+            # news_log unbounded) so daily scans and save pickles stay O(season).
+            self._trim_history_logs()
+
+            # --- MULTIPLAYER (Phase 1) + CHECKPOINTS ---
+            # Placed at the end of the try block so it runs ONLY on a
+            # successful day advance (the early returns above skip it).
+            # Checkpoint + snapshot run on a WORKER thread via
+            # broadcast_state_async: create_save_data/pickle/gzip over the
+            # ~12k-player league is seconds-scale and must never block the
+            # tkinter main thread. announce_day stays synchronous (tiny).
+            # While the worker runs, snapshot_busy is True: simulate_day
+            # refuses new advances and client actions are deferred, so the
+            # game objects being serialized cannot be mutated mid-flight.
+            # Completion arrives as a "snapshot_done" poll event.
+            try:
+                host = getattr(self, 'mp_host', None)
+                if host is not None:
+                    label = f"Day {self.current_date}"
+                    cpm = getattr(self, 'checkpoint_manager', None)
+                    pre = (lambda: cpm.checkpoint(label)) \
+                        if cpm is not None else None
+                    host.announce_day(str(self.current_date))
+                    if cpm is not None:
+                        host.notify_checkpoint(label, str(self.current_date))
+                    host.broadcast_state_async(label, pre_broadcast=pre)
+            except Exception as _mp_e:
+                print(f"Multiplayer broadcast failed (non-fatal): {_mp_e}")
+
+        finally:
+            # Restore the Continue button: re-enable clicks, clear the
+            # "Processing..." state and re-apply the smart Continue/Next Day
+            # label (blockers may have appeared or cleared).
+            self._set_continue_feedback(False)
+            # R8(i): the top-nav pill is NOT covered by the dashboard
+            # helper above -- refresh it too, or "Continue (1)" goes stale
+            # after the blocker is resolved (and "Next Day" goes stale
+            # when a blocker appears mid-session).
+            try:
+                self.refresh_next_day_button()
+            except Exception:
+                pass
 def launch_game_viewer_with_sim(home_team, away_team):
     """
     Run a full AdvancedGameSim and launch the professional GameViewer with real data
