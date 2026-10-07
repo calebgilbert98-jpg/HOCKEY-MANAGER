@@ -6985,7 +6985,10 @@ NHL League Office""",
                 if not getattr(career, "career_start_date", None):
                     career.career_start_date = self.current_date.isoformat()
                     strength = self._career_team_strength(team)
-                    career.board.auto_expectation(strength)
+                    try:
+                        career.board.auto_expectation(strength)
+                    except AttributeError:
+                        pass  # SimpleNamespace board in headless mode
                     ages = [getattr(p, "age", 27) or 27
                             for p in (getattr(team, "roster", []) or [])]
                     avg_age = sum(ages) / len(ages) if ages else 27.0
@@ -15738,7 +15741,11 @@ NHL League Office""",
             _inj_rate = 0.31
         for team in (home_team, away_team):
             if random.random() < _inj_rate:
-                hurt = roll_game_injury(team)
+                try:
+                    from quick_sim import roll_game_injury
+                except ImportError:
+                    roll_game_injury = None
+                hurt = roll_game_injury(team) if roll_game_injury else None
                 if hurt is not None and hasattr(self, 'notable_events'):
                     try:
                         self.notable_events.append({
