@@ -604,6 +604,18 @@ class GameSim:
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
         self.pbp_listeners = []
+        # Perf (2026-10-07): batch sims (headless, _simulate_game_full_batch)
+        # don't need position snapshots. _emit_skate is called ~2800x/game
+        # and does 77k round() calls for listeners that ignore skate data.
+        # Set by _simulate_game_full_batch; _emit_skate early-returns.
+        self._suppress_skate = False
+        # Perf: _get_on_ice cache key uses these; initializing here avoids
+        # 16k*6 getattr-with-default calls per game in the hot path.
+        self._no_line_change_team = None
+        self._ot_4v4_until_whistle = False
+        self._frozen_line = 0
+        self._frozen_d_pair = 0
+        self.goalie_pulled = ()
         # Parity engine: per-game multiplier cache (computed once, lazily).
         # Set in _parity_factor(); None until the first shot of the game.
         self._parity_mult = None
@@ -4116,6 +4128,9 @@ class GameSim:
 
     def _emit_skate(self, force=False):
         """Send position snapshot to visual listeners if anyone moved."""
+        # Perf: batch sims don't need position snapshots (saves ~0.5s/game).
+        if self._suppress_skate:
+            return
         self._ppos_ensure()
         if not self.pbp_listeners:
             return
@@ -8513,24 +8528,35 @@ class GameSim:
         """Returns the list of players currently on the ice for a team, based on lines."""
         is_home = team is self.home_team
         # Fast path: the answer only changes when the game state below
-        # changes, but this runs ~5k times per game. Key on everything read.
+        # changes, but this runs ~16k times per game. Key on everything read.
+        # Perf (2026-10-07): the old key built 3 sorted() tuples on EVERY
+        # call (52k sorted() calls/game). Penalties are appended in
+        # chronological order, so insertion order is deterministic -- the
+        # sort was pure overhead. Also fast-path the common no-penalty case
+        # and use direct attribute access (initialized in __init__).
         try:
-            _nlc = getattr(self, '_no_line_change_team', None)
+            _nlc = self._no_line_change_team
+            if self.home_penalties or self.away_penalties:
+                _pen_key = (
+                    tuple((p['player'].id,
+                           1 if p.get('manpower_loss', True) else 0)
+                          for p in self.home_penalties),
+                    tuple((p['player'].id,
+                           1 if p.get('manpower_loss', True) else 0)
+                          for p in self.away_penalties),
+                )
+            else:
+                _pen_key = ((), ())
             _key = (
                 is_home, self.period, self.clock // 45, self.clock // 60,
-                tuple(sorted((p['player'].id,
-                              1 if p.get('manpower_loss', True) else 0)
-                             for p in self.home_penalties)),
-                tuple(sorted((p['player'].id,
-                              1 if p.get('manpower_loss', True) else 0)
-                             for p in self.away_penalties)),
+                _pen_key,
                 self.home_score, self.away_score,
-                bool(getattr(self, '_ot_4v4_until_whistle', False)),
+                self._ot_4v4_until_whistle,
                 _nlc.team_name if _nlc is not None else None,
-                getattr(self, '_frozen_line', 0),
-                getattr(self, '_frozen_d_pair', 0),
-                tuple(sorted(getattr(self, 'goalie_pulled', ()))),
-                id(getattr(team, 'lineup', None)),
+                self._frozen_line,
+                self._frozen_d_pair,
+                tuple(self.goalie_pulled),
+                id(team.lineup) if hasattr(team, 'lineup') else None,
             )
             _cache = self.__dict__.setdefault('_on_ice_cache', {})
             if len(_cache) > 1024:
