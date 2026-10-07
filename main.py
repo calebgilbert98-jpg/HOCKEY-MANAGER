@@ -7077,8 +7077,17 @@ class HockeyManagerGUI(tk.Tk):
         blocking task. Only REAL systems in this codebase are checked --
         nothing is invented.
         """
+        # Timing for web UI performance debugging (2026-10-06)
+        import time as _time
+        _t_start = _time.time()
+        def _tlog(_label):
+            try:
+                print(f"[blocker-timing] {_label}: {_time.time() - _t_start:.2f}s")
+            except Exception:
+                pass
         blockers = []
         gm = getattr(self, 'game_manager', None)
+        _tlog('start')
         # The one hard day-advancement blocker in the codebase: an active
         # fantasy draft must be finished before the calendar can move.
         if gm is not None and getattr(gm, 'pending_fantasy_draft', False):
@@ -7089,6 +7098,7 @@ class HockeyManagerGUI(tk.Tk):
                            'advancing the day.'),
                 'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
             })
+        _tlog('fantasy_draft_done')
         # DRAFT AGENCY (Muck 2026-10-02): a parked entry draft with unmade
         # user picks blocks the day -- the rebuild's keystone moment never
         # auto-resolves. The action opens the war room directly.
@@ -7139,6 +7149,7 @@ class HockeyManagerGUI(tk.Tk):
                         })
         except Exception:
             pass
+        _tlog('entry_draft_done')
         # Salary cap compliance: an over-cap roster must shed salary before
         # the day can advance (real NHL rule -- rosters must be cap-compliant).
         try:
@@ -7147,6 +7158,7 @@ class HockeyManagerGUI(tk.Tk):
                 blockers.append(cap_blocker)
         except Exception:
             pass
+        _tlog('salary_cap_done')
         # D46 (Wave B): the salary floor is a hard league rule -- the day
         # can't advance while the club sits under it.
         try:
@@ -7155,6 +7167,7 @@ class HockeyManagerGUI(tk.Tk):
                 blockers.append(floor_blocker)
         except Exception:
             pass
+        _tlog('salary_floor_done')
         # R1 (roster limits, true NHL): the 23-man active max and the
         # dressed-lineup minimum (18+2) are hard day gates for the user --
         # the AI side is kept compliant by ai_roster_compliance. The 50 SPC
@@ -7255,6 +7268,7 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         if blockers:
+            _tlog('done_with_blockers')
             return ("Continue", blockers)
         # SLATE GUARANTEE, Part 2 (2026-10-02): a short season slate is a
         # hard stop -- the season cannot advance into awards/playoffs with
