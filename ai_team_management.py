@@ -1206,11 +1206,29 @@ class AITeamManager:
         _by_ovr = sorted(roster, key=_ovr, reverse=True)
         _untouchable = {id(p) for p in _by_ovr[:2]}
 
+        # Crease protection (root cause: rebuilding clubs used to shop
+        # their veteran starter with only 2 goalies on the roster; the
+        # trade guard blocked the worst deals but the AI kept proposing
+        # them. A real GM doesn't shop his crease when he's thin there).
+        try:
+            _real_goalies = sum(
+                1 for _p in roster
+                if getattr(_p, "primary_position", None)
+                == PlayerPosition.GOALIE
+                and not bool(getattr(_p, "on_waivers", False)))
+        except Exception:
+            _real_goalies = 99
+        _protect_crease = _real_goalies <= 2
+
         cands = []
         for p in roster:
             try:
                 if id(p) in _untouchable:
                     continue
+                if (_protect_crease
+                        and getattr(p, "primary_position", None)
+                        == PlayerPosition.GOALIE):
+                    continue  # don't shop the crease when thin
                 if bool(getattr(p, "on_waivers", False)):
                     continue
                 try:
@@ -2303,8 +2321,40 @@ class AITeamManager:
             _sorted = sorted(roster, key=_ovr)
             _to_cut = len(roster) - 23
             demoted = 0
-            for _p in _sorted[:_to_cut]:
+            # Goalie guard (root cause: this trim runs AFTER
+            # ai_roster_compliance in the daily loop and used to demote
+            # the worst-overall player even when he was one of only 2
+            # goalies, undoing ai_crease_maintenance the same day).
+            # Never demote a goalie when the club has 2 or fewer real
+            # goalies, and never demote anyone in a way that breaks the
+            # dressed 18+2 minimum.
+            try:
+                import roster_limits as _rl
+            except Exception:
+                _rl = None
+            def _real_goalie_count():
                 try:
+                    return sum(
+                        1 for p in list(roster)
+                        if getattr(p, "primary_position", None)
+                        == PlayerPosition.GOALIE
+                        and not bool(getattr(p, "on_waivers", False)))
+                except Exception:
+                    return 99
+            for _p in _sorted:
+                if demoted >= _to_cut:
+                    break
+                try:
+                    if (getattr(_p, "primary_position", None)
+                            == PlayerPosition.GOALIE
+                            and _real_goalie_count() <= 2):
+                        continue  # never strand the crease
+                    if _rl is not None:
+                        try:
+                            if _rl.would_break_dress_minimum(team, [_p]):
+                                continue
+                        except Exception:
+                            pass
                     # DEMOTE to AHL: stays in organization as depth.
                     # (Waiver logic handled by the demotion itself if
                     # the player is waiver-eligible.)
