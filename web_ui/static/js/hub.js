@@ -359,7 +359,7 @@ const AutoAdvance = {
   async start() {
     const st = await (await fetch('/api/continue_state')).json().catch(() => null);
     if (!st) return;
-    if (st.blocked) { showBlockerModal(st.blockers); return; }
+    if (st.blocked) { showBlockerModal(st.blockers, null); return; }
     this.seenActionable = await this.actionableCount();
     this.timer = setInterval(() => this.tick(), 800);
     const b = document.getElementById('btn-auto-advance');
@@ -388,7 +388,7 @@ const AutoAdvance = {
       const st = await (await fetch('/api/continue_state')).json();
       if (st.blocked) {
         this.stop('needs your attention');
-        showBlockerModal(st.blockers);
+        showBlockerModal(st.blockers, null);
         return;
       }
       if (st.has_games) {
@@ -518,11 +518,11 @@ async function continueFlow() {
     }
   } catch (e) { /* fall through to single-player flow */ }
   let st;
+  let _ms = null;
   try {
     const _t0 = performance.now();
     st = await (await fetch('/api/continue_state')).json();
-    const _ms = Math.round(performance.now() - _t0);
-    console.log(`[timing] /api/continue_state took ${_ms}ms (server: ${st._timing_ms || '?'}ms)`);
+    _ms = Math.round(performance.now() - _t0);
   } catch (e) { return; }
   if (!st.blocked) {
     // Host mode: the click is a ready vote, not an instant advance.
@@ -530,7 +530,7 @@ async function continueFlow() {
     if (confirm('Advance the day?')) advanceDay(st);
     return;
   }
-  showBlockerModal(st.blockers);
+  showBlockerModal(st.blockers, _ms);
 }
 
 /* ---------- multiplayer ready gate (Batch E) ---------- */
@@ -738,7 +738,7 @@ function showResultsModal(d) {
   ov.addEventListener('click', e => { if (e.target === ov) done(); });
 }
 
-function showBlockerModal(blockers) {
+function showBlockerModal(blockers, timingMs) {
   closeBlockerModal();
   const ov = document.createElement('div');
   ov.className = 'modal-ov'; ov.id = 'blocker-modal';
@@ -760,6 +760,7 @@ function showBlockerModal(blockers) {
       <h2>Can't advance yet</h2>
       <p class="modal-sub">${blockers.length} thing${blockers.length === 1 ? '' : 's'} need${blockers.length === 1 ? 's' : ''} your attention before the day can advance.</p>
       ${cards}
+      ${timingMs != null ? `<p class="modal-sub" style="font-size:11px;opacity:.6">Loaded in ${(timingMs/1000).toFixed(1)}s</p>` : ''}
       <button class="modal-close" id="blocker-close">Close</button>
     </div>`;
   document.body.appendChild(ov);
@@ -775,7 +776,7 @@ function showBlockerModal(blockers) {
       });
       setTimeout(async () => {
         const st = await (await fetch('/api/continue_state')).json();
-        if (st.blocked) showBlockerModal(st.blockers);
+        if (st.blocked) showBlockerModal(st.blockers, null);
         else { closeBlockerModal(); advanceDay(); }
       }, 800);
     }));
