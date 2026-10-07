@@ -184,9 +184,15 @@ class HubPage(QWidget):
             self._tiles[key]._value_label.setText(str(value))
             self._tiles[key]._sub_label.setText(str(sub))
 
-    def refresh(self, game):
+    def refresh(self, game=None):
         """Populate from the live game object. Direct Python access --
         no HTTP, no serialization."""
+        # Fall back to main window's game when called without args
+        # (e.g. from show_screen's generic refresh call)
+        if game is None:
+            game = getattr(self._main, "game", None)
+        if game is None:
+            return
         try:
             # Resolve game manager (handles both app and gm objects)
             gm = getattr(game, "game_manager", None) or game
