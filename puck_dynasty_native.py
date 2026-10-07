@@ -15,22 +15,11 @@ from native_ui.main_window import run
 def main():
     game = None
     try:
-        # Create the game instance (HockeyManagerGUI without running Tk mainloop)
-        # The Qt app runs the event loop; we just need the game logic object.
-        from main import HockeyManagerGUI
-        # Create without showing Tk window
-        import tkinter as tk
-        # Use a hidden root to avoid Tk window appearing
-        game = HockeyManagerGUI.__new__(HockeyManagerGUI)
-        # Initialize minimal required attributes
-        from game_classes import League
-        game.league = League("Puck Dynasty Hockey League")
-        game.league.set_game_manager(game)
-        game.user_team = None
-        game.startup_settings = None
-        game.waiver_list = []
-        game.trade_block = []
-        print("Game instance created for native UI")
+        # Create a real GameManager instance (UI-agnostic, no Tkinter needed)
+        # GameManager holds all game state and logic; native_ui calls it directly.
+        from game_manager import GameManager
+        game = GameManager()
+        print(f"GameManager created for native UI ({len(game.league.teams)} teams)")
     except Exception as e:
         print(f"Game init failed: {e}")
         import traceback
