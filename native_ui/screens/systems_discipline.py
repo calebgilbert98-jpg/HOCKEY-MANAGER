@@ -14,6 +14,7 @@ from .base import BaseScreen
 from .systems_common import (league_of, tone_color, explainer_label,
                              section_title, no_game_label, clear_layout,
                              player_name)
+from .systems_common import systems_nav_bar
 
 
 class SystemsDisciplineScreen(BaseScreen):
@@ -22,6 +23,7 @@ class SystemsDisciplineScreen(BaseScreen):
     title = "Discipline"
 
     def _build_body(self):
+        self._layout.addLayout(systems_nav_bar(self))
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)

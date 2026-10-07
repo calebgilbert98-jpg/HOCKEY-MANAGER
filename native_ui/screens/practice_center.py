@@ -79,6 +79,8 @@ class PracticeCenterScreen(BaseScreen):
         self._table.set_main_window(self.main_window)
         self._table.cellClicked.connect(
             lambda row, _col: self._select_player(row))
+        self._table.player_clicked.connect(
+            lambda player: self.main_window.show_player(player))
         left_layout.addWidget(self._table, 1)
         body.addWidget(left, 1)
 

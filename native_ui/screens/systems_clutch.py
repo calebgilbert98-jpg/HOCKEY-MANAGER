@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from .base import BaseScreen
 from .systems_common import (user_team, tone_color, explainer_label,
                              section_title, no_game_label, clear_layout)
+from .systems_common import systems_nav_bar
 
 
 class SystemsClutchScreen(BaseScreen):
@@ -66,6 +67,7 @@ class SystemsClutchScreen(BaseScreen):
         return "neutral"
 
     def _build_body(self):
+        self._layout.addLayout(systems_nav_bar(self))
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)

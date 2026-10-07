@@ -66,8 +66,22 @@ class TopBar(QWidget):
         self.save_btn = QPushButton("SAVE")
         self.save_btn.setObjectName("nav-btn")
         self.save_btn.setCursor(Qt.PointingHandCursor)
-        self.save_btn.clicked.connect(self._main.save_game)
+        self.save_btn.clicked.connect(lambda: self._main.show_screen("save"))
         layout.addWidget(self.save_btn)
+
+        self.mp_btn = QPushButton("MULTIPLAYER")
+        self.mp_btn.setObjectName("nav-btn")
+        self.mp_btn.setCursor(Qt.PointingHandCursor)
+        self.mp_btn.clicked.connect(
+            lambda: self._main.show_screen("multiplayer"))
+        layout.addWidget(self.mp_btn)
+
+        self.settings_btn = QPushButton("SETTINGS")
+        self.settings_btn.setObjectName("nav-btn")
+        self.settings_btn.setCursor(Qt.PointingHandCursor)
+        self.settings_btn.clicked.connect(
+            lambda: self._main.show_screen("settings"))
+        layout.addWidget(self.settings_btn)
 
     def set_active(self, name):
         for n, btn in self._nav_buttons.items():
@@ -128,10 +142,12 @@ class HubPage(QWidget):
 
         outer.addStretch()
 
-        # Ticker at bottom
+        # Ticker at bottom (clickable -> news screen)
         self.ticker = QLabel("Loading scores…")
         self.ticker.setObjectName("ticker")
         self.ticker.setAlignment(Qt.AlignCenter)
+        self.ticker.setCursor(Qt.PointingHandCursor)
+        self.ticker.mousePressEvent = lambda e: self._main.show_screen("news")
         outer.addWidget(self.ticker)
 
     def _make_tile(self, title):

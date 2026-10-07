@@ -55,7 +55,8 @@ class EntityContextMenu(QMenu):
         menu.add_action("View Profile",
                         lambda: main_window.show_player(player))
         menu.add_action("Compare",
-                        lambda: main_window.show_screen("compare"))
+                        lambda p=player: EntityContextMenu._open_compare(
+                            main_window, p))
         menu.add_action("Propose Trade",
                         lambda: main_window.show_screen("trades"))
 
@@ -67,7 +68,8 @@ class EntityContextMenu(QMenu):
                             lambda: EntityContextMenu._add_trade_block(
                                 game, player))
             menu.add_action("Sign Extension",
-                            lambda: main_window.show_screen("contracts"))
+                            lambda p=player: EntityContextMenu._open_contracts(
+                                main_window, p))
             menu.addSeparator()
             menu.add_action("Place on Waivers",
                             lambda: EntityContextMenu._place_waivers(
@@ -90,12 +92,52 @@ class EntityContextMenu(QMenu):
         """Build the staff context menu."""
         menu = EntityContextMenu(main_window)
         menu.add_action("View Details",
-                        lambda: main_window.show_screen("staff_detail"))
+                        lambda s=staff: EntityContextMenu._open_staff_detail(
+                            main_window, s))
         menu.add_action("Release",
                         lambda: EntityContextMenu._release_staff(
                             main_window, staff),
                         danger=True)
         return menu
+
+    @staticmethod
+    def _open_compare(main_window, player):
+        """Open compare screen with the player pre-loaded."""
+        main_window.show_screen("compare")
+        screen = main_window._screens.get("compare")
+        if screen:
+            widget = screen.widget() if hasattr(screen, "widget") else screen
+            if hasattr(widget, "set_players"):
+                try:
+                    widget.set_players([player])
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _open_contracts(main_window, player):
+        """Open contracts screen with the player pre-loaded."""
+        main_window.show_screen("contracts")
+        screen = main_window._screens.get("contracts")
+        if screen:
+            widget = screen.widget() if hasattr(screen, "widget") else screen
+            if hasattr(widget, "set_player"):
+                try:
+                    widget.set_player(player)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _open_staff_detail(main_window, staff):
+        """Open staff detail screen with the staff pre-loaded."""
+        main_window.show_screen("staff_detail")
+        screen = main_window._screens.get("staff_detail")
+        if screen:
+            widget = screen.widget() if hasattr(screen, "widget") else screen
+            if hasattr(widget, "set_staff"):
+                try:
+                    widget.set_staff(staff)
+                except Exception:
+                    pass
 
     @staticmethod
     def _add_trade_block(game, player):

@@ -22,6 +22,7 @@ from .systems_common import (user_team, league_of, today_of, tone_color,
                              heat_band, explainer_label, section_title,
                              no_game_label, clear_layout, pos_short,
                              player_name)
+from .systems_common import systems_nav_bar
 
 _COMPOSITE_LABELS = {
     "chance_creation": "Chance creation",
@@ -42,6 +43,7 @@ class SystemsCircumstanceScreen(BaseScreen):
     title = "Circumstance"
 
     def _build_body(self):
+        self._layout.addLayout(systems_nav_bar(self))
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)

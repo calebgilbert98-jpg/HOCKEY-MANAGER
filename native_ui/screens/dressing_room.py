@@ -60,6 +60,8 @@ class DressingRoomScreen(BaseScreen):
         hier_layout.addWidget(hier_note)
         self._hier_table = PlayerTable()
         self._hier_table.set_main_window(self.main_window)
+        self._hier_table.player_clicked.connect(
+            lambda player: self.main_window.show_player(player))
         hier_layout.addWidget(self._hier_table, 1)
         self.tabs.addTab(hier_page, "Hierarchy")
 

@@ -14,6 +14,7 @@ from .base import BaseScreen
 from .systems_common import (user_team, league_of, today_of, tone_color,
                              explainer_label, section_title, no_game_label,
                              clear_layout, pos_short, player_name)
+from .systems_common import systems_nav_bar
 
 
 class SystemsConditionScreen(BaseScreen):
@@ -27,6 +28,7 @@ class SystemsConditionScreen(BaseScreen):
     _TIER_RANK = {"GASSED": 0, "WORN": 1, "GOOD": 2, "FRESH": 3}
 
     def _build_body(self):
+        self._layout.addLayout(systems_nav_bar(self))
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)

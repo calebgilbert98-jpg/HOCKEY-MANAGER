@@ -106,3 +106,27 @@ def clear_layout(layout):
         w = item.widget()
         if w is not None:
             w.deleteLater()
+
+
+def systems_nav_bar(screen):
+    """Nav bar linking all 6 systems screens. Call at top of _build_body."""
+    from PySide6.QtWidgets import QHBoxLayout, QPushButton
+    from PySide6.QtCore import Qt
+    bar = QHBoxLayout()
+    bar.setSpacing(8)
+    screens = [
+        ("Clutch", "systems_clutch"),
+        ("Circumstance", "systems_circumstance"),
+        ("Discipline", "systems_discipline"),
+        ("Rivalry", "systems_rivalry"),
+        ("Deployment", "systems_deployment"),
+        ("Condition", "systems_condition"),
+    ]
+    for label, name in screens:
+        btn = QPushButton(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(
+            lambda _=False, n=name: screen.main_window.show_screen(n))
+        bar.addWidget(btn)
+    bar.addStretch()
+    return bar
