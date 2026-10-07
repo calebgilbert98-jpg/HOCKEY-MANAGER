@@ -4428,6 +4428,4207 @@ NHL League Office""",
             contract_type = 'extension' if extension else 'signing'
             self.media_system.process_signing(person, self.user_team, contract_type, salary, years)
 
+    def _check_season_complete(self):
+            """Check if the regular season is complete by counting games played."""
+            def _gp(stats):
+                # Standings dicts use "W"/"L" keys (some legacy code used "Wins"/"Losses")
+                return (stats.get('W', stats.get('Wins', 0))
+                        + stats.get('L', stats.get('Losses', 0))
+                        + stats.get('OTL', 0))
+            try:
+                # Get target games per team based on season length. Read the
+                # league's persisted slate length first (84 from 2026-27 on);
+                # old saves generated before the attribute existed fall back
+                # to 82, matching their schedules.
+                _lg = getattr(self, 'league', None)
+                target_games = getattr(
+                    _lg, 'season_games_count',
+                    getattr(self, 'season_games_count', 82))
+
+                # Season is complete when every NHL team has played its full slate
+                if self.league.standings:
+                    nhl_names = {t.team_name for t in self.league.teams
+                                 if getattr(t, 'league_name', '') == 'National Hockey League'}
+                    gps = [_gp(stats) for name, stats in self.league.standings.items()
+                           if name in nhl_names]
+                    if gps and min(gps) >= target_games:
+                        return True
+
+                return False
+            except Exception as e:
+                print(f"Error checking season completion: {e}")
+                return False
+                return False
+
+    def _maybe_run_deadline_clock_tick(self):
+            """Advance the deadline clock one 30-minute increment instead of a
+            full day sim. Returns True when a tick ran (the day did NOT advance
+            and callers should return), False to continue the normal sim."""
+            try:
+                from trade_deadline_manager import get_deadline_manager
+                mgr = get_deadline_manager(self.game_manager)
+            except Exception:
+                return False
+            if not mgr.is_deadline_day(self.current_date):
+                return False
+            if not mgr.clock_active(self.current_date):
+                mgr.start_clock(self.current_date)
+                # Tentpole prompt at 9 AM, not 3 PM: the event-day hub asks
+                # once whether to open the Trade Deadline Center. (The normal
+                # maintenance pass that fires it only runs after the clock
+                # expires, which would be too late.)
+                try:
+                    self._check_for_event_day()
+                except Exception as e:
+                    print(f"deadline day event prompt failed (non-fatal): {e}")
+            tick = mgr.advance_clock()
+            # Instant AI answers: any due negotiations resolve right now.
+            try:
+                import trade_negotiation as _tn
+                _tn.process_due_negotiations(self)
+            except Exception as e:
+                print(f"deadline tick negotiation processing failed (non-fatal): {e}")
+            # League-wide dealing for this 30-minute window.
+            try:
+                self._deadline_tick_activity(mgr, tick)
+            except Exception as e:
+                print(f"deadline tick activity failed (non-fatal): {e}")
+            if tick['expired']:
+                # 3 PM: the deadline passes. Lock trading, then let the normal
+                # day flow continue (maintenance, games, date advance).
+                self._close_trade_deadline(mgr)
+                return False
+            # Refresh the dashboard so the countdown + button label update.
+            try:
+                self._refresh_dashboard()
+            except Exception:
+                pass
+            try:
+                dl = self.open_windows.get('trade_deadline')
+                if dl is not None and dl.winfo_exists():
+                    dl.refresh()
+            except Exception:
+                pass
+            return True
+
+    def _maybe_send_cup_recap(self) -> bool:
+            """Send the Stanley Cup awarding recap to the inbox, once.
+
+            Fires the night the bracket crowns a champion: winners, Conn Smythe,
+            the Cup's first two carriers, the heroes, and the coach's victory
+            interview. Flag-guarded on the league (save/load safe)."""
+            try:
+                league = getattr(self, "league", None)
+                bracket = getattr(league, "playoff_bracket", None)
+                champ = getattr(bracket, "stanley_cup_champion", None)
+                if champ is None or league is None:
+                    return False
+                key = f"{getattr(league, 'season_year', '?')}:{getattr(champ, 'team_name', '?')}"
+                if getattr(league, "cup_recap_sent", None) == key:
+                    return False
+                import immortality as _im_recap
+                story = _im_recap.build_cup_recap(champ, bracket, league)
+                if story:
+                    self.news_log.append({'date': self.current_date,
+                                          'story': story})
+                league.cup_recap_sent = key
+                return True
+            except Exception:
+                return False
+
+    def _milestone_postgame(self):
+            """Milestones hit today: ledger event + four-viewpoint headline."""
+            try:
+                import milestones as _ms
+                watches = getattr(self, "_milestone_watches", None) or []
+                self._milestone_watches = []
+                self._milestone_watch_teams = set()
+                if not watches:
+                    return
+                for hit in _ms.check_hits(getattr(self, "league", None), watches):
+                    _ms.record_milestone_hit(self, hit)
+            except Exception:
+                pass
+
+    def _milestone_pregame(self, todays_games):
+            """One milestone scan per day + pre-game presentation.
+
+            Caches the watch list for the post-game check and the set of teams
+            with a tonight-watch (feeds arena_atmosphere's milestone_home flag).
+            Pre-game news when a watch is within 2 -- tonight could be the
+            night. Mid-range chases (3-5 away) get a throttled weekly mention
+            so anticipation builds without spam. Never spams for distant watches.
+            """
+            self._milestone_watches = []
+            self._milestone_watch_teams = set()
+            try:
+                import milestones as _ms
+                from narrative_ledger import active_ledger as _al
+                watches = _ms.scan_watches(getattr(self, "league", None))
+                self._milestone_watches = watches
+                self._milestone_watch_teams = _ms.watch_teams_tonight(watches)
+                if not watches:
+                    return
+                _led = _al()
+                _by_team: dict = {}
+                _mid_range: dict = {}
+                for _w in watches:
+                    if _w["remaining"] <= 2:
+                        _by_team.setdefault(_w["team_name"], []).append(_w)
+                    elif _w["remaining"] <= 5:
+                        _mid_range.setdefault(_w["team_name"], []).append(_w)
+                # Bucket 4: mid-range chase anticipation, throttled to weekly.
+                try:
+                    _today = getattr(self, "current_date", None)
+                    _doy = int(getattr(_today, "timetuple", lambda: None)()
+                               .tm_yday) if _today else 0
+                except Exception:
+                    _doy = 0
+                if _mid_range and _doy % 7 == 0:
+                    for _tn, _ws in _mid_range.items():
+                        try:
+                            _w0 = _ws[0]
+                            self.add_news(_ms.chase_copy(_w0))
+                        except Exception:
+                            continue
+                if not _by_team:
+                    return
+                for game in todays_games or []:
+                    try:
+                        if isinstance(game, dict):
+                            home, away = game.get("home_team"), game.get("away_team")
+                        else:
+                            home, away = game[1], game[2]
+                        hn = getattr(home, "team_name", "")
+                        for _w in _by_team.get(hn, []):
+                            _note = _ms.venue_note(_w, home, away, _led)
+                            _suffix = f" ({_note})" if _note else ""
+                            # Bucket 4: escalating chase copy, not a flat "N away".
+                            _chase = _ms.chase_copy(_w)
+                            self.add_news(f"{_chase}{_suffix}.")
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            # Bucket 4: cross-season chase continuity -- "the chase resumes".
+            try:
+                import milestones as _ms2
+                _ms2.carryover_chases(self)
+            except Exception:
+                pass
+
+    def _mp_after_deadline_tick(self):
+            """Sync clients after an authorized deadline-clock tick.
+
+            No date changes on a tick, so no CONTINUE_DAY -- just the fresh
+            state (trades break on ticks) plus a checkpoint, on the worker
+            thread like the normal end-of-day path.
+            """
+            try:
+                host = self.mp_host
+                label = f"Deadline clock {self.current_date}"
+                cpm = getattr(self, 'checkpoint_manager', None)
+                pre = (lambda: cpm.checkpoint(label)) \
+                    if cpm is not None else None
+                host.broadcast_state_async(label, pre_broadcast=pre)
+            except Exception as e:
+                print(f"Multiplayer tick broadcast failed (non-fatal): {e}")
+
+    def _post_draft_season_beat(self):
+            """Post the monthly draft build-up beat (Jan-Jun), once per month.
+
+            Part 3: season_beats() from draft_stories builds the narrative batch;
+            this hook only delivers it via add_news. Guarded by
+            self._draft_beats_posted {(year, month)} so a month never posts twice
+            (e.g. after a save/load). Also flushes league.rights_news, the
+            rights-lifecycle messages game_classes collects, posting and clearing
+            each string. Every path is wrapped so a missing inbox/news path or
+            missing attrs never crash the daily tick.
+            """
+            try:
+                month = getattr(self.current_date, "month", 0)
+                year = getattr(self.current_date, "year", 0)
+                if month not in (1, 2, 3, 4, 5, 6):
+                    return
+                posted = getattr(self, "_draft_beats_posted", None)
+                if posted is None:
+                    posted = set()
+                    self._draft_beats_posted = posted
+                key = (year, month)
+                if key in posted:
+                    return
+                league = getattr(self, "league", None)
+                prospects = list(getattr(league, "draft_prospects", None) or [])
+                if not prospects:
+                    return
+                from draft_stories import season_beats
+                for _beat in (season_beats(prospects, year, month) or []):
+                    try:
+                        self.add_news(
+                            "%s — %s" % (_beat.get('title', 'Draft'),
+                                         _beat.get('text', '')))
+                    except Exception:
+                        pass
+                posted.add(key)
+            except Exception:
+                pass
+            # Rights-lifecycle flush: post + clear any collected messages.
+            try:
+                _league = getattr(self, "league", None)
+                _msgs = list(getattr(_league, "rights_news", None) or [])
+                for _m in _msgs:
+                    try:
+                        self.add_news(str(_m))
+                    except Exception:
+                        pass
+                try:
+                    _live = getattr(_league, "rights_news", None)
+                    if _live is not None:
+                        del _live[:]
+                except Exception:
+                    pass
+                # Prospect junior/college award headlines (same pattern).
+                try:
+                    _pmsgs = list(getattr(_league, "prospect_awards_news", None)
+                                  or [])
+                    for _m in _pmsgs:
+                        try:
+                            self.add_news("🏆 " + str(_m))
+                        except Exception:
+                            pass
+                    _plive = getattr(_league, "prospect_awards_news", None)
+                    if _plive is not None:
+                        del _plive[:]
+                except Exception:
+                    pass
+                # Rivalry-review verdicts from end_of_season (same pattern).
+                try:
+                    _rmsgs = list(getattr(_league, "rivalry_review_news", None)
+                                  or [])
+                    for _m in _rmsgs:
+                        try:
+                            self.add_news("⚔️ " + str(_m))
+                        except Exception:
+                            pass
+                    _rlive = getattr(_league, "rivalry_review_news", None)
+                    if _rlive is not None:
+                        del _rlive[:]
+                except Exception:
+                    pass
+                # Staff breakthrough headlines (same pattern).
+                try:
+                    _bmsgs = list(getattr(_league, "staff_breakthrough_news",
+                                          None) or [])
+                    for _m in _bmsgs:
+                        try:
+                            self.add_news("📈 " + str(_m))
+                        except Exception:
+                            pass
+                    _blive = getattr(_league, "staff_breakthrough_news", None)
+                    if _blive is not None:
+                        del _blive[:]
+                except Exception:
+                    pass
+                # ELC slide headlines (same pattern).
+                try:
+                    _smsgs = list(getattr(_league, "elc_slide_news", None) or [])
+                    for _m in _smsgs:
+                        try:
+                            self.add_news("📝 " + str(_m))
+                        except Exception:
+                            pass
+                    _slive = getattr(_league, "elc_slide_news", None)
+                    if _slive is not None:
+                        del _slive[:]
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+    def _process_daily_maintenance(self):
+            """Process daily maintenance tasks with performance optimizations"""
+            # Only run heavy tasks on specific days to reduce CPU load
+
+            # UFA consideration period (Muck 2026-10-02): tick open bidding
+            # windows -- AI clubs add competing offers, expired windows resolve
+            # with the player signing the most appealing bid. Guarded: never
+            # breaks day advancement.
+            try:
+                import ufa_consideration as _uc
+                _uc.tick_ufa_considerations(self, getattr(self, "league", None))
+            except Exception:
+                pass
+
+            # Eastside-style auto fillers (user side): release fill-ins no
+            # longer needed and auto-summon any dressed-lineup shortfall, so
+            # the user can always ice a team exactly like AI clubs. Guarded:
+            # a roster_limits bug can never break day advancement.
+            try:
+                import roster_limits as _rl
+                _utm = getattr(self, "user_team", None)
+                if _utm is not None:
+                    _rl.user_roster_compliance(_utm)
+            except Exception:
+                pass
+
+            # Narrative ledger clock: one cheap setup per day. Drives callback
+            # cooldowns; season rollover prunes old low-weight events once.
+            try:
+                from narrative_ledger import get_ledger
+                _led = get_ledger(self)
+                _sy = getattr(getattr(self, "league", None), "season_year", None)
+                _day = 0
+                try:
+                    _season_start = date(_sy, 10, 1) if _sy else None
+                    if _season_start is not None and \
+                            self.current_date >= _season_start:
+                        _day = (self.current_date - _season_start).days
+                except Exception:
+                    pass
+                if _sy is not None and _led.season != _sy:
+                    _led.advance_season(_sy)
+                else:
+                    _led.set_clock(_sy, _day)
+            except Exception:
+                pass
+
+            # Practice fatigue recovery (P1): practice sessions accrue fatigue
+            # on the shared player histories, but recover_fatigue had no live
+            # callers -- fatigue was permanent, so the grind gate never
+            # reopened. Recover daily at the engine's own tuned rate (2/day)
+            # so rest days actually rest. Only histories with fatigue > 0 are
+            # visited, so this stays cheap league-wide.
+            try:
+                import enhanced_practice_system as _eps
+                _ph = getattr(_eps, "_SHARED_PLAYER_HISTORIES", None) or {}
+                if _ph:
+                    _peng = _eps.PracticeEngine()
+                    for _pid, _hist in list(_ph.items()):
+                        try:
+                            if getattr(_hist, "current_fatigue", 0) > 0:
+                                _peng.recover_fatigue(_pid, days=1)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+            # R1 (roster limits): Dec-1 RFA ineligibility stamping + emergency
+            # filler auto-release, league-wide. Guarded: never breaks the day.
+            try:
+                import roster_limits as _rl
+                _rl.daily_roster_tick(self)
+            except Exception:
+                pass
+
+            # Event-day hubs: prompt once per year when a tentpole day arrives.
+            # (Entry draft is handled daily inside _check_for_event_day; it must
+            # NOT be Monday-gated since June 23-25 often contains no Monday.)
+            self._check_for_event_day()
+
+            # Process trade block offers (once per week) - unchanged
+            if self.current_date.weekday() == 0:  # Monday
+                self.process_trade_block_offers()
+            # Scout value tips: once a month (1st), not weekly -- tips should
+            # feel like real pro-scouting work, not a daily cheat sheet.
+            if self.current_date.day == 1:
+                self._dispatch_scout_value_tips()
+                # Wave 1 monthly settlement:
+                # - Grade old ledger tips against what happened (scout records).
+                # - Steal/sell watches: only post-trade production validates a
+                #   scout's tip. The tip alone never pays off -- the breakout
+                #   (or the collapse) does. Validated events publish news.
+                # - Market ecology: philosophy drift + leadership-change regress.
+                try:
+                    import reputation_system as _rs
+                    import analytics_scouting as _as
+                    _teams = list(self.league.teams)
+                    _date_str = str(self.current_date)
+                    _as.grade_tip_ledger(_teams, _date_str)
+                    _as.tick_analytics_philosophy(self.league)
+                    for _t in _teams:
+                        for _ev in _rs.check_steal_watch(_t, self.league,
+                                                         _date_str):
+                            _news = _ev.get("news")
+                            if _news:
+                                try:
+                                    self.add_news(_news)
+                                except Exception:
+                                    pass
+                        for _ev in _rs.check_sell_watch(_t, _teams,
+                                                        self.league,
+                                                        _date_str):
+                            _news = _ev.get("news")
+                            if _news:
+                                try:
+                                    self.add_news(_news)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                # AI arms race: clubs evaluate, renew and poach scouting staff
+                # twice a season. Reads improve only when the people improve.
+                if self.current_date.month in (1, 7):
+                    try:
+                        import analytics_scouting as _as2
+                        _as2.ai_scout_staff_review(
+                            self.league, str(self.current_date))
+                    except Exception:
+                        pass
+            # Analytics storylines: mid-month (15th), season-aware, deduped,
+            # significance-gated. The press reads the same numbers the
+            # analytics department does -- but only the loud ones.
+            if self.current_date.day == 15:
+                try:
+                    import analytics_scouting as _as
+                    _players = []
+                    for _t in self.league.teams:
+                        _players.extend(getattr(_t, "roster", []) or [])
+                    _as.publish_analytics_storylines(
+                        getattr(self, "media_system", None),
+                        _players, list(self.league.teams),
+                        game_manager=self, limit=3)
+                except Exception:
+                    pass
+
+            # Process scouting assignments - optimized to run every 3 days instead of daily
+            if self.current_date.day % 3 == 0:  # Every 3 days
+                self.process_scouting_assignments()
+                try:
+                    import scouting as scouting_mod
+                    scouting_mod.process_regional_scouting(self.game_manager
+                                                           if hasattr(self, 'game_manager') else self)
+                except Exception:
+                    pass
+                try:
+                    import scouting as _scouting_pro
+                    _scouting_pro.process_pro_scouting(self.game_manager
+                                                       if hasattr(self, 'game_manager') else self)
+                except Exception:
+                    pass
+
+            # Process waivers - reduced frequency
+            # Waiver clock: exactly 2 calendar days on the wire, as the UI
+            # promises. The clock ticks every day; claim *processing* still
+            # runs Monday/Thursday only.
+            for _wp in list(self.waiver_list):
+                try:
+                    if _wp.on_waivers and _wp.waiver_days > 0:
+                        _wp.waiver_days -= 1
+                except Exception:
+                    pass
+            if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
+                self.process_waivers()
+
+            # Training camp (EHM-style): Sep 12-30, scrimmages every 3rd day
+            # from the 15th, camp report + development bumps at close. Runs
+            # ahead of the early-October camp cuts so the AI cuts by camp
+            # ratings (waiver_logic reads player.camp_avg).
+            try:
+                import training_camp as _tc
+                _tc.run_camp_day(self.league, self.current_date, app=self,
+                                 rng=getattr(self, "_rng", None))
+            except Exception:
+                debug_print("Training camp failed (non-fatal):")
+                import traceback
+                traceback.print_exc()
+
+            # AI waiver management (BUG-019): cap casualties, AHL shuttle,
+            # and early-October camp cuts. Runs Mondays after claim
+            # processing; fresh placements enter the wire with a 2-day clock
+            # so there are no same-day claims. Never touches the user's club.
+            if self.current_date.weekday() == 0:  # Monday only
+                try:
+                    import waiver_logic as _wl
+                    _mdate = self.current_date
+                    _camp = (_mdate.month == 10 and _mdate.day <= 7 and int(
+                        getattr(self.league, "_waiver_camp_year", 0) or 0)
+                        != _mdate.year)
+                    if _camp:
+                        try:
+                            self.league._waiver_camp_year = _mdate.year
+                        except Exception:
+                            pass
+                    _wl.process_ai_waivers(
+                        self.league, app=self,
+                        rng=getattr(self, "_rng", None), camp_cuts=_camp)
+                except Exception:
+                    debug_print("AI waivers failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+
+            # Generate daily emails - optimized
+            if self.current_date.weekday() == 0:  # Weekly summary instead of daily
+                self._generate_weekly_email_summary()
+
+            # Run Phase 2 optimizations less frequently
+            if self.current_date.weekday() == 6:  # Sunday only
+                self._run_phase2_maintenance()
+
+            # Process player development weekly (during off days or end of week)
+            if self.current_date.weekday() == 6:  # Sunday - weekly development processing
+                self._process_player_development()
+                self._process_training_programs()
+                self._process_room_politics_weekly()
+
+            # FM-style career systems: board, happiness, youth, press (cheap daily)
+            self._process_career_daily()
+
+            # AHL farm stat lines: no AHL game sim exists, so the minors get a
+            # lightweight generated ledger (ahl_system) -- just enough for the
+            # AHL Stats screen to show who's cooking. AHL regular season only
+            # (Oct 1 - Apr 20); never during the NHL playoffs.
+            try:
+                import ahl_system as _ahl
+                _sy = getattr(getattr(self, "league", None), "season_year", None)
+                _in_window = True
+                try:
+                    from datetime import date as _d
+                    if _sy is not None:
+                        _in_window = (_d(_sy, 10, 1) <= self.current_date
+                                      <= _d(_sy + 1, 4, 20))
+                except Exception:
+                    pass
+                _bracket = getattr(getattr(self, "league", None),
+                                   "playoff_bracket", None)
+                _playoffs_live = bool(
+                    _bracket is not None
+                    and getattr(_bracket, "stanley_cup_champion", None) is None
+                    and getattr(_bracket, "playoff_series", None))
+                if _in_window and not _playoffs_live:
+                    # D41 Phase 2: the AHL is a real scheduled league now. When
+                    # a Phase 2 schedule is live for this season, per-player
+                    # stat lines are logged per scheduled game (truthful GP --
+                    # a player can never exceed his club's GP); the daily
+                    # probability ledger then only covers farm lists with no
+                    # AHL club. When it isn't (generation failure, <2 AHL
+                    # clubs), keep the old daily ledger plus Phase 1's
+                    # abstract standings day as the fallback.
+                    try:
+                        import ahl_league as _ahl2
+                        if _ahl2.ahl_schedule_active(self.league):
+                            _ahl2.simulate_ahl_scheduled_day(
+                                self.league, self.current_date)
+                            _ahl.simulate_ahl_day(self.league,
+                                                  only_unscheduled=True)
+                        else:
+                            _ahl.simulate_ahl_day(self.league)
+                            _ahl.simulate_ahl_standings_day(self.league)
+                    except Exception:
+                        try:
+                            _ahl.simulate_ahl_standings_day(self.league)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            # D41 Phase 2 backstop: the Calder Cup must fire even if the NHL
+            # playoffs gate swallowed the last AHL-window day. Instant (a few
+            # dozen ultra-fast games), once per season, never raises.
+            try:
+                import ahl_league as _ahl2b
+                _ahl2b.maybe_run_calder_cup(self.league, self.current_date)
+            except Exception:
+                pass
+            # AHL UI story ecosystem: Calder Cup races, prospect watch,
+            # Cinderella runs -- wired into the shared headline system.
+            try:
+                import ahl_narratives as _ahln
+                _ahln.maybe_fire_ahl_narratives(self, self.league,
+                                                self.current_date)
+            except Exception:
+                pass
+
+    def _process_todays_games(self, todays_games):
+            """Process all games scheduled for today - OPTIMIZED"""
+            user_team = getattr(self, 'user_team', None)
+
+            # Quick user team games identification with optimized logic
+            user_team_games = []
+            other_games = []
+
+            # Cache user team name for faster comparison
+            user_team_name = user_team.team_name if user_team else None
+
+            for game in todays_games:
+                try:
+                    # All games should now be in dictionary format due to standardization above
+                    if isinstance(game, dict):
+                        home_team = game.get('home_team')
+                        away_team = game.get('away_team')
+                    # Legacy tuple format handling (should be rare now)
+                    elif isinstance(game, tuple) and len(game) >= 3:
+                        game_date, home_team, away_team = game[:3]
+                    else:
+                        continue  # Skip unknown formats silently
+
+                    # Optimized user team detection
+                    is_user_team_game = False
+                    if user_team_name and home_team and away_team:
+                        # Fast string comparison first
+                        if (hasattr(home_team, 'team_name') and home_team.team_name == user_team_name) or \
+                           (hasattr(away_team, 'team_name') and away_team.team_name == user_team_name):
+                            is_user_team_game = True
+                        # Fallback to object comparison
+                        elif home_team == user_team or away_team == user_team:
+                            is_user_team_game = True
+
+                    if is_user_team_game:
+                        user_team_games.append(game)
+                    else:
+                        other_games.append(game)
+
+                except (ValueError, AttributeError, TypeError) as e:
+                    print(f"⚠️ Error processing game {game}: {e}")
+                    continue
+
+            # Process user team games individually with potential game viewer
+            for game in user_team_games:
+                try:
+                    if isinstance(game, tuple) and len(game) >= 3:
+                        game_date, home_team, away_team = game[0], game[1], game[2]
+                    elif isinstance(game, dict) and all(key in game for key in ['date', 'home_team', 'away_team']):
+                        game_date, home_team, away_team = game['date'], game['home_team'], game['away_team']
+                        # Web visualizer already simmed this game: the result is
+                        # recorded and stats are updated. Skip re-simming to avoid
+                        # double-counting.
+                        if game.get('watched'):
+                            continue
+                    else:
+                        continue  # Skip malformed games silently
+                except (IndexError, KeyError, ValueError):
+                    continue  # Skip errors silently
+
+                # Preseason exhibitions: quick-simmed quietly -- no viewer, no
+                # team talk, no lore, no board/morale, no stats, no standings.
+                is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
+
+                # How should this user game be presented? Quick sim, watch live,
+                # or ask the GM each game day. Never ask during bulk sims.
+                # When the game-day inbox bundle resolved the choice, its stored
+                # answers (presser, team talk boost, watch/quick) are used --
+                # no modal popups.
+                settings = self.get_settings()
+                mode = self._get_user_game_mode()
+                _bundle_res = getattr(self, '_game_day_resolution', None)
+                _bundle_active = (_bundle_res is not None
+                                  and _bundle_res.get("date") == self.current_date)
+                _bundle_instruction = None  # D1: only the bundle carries one
+                if _bundle_active:
+                    # Web UI (Batch A, 2026-10-05): a web-set resolution is
+                    # consumed by the /watch page, never by the desktop Tk
+                    # PBP viewer -- opening it server-side would hang the day
+                    # advance on a window nobody can see. Degrade to quick sim;
+                    # the bundle's talk boost and instruction still apply.
+                    if _bundle_res.get("web"):
+                        use_game_viewer = False
+                    else:
+                        use_game_viewer = bool(_bundle_res.get("watch"))
+                    _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
+                    # D1: the user's explicit coach instruction from the bundle.
+                    _bundle_instruction = _bundle_res.get("instruction")
+                    self._game_day_resolution = None  # consume once
+                elif getattr(self, '_bulk_simming', False):
+                    use_game_viewer = False
+                elif mode == 'watch':
+                    use_game_viewer = True
+                elif mode == 'ask':
+                    # Hide the loading toast before the Watch/Quick choice:
+                    # the sim is paused on the user now, and the toast must
+                    # never cover or block the Game Day dialog (Muck
+                    # 2026-10-02). Overlay-only -- the Continue button stays
+                    # disabled until the day finishes.
+                    try:
+                        self._update_day_sim_overlay(False)
+                    except Exception:
+                        pass
+                    use_game_viewer = self._ask_game_mode_dialog(home_team, away_team) == 'watch'
+                    if not use_game_viewer:
+                        # Quick Sim picked: re-show the toast for the rest of
+                        # the day. (Watch Live opens the visualizer, which
+                        # owns the UI from here.)
+                        try:
+                            self._update_day_sim_overlay(True, "Simulating games...")
+                        except Exception:
+                            pass
+                else:
+                    use_game_viewer = False
+                if is_preseason:
+                    # September hockey is never appointment viewing.
+                    use_game_viewer = False
+
+                # Legacy events: Winter Classic / Stadium Series. The stamp rides
+                # on the schedule entry; read it before the sim branches so both
+                # Watch Live and quick sim get the billing + crowd bump.
+                _outdoor_info = None
+                try:
+                    import outdoor_games as _ogm
+                    _outdoor_info = _ogm.outdoor_info_for(game)
+                    if _outdoor_info is not None:
+                        self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                     away_team)
+                except Exception:
+                    _outdoor_info = None
+
+                if use_game_viewer:
+                    # Modern visual play-by-play (rink + live player bubbles).
+                    # Modal: returns the standard 6-tuple once watched to the end.
+                    result = self._simulate_game_with_pbp_visual(
+                        home_team, away_team, outdoor=_outdoor_info,
+                        coach_instruction=_bundle_instruction)
+                    winner, loser, scores, events, notable_events, sim_engine = result
+                    # GameSim already updated player season stats itself; the
+                    # event-based stat pass below must be skipped to avoid
+                    # double counting.
+                    stats_from_events = False
+                    # Narrative: GameSim modeled incidents live; record the
+                    # night's stories (hat tricks, shutouts, steals) -- the
+                    # visualizer's story_worthy() never reached the ledger.
+                    # (Quick-sim games get this via the call below with
+                    # roll_incidents=True; one call per game only.)
+                    try:
+                        _nwent_ot = any(
+                            isinstance(_e, dict) and _e.get('period', 0) > 3
+                            for _e in (notable_events or []))
+                        self._narrative_postgame(
+                            sim_engine, home_team, away_team, scores,
+                            went_ot=_nwent_ot, roll_incidents=False,
+                            deliver_headlines=True, game_date=game_date)
+                    except Exception:
+                        pass
+                else:
+                    # FM-style pre-match team talk (interactive, skipped in bulk sim)
+                    opponent = away_team if home_team == self.user_team else home_team
+                    if _bundle_active:
+                        talk_boost = _bundle_talk_boost
+                    elif is_preseason:
+                        talk_boost = 1.0  # no dressing-room speeches in September
+                    else:
+                        talk_boost = self._career_team_talk(opponent)
+                        if talk_boost is None:
+                            # Save/load landed mid-talk (epoch guard): the
+                            # pre-load day sim is stale. Abort this game --
+                            # simulate_day bails before post-day processing
+                            # touches orphaned objects. The parked talk
+                            # survives in its session and re-presents on the
+                            # next Continue.
+                            self._abort_day_sim = True
+                            return
+                    # Adaptive Rivals: AI scouts the user (quick sim)
+                    _qs_adapted = None
+                    _qs_plan = []
+                    try:
+                        from adaptive_rivals import adapt_for_opponent
+                        if opponent != self.user_team:
+                            _qs_plan = adapt_for_opponent(
+                                opponent, self.user_team,
+                                getattr(self, 'game_results', []))
+                            _qs_adapted = opponent
+                    except Exception:
+                        pass
+                    # Standard full simulation for user games
+                    # Standard full simulation for user games
+                    # Narrative ledger: grudge-week presentation. (Skipped for
+                    # preseason -- exhibitions build no lore.)
+                    if not is_preseason:
+                        # Narrative ledger: grudge-week presentation. One dict lookup
+                        # per game; the inbox card only fires for the user's games or
+                        # genuine league-wide feuds (weight >= 60) so it never spams.
+                        try:
+                            from narrative_ledger import (get_ledger, interpret,
+                                                          incident_short)
+                            from headlines import deliver_spec as _deliver_spec
+                            _led = get_ledger(self)
+                            _cand = _led.callback_candidate(home_team.team_name,
+                                                            away_team.team_name)
+                            if _cand is not None:
+                                _uname = getattr(getattr(self, "user_team", None),
+                                                 "team_name", "")
+                                _uinvolved = _uname in (home_team.team_name,
+                                                        away_team.team_name)
+                                if _uinvolved or _cand.get("weight", 0) >= 60:
+                                    _facts = _cand.get("facts") or {}
+                                    _home = home_team.team_name
+                                    _spec = {
+                                        "kind": "grudge_callback",
+                                        "home": _home,
+                                        "away": away_team.team_name,
+                                        "short": incident_short(_facts),
+                                        "first_meeting": not _cand.get("ref_count"),
+                                        "room_line":
+                                            interpret(_cand, "room", _home) or "",
+                                        "fans_line":
+                                            interpret(_cand, "fans", _home) or "",
+                                        "media_line":
+                                            interpret(_cand, "media", _home) or "",
+                                        "league_line":
+                                            interpret(_cand, "league", _home) or "",
+                                        "involved": (home_team.team_name,
+                                                     away_team.team_name),
+                                    }
+                                    if _deliver_spec(self, _spec):
+                                        _led.mark_referenced(_cand["id"])
+                        except Exception:
+                            pass
+                        self._grudge_week_market(game_date, home_team, away_team)
+                    # Unified engine 2026-10-04: GameSim replaces AdvancedGameSim
+                    from simulation import GameSim
+                    sim_engine = GameSim(
+                        home_team, away_team,
+                        atmosphere=_pregame_atmosphere(
+                            home_team, away_team,
+                            league=getattr(self, "league", None),
+                            milestone_home=home_team.team_name in
+                            getattr(self, "_milestone_watch_teams", set()),
+                            ceremony=bool(getattr(home_team, "_pending_ceremony",
+                                                  None)),
+                            outdoor=_outdoor_info is not None),
+                        league=getattr(self, "league", None),
+                        # High-fidelity (2026-10-04): user's team games sim at
+                        # 1-second ticks (visualizer fidelity). Other games use
+                        # coarse ticks for speed. Same engine, same outcomes.
+                        high_fidelity=bool(
+                            getattr(home_team, "is_user_team", False) or
+                            getattr(away_team, "is_user_team", False)))
+                    if talk_boost != 1.0 and self.user_team is not None:
+                        sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                    # D1: the user's explicit coach instruction from the
+                    # game-day bundle -- uniform channel, inert on the quick
+                    # path (no hit classifier), but accepted for parity.
+                    # "none" is the explicit no-instruction call: nothing to set.
+                    if (_bundle_instruction and _bundle_instruction != "none"
+                            and self.user_team is not None):
+                        try:
+                            sim_engine.set_coach_instruction(
+                                self.user_team.team_name, _bundle_instruction)
+                        except Exception:
+                            pass
+                    # Pregame ceremony (if one is queued): electric building via
+                    # the atmosphere flag above, plus the room's one-game bump.
+                    try:
+                        import immortality as _im2
+                        _im2.consume_ceremony(self, home_team, sim_engine)
+                    except Exception:
+                        pass
+                    winner, loser, scores, events, notable_events = sim_engine.run()
+                    # Career service time (waiver-exemption input). Preseason
+                    # exhibitions don't count toward the 160-game threshold.
+                    try:
+                        self._credit_nhl_games_played(home_team, away_team,
+                                                      preseason=is_preseason)
+                    except Exception:
+                        pass
+                    # Narrative: the quick-sim never modeled fights/brawls, so
+                    # roll them post-game through the shared incident module
+                    # (same dice GameSim uses live); record the night's stories
+                    # for both engines. Headlines for the user's game only.
+                    # Skipped for preseason -- exhibitions build no lore.
+                    if not is_preseason:
+                        try:
+                            _nwent_ot = any(
+                                isinstance(_e, dict) and _e.get('period', 0) > 3
+                                for _e in (notable_events or []))
+                            _nshootout = any(
+                                isinstance(_e, dict) and _e.get('event') == 'Shootout Goal'
+                                for _e in (notable_events or []))
+                            self._narrative_postgame(
+                                sim_engine, home_team, away_team, scores,
+                                went_ot=_nwent_ot, shootout=_nshootout,
+                                roll_incidents=True, deliver_headlines=True,
+                                game_date=game_date)
+                        except Exception:
+                            pass
+                    # Revert AI tactics + file tactical intel on the user's systems
+                    if _qs_adapted is not None:
+                        try:
+                            from adaptive_rivals import revert_adaptation
+                            revert_adaptation(_qs_adapted, _qs_plan)
+                        except Exception:
+                            pass
+                        try:
+                            import tactics as _tx
+                            _uname = self.user_team.team_name
+                            _user_home = home_team == self.user_team
+                            _ugoals = scores[0] if _user_home else scores[1]
+                            _agoals = scores[1] if _user_home else scores[0]
+                            _ushots = sum(
+                                _ps.get('shots', 0)
+                                for _ps in (sim_engine.stats.get(_uname, {})
+                                            or {}).values()
+                                if isinstance(_ps, dict))
+                            _tx.record_tactical_intel(_qs_adapted, self.user_team,
+                                                      _ugoals, _agoals,
+                                                      _ushots or None, None)
+                        except Exception:
+                            pass
+                    # AdvancedGameSim does not touch player season stats --
+                    # except in preseason, where nobody's stats count.
+                    stats_from_events = not is_preseason
+
+                # Update league standings and store game result for user team games
+                # (preseason: stored for viewing, standings untouched).
+                self._process_single_game_result(game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
+                                                 stats_from_events=stats_from_events,
+                                                 preseason=is_preseason)
+                # Lore: deliver headlines from the watched game (line brawl, ...).
+                # Preseason: no lore, no media circus, no board/morale fallout.
+                if not is_preseason:
+                    try:
+                        import headlines
+                        headlines.drain_sim_headlines(self, sim_engine)
+                    except Exception:
+                        pass
+                # Legacy events: permanent season memory for outdoor games.
+                if locals().get("_outdoor_info") is not None:
+                    try:
+                        import outdoor_games as _ogr
+                        _ogr.record_outdoor_result(self, _outdoor_info,
+                                                   scores[0], scores[1])
+                    except Exception:
+                        pass
+                # Media engine: post-game interviews, narratives, fines, beefs.
+                # (Not for preseason -- September hockey gets box scores only.)
+                # went_ot is computed up here (it used to be read before
+                # assignment and only survived inside the try/except).
+                went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
+                if not is_preseason:
+                    try:
+                        import media_engine
+                        _mev = media_engine.cover_game(
+                            getattr(self, 'league', None), home_team, away_team,
+                            winner, loser, scores, went_ot, game_date)
+                        media_engine.route_events(self, _mev, game_date)
+                    except Exception:
+                        pass
+                # FM-style: board, profile, morale, post-match presser.
+                # (Not for preseason -- the board doesn't judge exhibitions.)
+                if not is_preseason:
+                    self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
+
+            # Process other games using batch processing
+            if other_games:
+                self._simulate_games_batch(other_games)
+
+    def _rivalry_pregame(self, todays_games):
+            """Pregame rivalry hype for the user's games.
+
+            Narrative ignition (Muck 2026-10-02): rivalry heat was visible in the
+            calendar but never reached the user before puck drop. Now high-heat
+            rivalry games involving the user's team get a pregame headline.
+            Never raises.
+            """
+            try:
+                from narrative_ledger import matchup_narrative as _mn
+                from headlines import deliver_spec as _deliver_spec
+                user_team = getattr(self, "user_team", None)
+                if user_team is None:
+                    return
+                user_name = getattr(user_team, "team_name", "")
+                league = getattr(self, "league", None)
+                for game in todays_games or []:
+                    try:
+                        if isinstance(game, dict):
+                            home, away = game.get("home_team"), game.get("away_team")
+                        else:
+                            home, away = game[1], game[2]
+                        hn = getattr(home, "team_name", "")
+                        an = getattr(away, "team_name", "")
+                        if user_name not in (hn, an):
+                            continue
+                        narr = _mn(home, away, league=league) or {}
+                        heat = float(narr.get("rivalry_heat", 0) or 0)
+                        if heat < 50:
+                            continue
+                        tags = narr.get("hype_tags", []) or []
+                        tag_str = f" ({', '.join(tags)})" if tags else ""
+                        _deliver_spec(self, {
+                            "kind": "rivalry_pregame",
+                            "text": f"Bad blood tonight: {away} at {home}. "
+                                    f"The rivalry is at a boil{tag_str}.",
+                            "home": hn, "away": an,
+                            "involved": (hn, an),
+                        })
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+    def _simulate_playoff_day(self):
+            """Advance one playoff day through the date-driven path.
+
+            Sims today's scheduled playoff games via the bracket
+            (exactly-once: entries the bracket controls already played are
+            skipped), advances finished rounds, and crowns the champion.
+            No regular-season machinery (maintenance, AI decisions, the
+            game-day bundle) runs during the tournament -- the bracket owns
+            those weeks, and both playoff paths stay equivalent.
+            """
+            try:
+                self._set_continue_feedback(True, "Simulating playoff games...")
+            except Exception:
+                pass
+            try:
+                league = getattr(self, 'league', None)
+                bracket = getattr(league, 'playoff_bracket', None)
+                if bracket is None:
+                    return
+                # Restored brackets lose their app pointer on save/load --
+                # re-point it so stars/ledger read the right date.
+                if getattr(bracket, 'app', None) is None:
+                    try:
+                        bracket.app = self
+                    except Exception:
+                        pass
+                today = getattr(self, 'current_date', None)
+                # Normalize today to a date for comparison (save/load can leave
+                # datetime vs date mismatches that silently skip all games).
+                try:
+                    from datetime import date as _date, datetime as _dt
+                    if isinstance(today, _dt):
+                        today = today.date()
+                except Exception:
+                    pass
+                for entry in list(getattr(league, 'schedule', None) or []):
+                    if not isinstance(entry, dict) or not entry.get('playoff'):
+                        continue
+                    try:
+                        _ed = entry.get('date')
+                        if isinstance(_ed, _dt):
+                            _ed = _ed.date()
+                        # String fallback: parse ISO format.
+                        if isinstance(_ed, str):
+                            try:
+                                _ed = _dt.fromisoformat(_ed).date()
+                            except Exception:
+                                continue
+                        if _ed != today:
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        bracket.try_play_scheduled_game(
+                            entry.get('series_id'), entry.get('series_game'))
+                    except Exception:
+                        continue
+                # A finished round publishes the next one (dynamic start:
+                # REST_DAYS after the last completed series). Idempotent --
+                # safe if the bracket window already advanced it. Only try
+                # when every series in the current round is actually done,
+                # so incomplete days stay quiet.
+                try:
+                    _cur = getattr(bracket, 'current_round', '')
+                    _series = (getattr(bracket, 'playoff_series', {})
+                               or {}).get(_cur) or []
+                    if _series and all(
+                            getattr(s, 'is_complete', False) for s in _series):
+                        bracket.advance_to_next_round(_cur)
+                except Exception:
+                    pass
+                # Champion crowned -> Cup recap, then the offseason. The Cup
+                # is never skipped: no offseason before a champion.
+                if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                    try:
+                        self._maybe_send_cup_recap()
+                    except Exception:
+                        pass
+                    try:
+                        self._start_offseason()
+                    except Exception:
+                        pass
+                    return
+                try:
+                    self.current_date += timedelta(days=1)
+                except Exception:
+                    pass
+                try:
+                    self.game_manager.current_date = self.current_date
+                except Exception:
+                    pass
+                # Narrative ignition (Muck 2026-10-02): deliver the day's
+                # "Around the League" digest -- the top AI-game stories the
+                # user didn't see live.
+                try:
+                    import league_digest as _ld
+                    _ld.deliver_digest(self)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'dashboard') and hasattr(
+                            self.dashboard, 'refresh_dashboard'):
+                        self.dashboard.refresh_dashboard()
+                except Exception:
+                    pass
+                try:
+                    self.after_idle(self.update_all_views)
+                except Exception:
+                    pass
+            finally:
+                try:
+                    self._set_continue_feedback(False)
+                except Exception:
+                    pass
+
+    def _trim_history_logs(self):
+            """Bound game_results/news_log so saves and scans stay O(season)."""
+            if len(self.game_results) > \
+                    self.RESULTS_HISTORY_CAP + self.RESULTS_TRIM_BATCH:
+                del self.game_results[:self.RESULTS_TRIM_BATCH]
+                self._rebuild_result_index()
+            if len(self.news_log) > self.NEWS_HISTORY_CAP + self.NEWS_TRIM_BATCH:
+                del self.news_log[:self.NEWS_TRIM_BATCH]
+
+    def _playoffs_in_progress(self) -> bool:
+        """True while a generated bracket is alive and uncrowned.
+
+        The regular season is complete AND league.playoff_bracket holds
+        a real (non-projection) bracket with no champion yet. Mid-season
+        projections never reach league.playoff_bracket, and the
+        season-complete check excludes them anyway.
+
+        SAVE/LOAD ROBUSTNESS (Chris 2026-10-04, priority): after restoring
+        a mid-playoff save, the season-complete check can fail (standings
+        wiped, game-count mismatch) even though a live bracket exists. If
+        the bracket is real, uncrowned, and has actual series in it, the
+        playoffs are in progress -- period. This prevents the 420-day
+        limbo where the date advances with no games simmed and no champion.
+        """
+        try:
+            league = getattr(self, 'league', None)
+            bracket = getattr(league, 'playoff_bracket', None)
+            if bracket is None \
+                    or bool(getattr(bracket, 'is_projection', False)):
+                return False
+            if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                return False
+            # A live bracket with real series = playoffs in progress,
+            # even if the season-complete check fails post-restore.
+            try:
+                _series = getattr(bracket, 'playoff_series', None) or {}
+                _has_series = any(
+                    _series.get(r) for r in (
+                        'wild_card', 'division_semifinals', 'division_finals',
+                        'conference_finals', 'stanley_cup_final'))
+                if _has_series:
+                    return True
+            except Exception:
+                pass
+            # Fallback: the original season-complete gate.
+            if not self._check_season_complete():
+                return False
+            return True
+        except Exception:
+            return False
+
+    def end_of_season(self):
+        """Handle end of regular season with awards and transition options."""
+        # SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005): audit the
+        # season slate BEFORE anything else -- before the once-per-season
+        # guard below. If any NHL club is short of its scheduled games the
+        # handler stops loudly (raise in headless/bulk, day-blocker in GUI)
+        # and we bail here, so a short season can never slide silently into
+        # awards, playoffs or the offseason.
+        _slate_short = self._audit_season_slate()
+        if _slate_short:
+            self._handle_slate_shortfall(_slate_short)
+            return
+        # Guard: the season-end flow must only fire ONCE per season. Without
+        # this, every Continue press after the playoffs start re-shows the
+        # season summary / playoff prompt, and there is no path from a
+        # completed playoff bracket to the offseason (soft-lock).
+        season_year = getattr(getattr(self, 'league', None), 'season_year', None)
+        if getattr(self, '_season_end_handled_year', None) == season_year:
+            if self._playoffs_complete():
+                self._start_offseason()
+            elif getattr(self, '_bulk_simming', False):
+                # Bulk sim: drive the bracket to completion automatically.
+                self.open_playoffs_window()
+                w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+                try:
+                    if w is not None and w.winfo_exists():
+                        if not getattr(w, 'playoff_bracket', None):
+                            w._generate_bracket()
+                        w._simulate_all_playoffs()
+                    else:
+                        # No GUI window (headless bulk sim): drive the
+                        # bracket directly. Added 2026-10-01 (playthrough
+                        # B2): without this the try block silently skipped,
+                        # _playoffs_complete() stayed False, and the season
+                        # stalled forever. Mirrors
+                        # PlayoffView._generate_bracket (league-attached
+                        # bracket) + the headless _run_games loop.
+                        self._simulate_playoffs_headless()
+                    # Cup decided in bulk: send the awarding recap now.
+                    try:
+                        self._maybe_send_cup_recap()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                if self._playoffs_complete():
+                    self._start_offseason()
+            else:
+                # Re-entry with the choice deferred: re-present the card
+                # rather than opening the bracket (the user never chose).
+                # Playoffs actually in progress: focus the bracket.
+                _parked = False
+                try:
+                    _sess = (getattr(self, "pending_sessions", None) or {}).get(
+                        "playoffs_mode") or {}
+                    _dlg = (_sess.get("dialogs") or {}).get(
+                        "playoffs_mode_card") or {}
+                    _parked = bool(_dlg.get("parked")) and not _dlg.get(
+                        "answered")
+                except Exception:
+                    _parked = False
+                if _parked:
+                    try:
+                        from popup_system import represent_dialog
+                        represent_dialog("playoffs_mode", "playoffs_mode_card",
+                                         parent=self)
+                    except Exception:
+                        pass
+                else:
+                    self.open_playoffs_window()
+            return
+        self._season_end_handled_year = season_year
+
+        # Vezina GM vote first: 31 AI GMs + the human ballot decide it
+        # before anything banks awards off the model ranking.
+        try:
+            self._conduct_vezina_vote()
+        except Exception:
+            pass
+        # Bank regular-season reputations before anything else touches stats.
+        # (Has its own once-per-season guard; safe under the re-entry guard above.)
+        # Never raises -- a reputation failure must not stall the season-end
+        # transition (the day loop aborts without advancing the date).
+        try:
+            self._update_player_reputations()
+        except Exception:
+            pass
+        # Wave B D48: season-end respect decay -- a season's dealings fade
+        # toward each GM's stature-derived baseline (goodwill k=0.25,
+        # forgiveness k=0.10). Fires once per season, under the guard above.
+        try:
+            import reputation_system as _rs
+            _rs.decay_gm_respect(getattr(self, "league", None))
+        except Exception:
+            pass
+        # Show season summary first (skip the modal dialog when bulk simming)
+        if not getattr(self, '_bulk_simming', False):
+            self._show_season_summary()
+
+        # Draft state is per-year on the league (draft_held_years); nothing to reset.
+
+        # Check if playoffs should start
+        if getattr(self, '_bulk_simming', False):
+            result = True  # bulk sims auto-start playoffs, matching test behavior
+        else:
+            # Gating T2-Phase 3: non-modal choice card. Yes opens the
+            # bracket; No quick-sims headless. Dismiss = defer (the card
+            # is re-presented if end_of_season is re-entered; the
+            # _season_end_handled_year guard keeps it honest).
+            from popup_system import ask_card as _pm_ask_card
+            _set_playoffs_mode_app(self)
+
+            def _pm_on_answer(_ans, _self=self):
+                _playoffs_mode_answer(
+                    "playoffs_mode", "playoffs_mode_card", bool(_ans),
+                    season_year=season_year)
+
+            _pm_ask_card(
+                self, "Playoffs",
+                "Play through the Stanley Cup Playoffs?\n\n"
+                "Play Interactive: open the bracket and sim it yourself.\n"
+                "Quick-Sim: the tournament is decided instantly and the "
+                "season rolls to the offseason.",
+                [("Play Interactive", True, "primary"),
+                 ("Quick-Sim", False, "secondary")],
+                on_answer=_pm_on_answer,
+                session_id="playoffs_mode", dialog_id="playoffs_mode_card",
+                resolver="playoffs_mode_answer",
+                resolver_args={"season_year": str(season_year)})
+            return
+
+        if result:
+            self.open_playoffs_window()
+        else:
+            # Declined the interactive bracket: the tournament still
+            # happens -- quick-sim it headless so the season always crowns
+            # a champion, then roll to the offseason.
+            self._quick_sim_playoffs_headless()
+            self._start_offseason()
+
+    def after_idle(self, func, *args, **kwargs):
+        """UI-agnostic: execute directly (no Tk event loop)."""
+        try:
+            return func(*args, **kwargs)
+        except Exception:
+            pass
+
+    def _ask_game_mode_dialog(self, home_team, away_team):
+            """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
+            choice = {'mode': 'quick'}
+            dlg = InGamePopup(self)
+            dlg.title("Game Day")
+            dlg.configure(bg="#0e0e11")
+            dlg.resizable(False, False)
+            try:
+                dlg.transient(self)
+                dlg.grab_set()
+            except Exception:
+                pass
+            w, h = 420, 260
+            try:
+                x = self.winfo_x() + (self.winfo_width() - w) // 2
+                y = self.winfo_y() + (self.winfo_height() - h) // 2
+                dlg.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+            except Exception:
+                dlg.geometry(f"{w}x{h}")
+
+            tk.Label(dlg, text="GAME DAY", bg="#0e0e11", fg="#3B82F6",
+                     font=("Segoe UI", 11, "bold")).pack(pady=(18, 4))
+            matchup = f"{getattr(home_team, 'team_name', home_team)}  vs  " \
+                      f"{getattr(away_team, 'team_name', away_team)}"
+            tk.Label(dlg, text=matchup, bg="#0e0e11", fg="#E8ECF1",
+                     font=("Segoe UI", 14, "bold"), wraplength=380,
+                     justify="center").pack(pady=4)
+            tk.Label(dlg, text="How do you want to play this one?",
+                     bg="#0e0e11", fg="#8B93A5",
+                     font=("Segoe UI", 10)).pack(pady=(0, 16))
+
+            btns = tk.Frame(dlg, bg="#0e0e11")
+            btns.pack(pady=6)
+
+            def _pick(m):
+                choice['mode'] = m
+                try:
+                    dlg.grab_release()
+                except Exception:
+                    pass
+                dlg.destroy()
+
+            for label, m, bgc in (("Quick Sim", "quick", "#16161a"),
+                                  ("Watch Live", "watch", "#3B82F6")):
+                b = tk.Button(btns, text=label, font=("Segoe UI", 12, "bold"),
+                              bg=bgc, fg="white", activebackground=bgc,
+                              activeforeground="white", relief="flat",
+                              padx=28, pady=12, cursor="hand2",
+                              command=lambda m=m: _pick(m))
+                b.pack(side="left", padx=10)
+            dlg.bind("<Escape>", lambda e: _pick('quick'))
+            dlg.protocol("WM_DELETE_WINDOW", lambda: _pick('quick'))
+            dlg.wait_window()
+            return choice['mode']
+
+    def _cap_compliance_blocker(self):
+            """Return a blocker dict if the NHL roster exceeds the salary cap.
+
+            Uses the central cap accounting (roster salaries + all dead-cap
+            penalties), so the blocker agrees with trade validation and the
+            cap UI -- AI and user see identical numbers.
+
+            Wave B D45 (waiver-aware): players on the wire count their FULL
+            hit in the accounting (real NHL -- the shed is gone), but an
+            in-flight corrective waive is not a day-advance hard block. When
+            the overage resolves once the wire clears (burial rule), the
+            blocker stands down; the wire clock is doing its job.
+            """
+            team = getattr(self, 'user_team', None)
+            if team is None:
+                return None
+            try:
+                from salary_cap_system import cap_breakdown, compliance_charge
+                bd = cap_breakdown(team)
+            except Exception:
+                return None
+            # R1 (roster limits): the league exception -- emergency fill-ins are
+            # cap-exempt at the day gate (summonable even over the cap, per
+            # Chris's deadlock ruling). Subtract their charge before judging
+            # compliance; zero when no fillers are on the roster.
+            try:
+                import roster_limits as _rl
+                _filler_charge = int(_rl.emergency_filler_charge(team) or 0)
+            except Exception:
+                _filler_charge = 0
+            if not bd["over_cap"]:
+                return None
+            try:
+                # Pending wire resolves it -- not a hard block. The filler
+                # charge is excluded first (the league exception: emergency
+                # fill-ins are cap-exempt at the day gate). LTIR relief raises
+                # the effective ceiling (ir_system.py) -- a team using LTIR
+                # space is compliant by design.
+                _ltir_relief = 0
+                try:
+                    import ir_system as _irs
+                    _ltir_relief = int(_irs.ltir_relief(team) or 0)
+                except Exception:
+                    pass
+                if (int(compliance_charge(team)) - _filler_charge
+                        <= int(bd["cap"]) + _ltir_relief):
+                    return None
+            except Exception:
+                pass
+            over = -bd["space"]
+            detail = (f"Cap charge ${bd['total']/1e6:.2f}M is ${over/1e6:.2f}M over "
+                      f"the ${bd['cap']/1e6:.2f}M cap "
+                      f"(roster ${bd['roster']/1e6:.2f}M")
+            if bd["dead_cap"]:
+                detail += f" + dead cap ${bd['dead_cap']/1e6:.2f}M"
+            detail += "). Shed salary via trade, waivers, or demotion before advancing."
+            # 2026-10-01 (Sim A S5 debug): expired contracts still count until the
+            # GM acts, so a "phantom" overage is often unsigned players, not real
+            # payroll. Point the GM at the actual fix instead of just shedding.
+            try:
+                _unsigned_n = sum(
+                    1 for _p in (getattr(team, "roster", None) or [])
+                    if getattr(getattr(_p, "contract", None),
+                               "years_remaining", 1) == 0)
+            except Exception:
+                _unsigned_n = 0
+            if _unsigned_n:
+                detail += (f" {_unsigned_n} unsigned player(s) (expired contracts) "
+                           f"still count against the cap -- re-sign them or move "
+                           f"them on first.")
+            return {
+                'id': 'salary_cap',
+                'title': 'Roster exceeds salary cap',
+                'detail': detail,
+                'action': ('Open Trade Center', self.open_trade_window),
+                'auto_action': ('Auto-shed salary (waiver-safe)',
+                                lambda: self._auto_fix_cap(team, over)),
+            }
+
+    def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
+                                    went_ot: bool, sim_engine=None):
+            """Board/profile/morale updates + post-match presser after user games."""
+            try:
+                team = self.user_team
+                user_won = (winner == team)
+                my_strength = self._career_team_strength(team)
+                opp = away_team if home_team == team else home_team
+                opp_strength = self._career_team_strength(opp)
+                was_favorite = my_strength >= opp_strength
+
+                delta = self.career.board.record_result(
+                    user_won, went_ot, was_favorite,
+                    today_iso=self.current_date.isoformat())
+                self.career.profile.record_result(user_won, went_ot, is_playoff=False)
+
+                # Board crisis (8-game skid, disastrous start): surface it as news.
+                if self.career.board.last_crisis:
+                    self.add_news("🏛️ " + self.career.board.last_crisis)
+
+                # Dressing room mood swing
+                for p in (getattr(team, "roster", []) or []):
+                    m = getattr(p, "morale", 70) or 70
+                    h = getattr(p, "happiness", 70) or 70
+                    if user_won:
+                        p.morale = min(100, m + 5)
+                        p.happiness = min(100, h + 3)
+                    else:
+                        p.morale = max(1, m - 5)
+                        p.happiness = max(0, h - 3)
+
+                if self.career.board.sacked:
+                    self._career_handle_sack()
+                    return
+
+                # Post-match presser -> interactive inbox message (no modal).
+                # The press waits in the inbox; answers apply morale/board
+                # effects exactly as the old popup did.
+                if self._career_prompts_allowed():
+                    from game_classes import EmailMessage
+                    hs, aws = scores
+                    score_str = f"{hs}-{aws}"
+                    star = self._career_star_of_game(sim_engine, team)
+                    ctx = {"n": "a few",
+                           "drama": getattr(team, "_recent_drama", None)}
+                    questions = manager_career.build_postmatch_presser(
+                        team, opp, user_won, went_ot, score_str, star, ctx)
+                    if questions:
+                        opp_name = getattr(opp, 'team_name', 'the opposition')
+                        self.send_email_to_user(EmailMessage(
+                            sender="Media Relations", sender_type="Media",
+                            subject=f"Post-match presser: {score_str} vs {opp_name}",
+                            content=(f"Final: {score_str}. The press wants a word. "
+                                     "Answer below -- your words move the dressing "
+                                     "room and the board."),
+                            date_sent=self.current_date, category="Media",
+                            requires_response=True, priority=3,
+                            action_type="postmatch_presser",
+                            action_data={
+                                "game_date": self.current_date.isoformat(),
+                                "questions": questions,
+                                "answered": [False] * len(questions),
+                                "kind": "post-match",
+                            }))
+            except Exception as e:
+                print(f"Career post-game error (non-fatal): {e}")
+
+    def _career_prompts_allowed(self) -> bool:
+            """Interactive prompts only for manual day-by-day play."""
+            return (not getattr(self, "_bulk_simming", False)
+                    and self.career.prompts_enabled
+                    and not self.career.board.sacked)
+
+    def _career_team_talk(self, opponent):
+            """Show pre-match team talk. Returns sim boost multiplier, or None
+            when the world was reloaded under a waiting talk (the caller must
+            abort the stale day sim -- see _abort_day_sim).
+
+            Screen + callback/session flow (gating: park-on-navigation): the
+            talk is a full-screen focus card (not a popup); the answer arrives
+            via on_done into a date-keyed Tier-B session that carries the full
+            game context (opponent, situation) so a parked talk re-presents
+            exactly. Navigating away PARKS the session -- the waiter is NOT
+            released, the day sim stays paused on the talk, and a navbar
+            resume chip brings the exact session back. Dismiss = defer
+            ("not now"): an unanswered talk can never resolve as a silent
+            neutral. "Say nothing" remains the explicit, deliberate neutral.
+            """
+            if not self._career_prompts_allowed():
+                return 1.0
+            from popup_system import get_pending_session
+            my_strength = self._career_team_strength(self.user_team)
+            opp_strength = self._career_team_strength(opponent)
+            situation = "favorite" if my_strength > opp_strength + 5 else (
+                "underdog" if opp_strength > my_strength + 5 else "even")
+            if self.career.board.season_losses >= 3 and self._career_team_games() >= 4:
+                # recent form check for "after_loss"
+                pass
+            context = {"situation": situation,
+                       "opponent_name": getattr(opponent, "team_name", "the opposition")}
+            try:
+                _opp_id = getattr(opponent, "id", None)
+                _opp_key = _opp_id or getattr(opponent, "team_name", "?")
+                _date = self.current_date.isoformat()
+            except Exception:
+                _opp_id, _opp_key, _date = None, "?", "?"
+            session_id = f"team_talk:{_date}:{_opp_key}"
+
+            # Tier-B session carries the full context from creation so a
+            # parked talk (navigation, save/load) re-presents exactly.
+            # Plain data only -- this session is save-serialized.
+            sess = get_pending_session(self, session_id)
+            if sess is not None:
+                try:
+                    sess["kind"] = "team_talk"
+                    tt = sess.get("team_talk")
+                    if not isinstance(tt, dict):
+                        tt = {}
+                        sess["team_talk"] = tt
+                    tt.update({
+                        "when": "prematch",
+                        "date": _date,
+                        "opponent_id": _opp_id,
+                        "opponent_name": context["opponent_name"],
+                        "situation": situation,
+                        "context": dict(context),
+                        "parked": bool(tt.get("parked", False)),
+                    })
+                except Exception:
+                    pass
+
+            # Stale sessions (other dates) can never be resumed -- their game
+            # is gone. Prune so the dict stays small and honest.
+            self._prune_team_talk_sessions(keep_date=_date)
+
+            def _session_boost():
+                try:
+                    sess = get_pending_session(self, session_id)
+                    prev = ((sess or {}).get("dialogs") or {}).get("talk") or {}
+                    if prev.get("answered"):
+                        return float(prev.get("boost", 1.0))
+                except Exception:
+                    pass
+                return None
+
+            prev_boost = _session_boost()
+            if prev_boost is not None:
+                # Consume-once: a parked answer is single-use; the next talk
+                # (new date/opponent) starts clean.
+                self._consume_team_talk_session(session_id)
+                return prev_boost
+
+            # Epoch guard: a save/load under a waiting talk orphans this
+            # frame's game objects. on_game_loaded bumps the epoch and wakes
+            # us; a mismatch here aborts instead of simming on dead state.
+            _epoch = getattr(self, "_team_talk_epoch", 0)
+            wake = tk.BooleanVar(master=self, value=False)
+            self._active_team_talk = {
+                "session_id": session_id, "wake": wake, "epoch": _epoch,
+            }
+            try:
+                _view = self._present_team_talk_screen(sess, wake, _epoch)
+                if _view is None:
+                    # Screen could not present (genuine failure, not
+                    # navigation): pre-existing fail-safe, not a silent park.
+                    return 1.0
+                self.wait_variable(wake)
+            except Exception:
+                pass
+            finally:
+                try:
+                    if getattr(self, "_active_team_talk", None) is not None and \
+                            self._active_team_talk.get("wake") is wake:
+                        self._active_team_talk = None
+                except Exception:
+                    pass
+            if getattr(self, "_team_talk_epoch", 0) != _epoch:
+                return None
+            prev_boost = _session_boost()
+            if prev_boost is not None:
+                self._consume_team_talk_session(session_id)
+                return prev_boost
+            # Unreachable in practice: the waiter is released only by an
+            # answer (navigation parks, never releases). Fail closed to the
+            # pre-existing neutral only if something truly unexpected broke
+            # the wait -- never silently mid-flow.
+            return 1.0
+
+    def _check_for_event_day(self):
+            """Detect tentpole event days (draft, deadline, free agency).
+
+            - Runs the entry draft once per year on June 23-25. (The draft used
+              to be Monday-gated, so in seasons where June 23-25 had no Monday
+              it was silently skipped entirely.)
+            - Prompts the event-day hub once per year per event.
+            State lives on the league object so it survives save/load.
+            """
+            try:
+                from event_day_hubs import get_todays_event, is_draft_day, prompt_event_day
+            except ImportError as e:
+                debug_print(f"Event-day hubs unavailable: {e}")
+                return
+
+            league = getattr(self.game_manager, 'league', None) or getattr(self, 'league', None)
+            if league is None:
+                return
+
+            today = self.current_date
+            year = today.year
+
+            # Entry draft: run once per year inside the draft window. Runs BEFORE
+            # the hub prompt so Draft Day Central shows the real draft class.
+            if is_draft_day(today):
+                held = set(getattr(league, 'draft_held_years', None) or [])
+                if year not in held:
+                    # Rights lifecycle BEFORE the draft: unsigned CHL prospects
+                    # whose rights expire this summer re-enter THIS draft (the
+                    # class generator folds league.draft_reentries in). The
+                    # end_of_season backstop skips via the per-draft-year guard.
+                    try:
+                        league._rollover_draft_rights(reference_year=year)
+                    except Exception:
+                        debug_print("Draft-day rights rollover failed (non-fatal):")
+                        import traceback
+                        traceback.print_exc()
+                    try:
+                        self._hold_entry_draft(year)
+                    except Exception:
+                        debug_print(f"Entry draft failed for {year}:")
+                        import traceback
+                        traceback.print_exc()
+                    else:
+                        held.add(year)
+                        league.draft_held_years = sorted(held)
+
+            # Draft lottery: televised reveal on May 8, once per year. Runs the
+            # real-odds lottery, delivers the inbox card (with a watch-the-reveal
+            # action), and applies fan/room reactions for the user's team.
+            try:
+                from draft_lottery import LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY
+                if (today.month, today.day) == (LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY):
+                    lotto_held = set(getattr(league, 'lottery_held_years', None) or [])
+                    if year not in lotto_held:
+                        try:
+                            self._hold_draft_lottery(year)
+                        except Exception:
+                            debug_print("Draft lottery failed (non-fatal):")
+                            import traceback
+                            traceback.print_exc()
+                        else:
+                            lotto_held.add(year)
+                            league.lottery_held_years = sorted(lotto_held)
+            except Exception:
+                pass
+
+            # International windows: Olympics (rosters announced Feb 9, medals
+            # Feb 22 of Olympic years -- the NHL goes dark Feb 10-24 via the
+            # olympic_break in schedule generation) and World Championship
+            # (May 12), each once per year. Instant lightweight resolution +
+            # inbox card. Catch-up semantics live in the helper so a skipped
+            # date still fires late, idempotently.
+            try:
+                self._daily_international_window(today, year, league)
+            except Exception:
+                debug_print("International window failed (non-fatal):")
+                import traceback
+                traceback.print_exc()
+
+    def _close_trade_deadline(self, mgr):
+            """3 PM: lock trading, announce the freeze, kill the clock."""
+            try:
+                mgr.deadline_passed = True
+            except Exception:
+                pass
+            try:
+                from email_generator import EmailGenerator
+                email = EmailGenerator.create_league_announcement_email(
+                    "Trade Deadline Has Passed",
+                    "The 3:00 PM ET trade deadline has passed. No further trades "
+                    "may be completed this season.\n\n"
+                    f"League deals today: "
+                    f"{mgr.deadline_stats.get('total_trades', 0)}.")
+                email.is_urgent = True
+                email.priority = 4
+                self.send_email_to_user(email)
+            except Exception:
+                pass
+            print("⏰ Trade deadline passed (3:00 PM ET). Trading locked.")
+            # Wave B D48: deadline respect decay -- the deadline frenzy's warmth
+            # and grudges fade toward each GM's stature-derived baseline
+            # (asymmetric: goodwill k=0.25, forgiveness k=0.10).
+            try:
+                import reputation_system as _rs
+                _rs.decay_gm_respect(getattr(self, "league", None))
+            except Exception:
+                pass
+
+    def _credit_nhl_games_played(self, home_team, away_team, preseason=False):
+            """Career NHL GP counter: one credit per rostered player per
+            completed NHL game. This is the service-time half of waiver
+            exemption (age is the other half) -- previously a frozen dice
+            roll, now a number that actually moves with the season.
+            Preseason exhibitions never count (like the real league)."""
+            if preseason:
+                return
+            for _t in (home_team, away_team):
+                try:
+                    for _p in list(getattr(_t, "roster", None) or []):
+                        try:
+                            _p.nhl_games_played = int(
+                                getattr(_p, "nhl_games_played", 0) or 0) + 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+    def _deadline_tick_activity(self, mgr, tick):
+            """Real AI-vs-AI trades for one 30-minute deadline window, scaled
+            by urgency as 3 PM approaches. Deals execute for real (rosters
+            change) and break as news."""
+            import random
+            import trade_engine as te
+            import trade_storylines as tsl
+            league = getattr(getattr(self, 'game_manager', None), 'league', None) \
+                or getattr(self, 'league', None)
+            if league is None:
+                return
+            user_name = getattr(getattr(self, 'user_team', None), 'team_name', '')
+            teams = [t for t in getattr(league, 'teams', [])
+                     if getattr(t, 'team_name', '') != user_name
+                     and getattr(t, 'league_name', 'National Hockey League')
+                     == 'National Hockey League']
+            if not teams:
+                return
+            prog = mgr.clock_progress()
+            # 0-3 real deals per window, more as the deadline nears.
+            random.shuffle(teams)
+            deals = 0
+            for team in teams:
+                if deals >= 3:
+                    break
+                if random.random() > tsl.ai_initiative_odds(self, team) * 0.45:
+                    continue
+                if self._try_ai_ai_deadline_deal(team, teams, te, tsl, mgr):
+                    deals += 1
+            # Trade-market bidding rounds advance once per deadline tick
+            # (additive; the organic tick cap above is untouched).
+            try:
+                import trade_market
+                trade_market.process_deadline_tick(
+                    self, getattr(getattr(self, 'game_manager', None), 'league', None)
+                    or getattr(self, 'league', None), mgr)
+            except Exception as e:
+                print(f"Trade market tick error (non-fatal): {e}")
+
+    def _deliver_outdoor_pregame(self, info, home_team, away_team):
+            """Inbox billing card for a Winter Classic / Stadium Series game.
+
+            Fires once per outdoor game (~3/season), so it never spams. Wrapped
+            defensively at every call site.
+            """
+            try:
+                import outdoor_games as _ogd
+                from headlines import deliver_spec as _deliver_spec
+                pres = _ogd.pregame_presentation(info)
+                _deliver_spec(self, {
+                    "kind": "outdoor_pregame",
+                    "event": info.get("event", "Outdoor Game"),
+                    "home": home_team.team_name,
+                    "away": away_team.team_name,
+                    "venue_line": pres["venue_line"],
+                    "alumni_line": pres["alumni_line"],
+                    "rivalry_line": pres["rivalry_line"],
+                    "involved": (home_team.team_name, away_team.team_name),
+                })
+            except Exception:
+                pass
+
+    def _dispatch_scout_value_tips(self):
+            """Monthly pro-scout value reads -- for the USER and every AI GM.
+
+            Even playing field: every team's Head Scout / Professional Scouts
+            file their reads on the 1st. The user gets reads in the news feed;
+            AI teams store theirs on the team object where their trade logic
+            reads them (see trade_engine.scout_adjusted_value).
+
+            Whether a read is RIGHT depends directly on that scout's
+            judging_player_ability -- elite scouts spot real value, bad scouts
+            chase ghosts. Same rules for silicon and flesh.
+
+            Wave 1 (information asymmetry):
+            - Every read is filed in the team's tip ledger via
+              record_tip_call() and graded later against what actually
+              happened -- the scout's track record, not hidden JPA, is what
+              the user sees.
+            - Design law: reads show evidence, uncertainty, provenance and
+              the person responsible. Never "buy low" / "sell high".
+            """
+            try:
+                import analytics_scouting as scout_mod
+                import random as _r
+            except ImportError:
+                return
+            try:
+                league = self.league
+                teams = list(getattr(league, "teams", []) or [])
+                if not teams:
+                    return
+                try:
+                    from game_classes import StaffRole
+                    pro_roles = {StaffRole.HEAD_SCOUT, StaffRole.PROFESSIONAL_SCOUT}
+                except Exception:
+                    pro_roles = set()
+                all_players = []
+                for t in teams:
+                    all_players.extend(getattr(t, "roster", []) or [])
+                if not all_players:
+                    return
+                # Prospects get the same analytics treatment: every club's
+                # farm pool is scanned for standouts, so underlying farm
+                # numbers (not just pedigree) move prospect trade value.
+                all_prospects = []
+                for t in teams:
+                    all_prospects.extend(getattr(t, "prospects", []) or [])
+                # Signed minor-leaguers: same light farm metrics as the
+                # prospects, labeled AHL so the scout card reads honestly.
+                # This is the gem-finder for the farm -- cheap NHLe /
+                # expectation / plus-minus reads, not NHL-grade shot
+                # tracking, so the monthly pass stays fast.
+                all_ahl = []
+                for t in teams:
+                    all_ahl.extend(getattr(t, "ahl_roster", []) or [])
+                date_str = str(getattr(self, "current_date",
+                                       __import__("datetime").date.today()))
+                for team in teams:
+                    scout_mod.ensure_analytics_fields(team)
+                    staff = list(getattr(team, "staff", []) or [])
+                    scouts = [s for s in staff
+                              if getattr(s, "role", None) in pro_roles] if pro_roles else []
+                    if not scouts:
+                        continue
+                    # Fresh sheet each month; stale reads don't linger.
+                    team.scout_buy_tips = {}
+                    team.scout_sell_tips = {}
+                    for s in scouts:
+                        scout_mod.ensure_analytics_fields(s)
+                        # Tip cadence scales with the scout's eye (1-20 scale).
+                        jpa20 = scout_mod._scout_jpa(s)
+                        tip_chance = 0.20 + 0.50 * (jpa20 - 1) / 19.0
+                        if _r.random() > tip_chance:
+                            continue
+                        buy_tips = scout_mod.scout_value_tips(
+                            s, all_players, teams,
+                            user_team=team, limit=2)
+                        sell_tips = scout_mod.scout_sell_high_tips(
+                            s, team, limit=2)
+                        # Prospect reads ride the same rails: filed into the
+                        # buy-tip book, graded by the same ledger, priced by
+                        # scout_adjusted_value(), and printed to the user's
+                        # news feed below. Analytics matter for the kids too.
+                        prospect_tips = []
+                        if all_prospects:
+                            try:
+                                prospect_tips = scout_mod.scout_prospect_tips(
+                                    s, all_prospects, user_team=team, limit=2)
+                            except Exception:
+                                prospect_tips = []
+                        ahl_tips = []
+                        if all_ahl:
+                            try:
+                                ahl_tips = scout_mod.scout_prospect_tips(
+                                    s, all_ahl, user_team=team, limit=2,
+                                    kind="AHL")
+                            except Exception:
+                                ahl_tips = []
+                        buy_tips = (list(buy_tips) + list(prospect_tips)
+                                    + list(ahl_tips))
+                        # File every read in the ledger: the scout's call is
+                        # graded against what happens later. This is what
+                        # builds (or exposes) track records.
+                        for tip in buy_tips:
+                            try:
+                                scout_mod.record_tip_call(
+                                    s, team, "buy", tip["player"], date_str,
+                                    reason=tip.get("reason", ""))
+                            except Exception:
+                                pass
+                        for tip in sell_tips:
+                            try:
+                                scout_mod.record_tip_call(
+                                    s, team, "sell", tip["player"], date_str,
+                                    reason=tip.get("reason", ""))
+                            except Exception:
+                                pass
+                        # Tips are private to the club whose scout filed them --
+                        # filed where the trade engine reads them, and shown on
+                        # the scout's own staff card (open reads). They are
+                        # NEVER broadcast in the news feed: no league-wide
+                        # "hey look what someone found". The news feed carries
+                        # performance headlines (hat tricks, shutouts); scout
+                        # reads are your staff's private reports to you.
+                        bt = getattr(team, "scout_buy_tips", None)
+                        if bt is None:
+                            team.scout_buy_tips = bt = {}
+                        st = getattr(team, "scout_sell_tips", None)
+                        if st is None:
+                            team.scout_sell_tips = st = {}
+                        for tip in buy_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            bt[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"],
+                                       "scout_id": getattr(s, "id", ""),
+                                       "name": tip.get("name", "?"),
+                                       "pteam": tip.get("team", "?"),
+                                       "kind": tip.get("kind", ""),
+                                       "reason": tip.get("reason", ""),
+                                       "risks": list(tip.get("risks", "") or []),
+                                       "confidence": tip.get("confidence", "")}
+                        for tip in sell_tips:
+                            p = tip["player"]
+                            pid = getattr(p, "id", id(p))
+                            st[pid] = {"jpa": tip["scout_jpa"],
+                                       "correct": tip["correct"],
+                                       "scout": tip["scout"],
+                                       "scout_id": getattr(s, "id", ""),
+                                       "name": tip.get("name", "?"),
+                                       "kind": tip.get("kind", ""),
+                                       "reason": tip.get("reason", ""),
+                                       "risks": list(tip.get("risks", "") or []),
+                                       "confidence": tip.get("confidence", "")}
+            except Exception:
+                pass
+
+    def _find_inbox_player(self, data):
+            """Locate a player referenced by an inbox action (id, then name)."""
+            pid = (data or {}).get("player_id")
+            name = (data or {}).get("player_name")
+            league = getattr(self, "league", None)
+            pools = []
+            try:
+                for t in (getattr(league, "teams", []) or []):
+                    pools.append(list(getattr(t, "roster", []) or []))
+                pools.append(list(getattr(league, "free_agents", []) or []))
+            except Exception:
+                pass
+            for pool in pools:
+                for p in pool:
+                    if pid and getattr(p, "id", None) == pid:
+                        return p
+            if name:
+                for pool in pools:
+                    for p in pool:
+                        if getattr(p, "full_name", "") == name:
+                            return p
+            return None
+
+    def _floor_compliance_blocker(self):
+            """Return a blocker dict if the NHL roster sits under the salary
+            floor (D46, Wave B).
+
+            The floor is a hard league rule (real NHL): the day can't advance
+            while the club is under it. The action sends the user to free
+            agency -- signing is the fix. AI clubs never reach this state:
+            ai_consider_trade rejects self-inflicted floor breaches and
+            _enforce_salary_floor signs them back up the same day.
+            """
+            team = getattr(self, 'user_team', None)
+            if team is None:
+                return None
+            try:
+                from salary_cap_system import cap_breakdown
+                bd = cap_breakdown(team)
+            except Exception:
+                return None
+            if not bd.get("under_floor"):
+                return None
+            short = int(bd.get("floor", 0)) - int(bd.get("total", 0))
+            return {
+                'id': 'salary_floor',
+                'title': 'Roster under the salary floor',
+                'detail': (f"Payroll ${bd['total']/1e6:.2f}M is ${short/1e6:.2f}M "
+                           f"under the ${bd['floor']/1e6:.2f}M salary floor. "
+                           f"Sign free agents to reach the floor before advancing."),
+                'action': ('Open Free Agency', self.open_free_agency_window),
+            }
+
+    def _generate_weekly_email_summary(self):
+            """Generate a weekly email summary instead of daily emails to reduce CPU load"""
+            try:
+                # Only generate if there have been significant events this week
+                recent_news = [item for item in self.news_log 
+                              if item.get('date') and 
+                              (self.current_date - item['date']).days <= 7]
+
+                if len(recent_news) >= 3:  # Only send if there's enough news
+                    self._generate_daily_emails()
+            except Exception as e:
+                print(f"Error generating weekly email summary: {e}")
+
+    def _get_user_game_mode(self):
+            """How the user's own games are presented. Migrates legacy bool."""
+            try:
+                sim = self.get_settings().get('simulation', {})
+                mode = sim.get('user_game_mode')
+                if mode in ('quick', 'watch', 'ask'):
+                    return mode
+                if sim.get('use_game_viewer', False):
+                    return 'watch'
+            except Exception:
+                pass
+            return 'ask'
+
+    def _grudge_week_market(self, game_date, home_team, away_team):
+            """Market a genuine feud as grudge week (sellout talk, loud billing).
+
+            Returns True when marketed; the matchup+date is tracked so the
+            post-game check can call out hollow overhype honestly.
+            """
+            try:
+                from narrative_ledger import get_ledger as _gl
+                _led = _gl(self)
+                _mw = float(_led.memory_weight(home_team.team_name,
+                                               away_team.team_name) or 0.0)
+                if _mw < 60.0:
+                    return False
+                _mk = (home_team.team_name, away_team.team_name, str(game_date))
+                _gm = getattr(self, "_grudge_marketed", None)
+                if not isinstance(_gm, set):
+                    _gm = set()
+                    self._grudge_marketed = _gm
+                _gm.add(_mk)
+                self.add_news(
+                    f"Grudge week in "
+                    f"{getattr(home_team, 'city', home_team.team_name)}: "
+                    f"{away_team.team_name} @ {home_team.team_name} -- "
+                    f"the building is sold out and shaking. This one matters.")
+                return True
+            except Exception:
+                return False
+
+    def _inbox_contract_result(self, kind, person, name, salary, years,
+                                   asking_price, extension, clause_kind="none",
+                                   clause_list_size=10, reject_note=None):
+            """FM24/EHM-style: contract news lands in the inbox. Counter-offers
+            arrive as interactive messages (accept / new offer / walk away).
+
+            clause_kind/size travel with a counter so the trade protection the
+            user offered is still on the table when the inbox accept lands.
+            reject_note overrides the rejected text (e.g. league-office veto)."""
+            from game_classes import EmailMessage
+            import trade_engine as _te3
+            pid = getattr(person, "id", None)
+            base = dict(sender="Agent", sender_type="Agent",
+                        date_sent=date.today(), category="Contracts",
+                        related_player_id=pid, priority=3, is_important=True)
+            _clause_txt = _te3.clause_offer_label(clause_kind, clause_list_size) \
+                if (clause_kind or "none") != "none" else ""
+            if kind == "accepted":
+                term = "extension" if extension else "contract"
+                _prot = (f" It carries {_clause_txt}."
+                         if _clause_txt else "")
+                msg = EmailMessage(
+                    subject=f"Signed: {name}",
+                    content=(f"{name} has agreed to terms: "
+                             f"${salary:,} per year over {years} year(s).{_prot}\n\n"
+                             f"The {term} is finalized and the paperwork is filed "
+                             f"with the league office."),
+                    **base)
+            elif kind == "rejected":
+                _rej_text = (reject_note or
+                             (f"{name} has rejected your offer of "
+                              f"${salary:,} per year outright and is not "
+                              f"countering at this time.\n\n"
+                              f"His camp feels the number needs to be "
+                              f"significantly higher before talks resume."))
+                msg = EmailMessage(
+                    subject=f"Talks break down: {name}",
+                    content=_rej_text,
+                    **base)
+            else:  # counter -- interactive
+                _still = (f" Your {_clause_txt} offer is still on the table."
+                          if _clause_txt else "")
+                # Market-demand signal: WHY the ask is what it is (qualitative).
+                _msig = ""
+                _ss3, _spos3 = "balanced", None
+                try:
+                    from popup_system import get_negotiation_session as _gns3
+                    from salary_cap_system import \
+                        scarcity_signal_text as _sst3
+                    _ns3 = _gns3(self, person, defaults={})
+                    _ss3 = str((_ns3 or {}).get("scarcity_signal", "balanced"))
+                    _spos3 = (_ns3 or {}).get("scarcity_pos")
+                    if _ss3 and _ss3 != "balanced":
+                        _msig = "\n\nMarket: " + _sst3(_ss3, _spos3)
+                except Exception:
+                    _msig = ""
+                msg = EmailMessage(
+                    subject=f"Counter-offer: {name}",
+                    content=(f"{name}'s camp has rejected your offer of "
+                             f"${salary:,} per year, but they are willing to "
+                             f"sign for ${asking_price:,} per year over "
+                             f"{years} year(s).{_still}{_msig}\n\n"
+                             f"Respond below -- the offer waits for you."),
+                    requires_response=True,
+                    action_type="contract_counter",
+                    action_data={"player_id": pid, "player_name": name,
+                                 "asking_price": int(asking_price),
+                                 "years": int(years),
+                                 "is_extension": bool(extension),
+                                 "clause_kind": clause_kind or "none",
+                                 "clause_list_size": int(clause_list_size or 10),
+                                 "scarcity_signal": _ss3,
+                                 "scarcity_pos": _spos3},
+                    **base)
+            self.send_email_to_user(msg)
+
+    def _is_user_game_day(self) -> bool:
+            """Cached check: does the user team play today?"""
+            try:
+                today = getattr(self, 'current_date', None)
+                if getattr(self, '_user_game_day_cache_date', None) == today:
+                    return bool(getattr(self, '_user_game_day_cache', False))
+                val = self._career_user_game_today() is not None
+                self._user_game_day_cache = val
+                self._user_game_day_cache_date = today
+                return val
+            except Exception:
+                return False
+
+    def _mp_begin_waiver_flow(self, proposal, team, partner, vetoes,
+                                  manager):
+            """Stash a proposal behind clause-waiver prompts; ask about the
+            first veto now. Returns (True, status, no-broadcast)."""
+            import uuid as _uuid
+            waiver_id = _uuid.uuid4().hex[:10]
+            session_id = self._mp_peer_session_for_team(team.team_name)
+            if session_id is None:
+                return False, "Could not reach your client."
+            self._mp_pending_ntc[waiver_id] = {
+                "kind": "trade",
+                "proposal": proposal,
+                "vetoes": [{"player_id": str(getattr(v["player"], "id", "")),
+                            "player_name": getattr(v["player"], "full_name",
+                                                   "player"),
+                            "clause": v.get("detail") or v.get("clause", "NTC"),
+                            "dest": partner.team_name}
+                           for v in vetoes],
+                "veto_idx": 0,
+                "team_id": team.team_name,
+                "partner_id": partner.team_name,
+            }
+            return self._mp_send_next_waiver(waiver_id, session_id)
+
+    def _mp_find_team(self, team_id):
+            try:
+                for t in self.league.teams:
+                    if getattr(t, 'team_name', '') == team_id:
+                        return t
+            except Exception:
+                pass
+            return None
+
+    def _mp_route_trade_offer(self, proposal):
+            """Send a waiver-cleared proposal to its destination: instant AI
+            evaluation, a host popup, or a routed offer to another human.
+            Returns (ok, detail, broadcast)."""
+            import trade_engine as te
+            team = self._mp_find_team(proposal["proposer_team_id"])
+            partner = self._mp_find_team(proposal["partner_team_id"])
+            if team is None or partner is None:
+                return False, "A club involved is gone.", True
+            # Re-resolve assets against canonical state: rosters may have
+            # moved since the proposal was built (waiver prompts take time).
+            out_players = [self._mp_team_player(team, pid)
+                           for pid in proposal["players_out"]]
+            in_players = [self._mp_team_player(partner, pid)
+                          for pid in proposal["players_in"]]
+            out_picks = [self._mp_team_pick(team, kid)
+                         for kid in proposal["picks_out"]]
+            in_picks = [self._mp_team_pick(partner, kid)
+                        for kid in proposal["picks_in"]]
+            if any(p is None for p in out_players + in_players) or \
+                    any(k is None for k in out_picks + in_picks):
+                self._mp_clear_proposal_waivers(proposal)
+                return False, \
+                    "An asset changed clubs while you negotiated -- re-propose.", \
+                    True
+            proposal["_out_players"] = out_players
+            proposal["_in_players"] = in_players
+            proposal["_out_picks"] = out_picks
+            proposal["_in_picks"] = in_picks
+
+            league = getattr(self, "league", None)
+            partner_session = self._mp_peer_session_for_team(partner.team_name)
+            is_host_team = bool(getattr(partner, "is_user_team", False))
+
+            if partner_session is not None:
+                # Human-to-human: the other manager gets the offer live.
+                import uuid as _uuid
+                offer_id = _uuid.uuid4().hex[:10]
+                self._mp_pending_offers[offer_id] = proposal
+                offer_wire = self._mp_serialize_offer(
+                    proposal, out_players, in_players, out_picks, in_picks)
+                try:
+                    peer_name = ""
+                    try:
+                        peer = self.mp_host.find_peer_by_team(partner.team_name)
+                        peer_name = getattr(peer, "name", "")
+                    except Exception:
+                        pass
+                    self.mp_host.send_trade_offer(
+                        partner_session, offer_id, team.team_name,
+                        proposal["manager"], offer_wire)
+                except Exception:
+                    self._mp_pending_offers.pop(offer_id, None)
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, "Could not reach the other manager.", True
+                return (True,
+                        f"Offer sent to {peer_name or partner.team_name} -- "
+                        f"awaiting their answer.",
+                        False)
+            if is_host_team:
+                return self._mp_offer_to_host(proposal, team, partner,
+                                              out_players, in_players,
+                                              out_picks, in_picks)
+            # AI club: clear the partner's movement-clause vetoes the way the
+            # AI deadline flow does (the player decides, same roll), then
+            # evaluate the deal.
+            try:
+                for _v in te.trade_vetoes(partner, team, in_players, league):
+                    _p = _v["player"]
+                    _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                    if not _ok:
+                        self._mp_clear_proposal_waivers(proposal)
+                        try:
+                            self.mp_host.broadcast_chat(
+                                f"Trade {team.team_name} -> {partner.team_name} "
+                                f"died: {getattr(_p, 'full_name', 'player')} "
+                                f"refused to waive ({_why}).")
+                        except Exception:
+                            pass
+                        return False, (
+                            f"{getattr(_p, 'full_name', 'A player')} refused "
+                            f"to waive his clause -- deal is dead."), True
+                    try:
+                        _p.contract.ntc_waiver_for = team.team_name
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                ev = te.evaluate_trade(out_players + out_picks,
+                                       in_players + in_picks,
+                                       user_team=team, partner_team=partner)
+                label = getattr(ev, "label", "")
+            except Exception:
+                label = ""
+            # "You overpay" is from the proposer's perspective -- good for AI.
+            if label in ("Fair deal", "You overpay"):
+                ok, detail = self._mp_execute_mp_trade(proposal)
+                return ok, detail, True
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} rejected "
+                    f"({label or 'not fair value'}).")
+            except Exception:
+                pass
+            return False, \
+                f"{partner.team_name} rejected the offer ({label or 'value'}).", \
+                True
+
+    def _mp_team_pick(self, team, pick_id):
+            """Find a draft pick owned by a team by pick id."""
+            pid = str(pick_id or "")
+            try:
+                for picks in (getattr(team, "draft_picks", None) or {}).values():
+                    for pk in picks or []:
+                        if str(getattr(pk, "id", "")) == pid:
+                            return pk
+            except Exception:
+                pass
+            return None
+
+    def _mp_team_player(self, team, player_id):
+            """Find a player on a team's roster / AHL / prospects by id."""
+            pid = str(player_id or "")
+            for attr in ("roster", "ahl_roster", "prospects"):
+                for p in getattr(team, attr, None) or []:
+                    if str(getattr(p, "id", "")) == pid:
+                        return p
+            return None
+
+    def _narrative_postgame(self, sim_engine, home_team, away_team,
+                                  scores, went_ot=False, shootout=False,
+                                  roll_incidents=True, deliver_headlines=False,
+                                  game_date=None):
+            """Shared post-game narrative hook (narrative_incidents.py).
+
+            Rolls incidents for engines that don't model them live (AdvGS),
+            records game stories for both engines, logs career moments to the
+            players who earned them, and feeds the fight count back onto the
+            sim so the grudge-week grader sees real numbers.
+            Headlines only when deliver_headlines (user-involved games).
+            Never raises; never touches scoring or stats.
+            """
+            try:
+                import narrative_incidents as _ni
+                from narrative_ledger import active_ledger
+                home_score, away_score = scores[0], scores[1]
+                rivalries = getattr(getattr(self, "league", None),
+                                    "rivalries", None) or []
+                res = _ni.process_postgame(
+                    sim_engine, home_team, away_team,
+                    int(home_score), int(away_score),
+                    went_ot=bool(went_ot), shootout=bool(shootout),
+                    rivalries=rivalries, ledger=active_ledger(),
+                    roll_incidents=bool(roll_incidents),
+                    game_date=game_date,
+                    season_year=getattr(getattr(self, "league", None),
+                                        "season_year", None))
+                if roll_incidents and sim_engine is not None:
+                    try:
+                        if not getattr(sim_engine, "_fights_total", 0):
+                            sim_engine._fights_total = int(res.get("fights", 0))
+                    except Exception:
+                        pass
+                # Drama layer: turn tonight's incidents into consequences --
+                # rivalry heat, headlines, DoPS fines, room morale, press
+                # hooks. Single consumer per game (fed only by rolled
+                # incidents; GameSim did its own live), so neither engine
+                # can double-fire. Skipped for preseason exhibitions.
+                try:
+                    _ut = getattr(self, "user_team", None)
+                    _ni.apply_incident_consequences(
+                        self, home_team, away_team,
+                        res.get("incidents"), res.get("incident_details"),
+                        bool(res.get("brawl")), (home_score, away_score),
+                        game_date, _ut, rivalries)
+                    # Item 4 (additive): DoPS review for live borderline hits.
+                    # Full-detail GameSim games record their hits on the sim
+                    # engine (roll_incidents=False above), so the rolled path
+                    # never fires on this branch -- each live hit gets the
+                    # same suspension-or-fine decision exactly once. Quick-sim
+                    # engines never stash hits, so this is a no-op there.
+                    _ni.apply_live_dops_reviews(
+                        self, sim_engine, home_team, away_team,
+                        (home_score, away_score), game_date, _ut, rivalries)
+                except Exception:
+                    pass
+                if deliver_headlines and res.get("stories"):
+                    try:
+                        from headlines import deliver_spec as _deliver_spec
+                        for _st in res["stories"]:
+                            _deliver_spec(self, {
+                                "kind": "game_story",
+                                "story_kind": _st.get("kind", ""),
+                                "text": _st.get("text", ""),
+                                "home": _st.get("home", ""),
+                                "away": _st.get("away", ""),
+                                "involved": _st.get("involved", ()),
+                                # Clutch tag epithet (additive): headlines.py
+                                # colors the story for a tagged subject.
+                                "epithet": _st.get("epithet", ""),
+                            })
+                    except Exception:
+                        pass
+                elif res.get("stories"):
+                    # Narrative ignition (Muck 2026-10-02): AI-game stories
+                    # don't vanish anymore -- they accumulate for the end-of-day
+                    # "Around the League" digest.
+                    try:
+                        import league_digest as _ld
+                        _ld.collect_game_stories(self, res["stories"])
+                    except Exception:
+                        pass
+                return res
+            except Exception:
+                return {}
+
+    def _process_career_daily(self):
+            """FM-style daily career processing: board, happiness, youth, press."""
+            try:
+                career = self.career
+                team = self.user_team
+                if team is None:
+                    return
+                # 1. First-run: set board expectation from squad strength
+                if not career.career_start_date:
+                    career.career_start_date = self.current_date.isoformat()
+                    strength = self._career_team_strength(team)
+                    career.board.auto_expectation(strength)
+                    ages = [getattr(p, "age", 27) or 27
+                            for p in (getattr(team, "roster", []) or [])]
+                    avg_age = sum(ages) / len(ages) if ages else 27.0
+                    career.board.on_hired(strength, avg_age,
+                                          self.current_date.isoformat())
+                    exp = manager_career.EXPECTATIONS[career.board.expectation]
+                    from game_classes import EmailMessage
+                    self.send_email_to_user(EmailMessage(
+                        sender="Board of Directors", sender_type="Owner",
+                        subject="Season expectations",
+                        content=(f"Welcome to {team.team_name}.\n\n"
+                                 f"The board's expectation this season is: {exp['label']}.\n"
+                                 f"{exp['description']}\n\n"
+                                 f"Your owner: {career.board.owner.label}.\n"
+                                 f"Board confidence starts at {career.board.confidence}/100. "
+                                 f"The board reviews progress monthly — it judges trends, "
+                                 f"not single games. If things go badly, you can request "
+                                 f"a meeting with the owner from the Manager Hub to ask "
+                                 f"for patience. In your first season the board won't "
+                                 f"pull the plug over a bumpy year -- barring a genuine "
+                                 f"disaster, confidence floors at 1 and you'll get an "
+                                 f"owner meeting instead. From year two on, if "
+                                 f"confidence hits zero, you're gone."),
+                        date_sent=self.current_date, category="General",
+                        is_important=True))
+                # 2. Weekly update: happiness, concerns, training effects
+                if self.current_date.weekday() == 0:
+                    self._career_weekly_update()
+                # 3. Monthly board review (first Monday of month)
+                if self.current_date.weekday() == 0 and self.current_date.day <= 7:
+                    self._career_board_review()
+                # 5. Matchday: scout report + pre-match presser
+                self._career_matchday_pre()
+            except Exception as e:
+                print(f"Career daily error (non-fatal): {e}")
+
+    def _process_player_development(self):
+            """Process weekly player development for all teams"""
+            if not hasattr(self, 'development_engine') or self.development_engine is None:
+                return
+
+            try:
+                development_events = []
+                # Per-tick cache: (player, drill) -> coaching multiplier, so
+                # the breakdown is priced once per player per drill.
+                _coach_cache = {}
+
+                for team in self.league.teams:
+                    for roster_type, roster_list in (('roster', team.roster),
+                                                       ('ahl', team.ahl_roster),
+                                                       ('prospects', team.prospects)):
+                        for player in roster_list:
+                            try:
+                                # Skip if player has no potential info
+                                if not hasattr(player, 'potential_info') or player.potential_info is None:
+                                    continue
+
+                                # Get player's development stage
+                                stage = self.development_engine.get_development_stage(player)
+
+                                # Calculate base development rate
+                                base_rate = self.development_engine.calculate_base_development_rate(player)
+
+                                # Apply training modifier based on roster type
+                                training_modifier = 1.0
+                                if roster_type == 'ahl':
+                                    training_modifier = 1.15  # AHL provides more development time
+                                elif roster_type == 'prospects':
+                                    training_modifier = 1.25  # Prospects focus on development
+                                elif roster_type == 'roster':
+                                    training_modifier = 0.9  # NHL focuses on performance, less development
+
+                                # Calculate weekly development (scaled from annual to weekly)
+                                weekly_rate = (base_rate * training_modifier) / 52.0
+
+                                # FM training schedule: user's weekly schedule modifies development
+                                try:
+                                    if team == self.user_team:
+                                        weekly_rate *= self.career.training.weekly_effects()["development_mult"]
+                                except Exception:
+                                    pass
+
+                                # Apply development to attributes based on player age and stage.
+                                # The age gates slide with the player's development arc
+                                # (late bloomers develop longer, early peaks decline
+                                # sooner) -- the gates themselves are untouched.
+                                try:
+                                    from game_classes import arc_peak_shift as _arc_shift
+                                    _shift = _arc_shift(player)
+                                except Exception:
+                                    _shift = 0
+                                if player.age <= 27 + _shift:  # Only develop younger players
+                                    import random
+
+                                    # Determine which attributes can develop
+                                    developable_attrs = self._get_developable_attributes(player)
+                                    # Coaching parity: this club's staff shapes the
+                                    # weekly tick exactly the way they shape a
+                                    # practice session (same model, all 32 teams).
+                                    # D8: bench quality splits by roster -- AHL
+                                    # skaters learn from the AHL bench, prospects
+                                    # from their junior/college/Euro program.
+                                    _asg8 = ("nhl" if roster_type == "roster"
+                                             else ("ahl" if roster_type == "ahl"
+                                                   else "overseas"))
+                                    coach_mults = self._weekly_coaching_mults(
+                                        team, player, developable_attrs,
+                                        _coach_cache, assignment=_asg8)
+
+                                    for attr in developable_attrs:
+                                        if hasattr(player, attr):
+                                            current_val = getattr(player, attr)
+                                            # Potential and attributes are on the native 1-100 scale.
+                                            # (potential_info fields are generated 60-100).
+                                            try:
+                                                ceiling_raw = player.potential_info.get_potential_for_attribute(attr)
+                                            except Exception:
+                                                ceiling_raw = 75
+                                            max_val = ceiling_raw
+
+                                            # Check if there's room to grow
+                                            if current_val < max_val and current_val < 100:
+                                                # Small chance of improvement each week
+                                                improvement_chance = (weekly_rate * 0.15
+                                                                      * coach_mults.get(attr, 1.0))
+
+                                                if random.random() < improvement_chance:
+                                                    new_val = min(current_val + 1, max_val, 100)
+                                                    setattr(player, attr, new_val)
+
+                                                    # Track significant improvements
+                                                    if team == self.user_team and new_val >= 75:
+                                                        development_events.append({
+                                                            'player': player,
+                                                            'attribute': attr,
+                                                            'old_value': current_val,
+                                                            'new_value': new_val
+                                                        })
+
+                                # Age-related decline for older players (arc slides the gate)
+                                elif player.age >= 33 + _shift:
+                                    import random
+                                    decline_chance = (player.age - 32) * 0.02  # 2% per year over 32
+
+                                    if random.random() < decline_chance:
+                                        physical_attrs = ['skating', 'strength', 'speed']
+                                        decline_attr = random.choice([a for a in physical_attrs if hasattr(player, a)])
+                                        if decline_attr:
+                                            current_val = getattr(player, decline_attr)
+                                            if current_val > 5:  # Don't go below 5
+                                                setattr(player, decline_attr, current_val - 1)
+
+                            except Exception as e:
+                                continue  # Skip player on error
+
+                # Notify user of significant developments on their team
+                if development_events:
+                    for event in development_events[:3]:  # Limit to 3 notifications per week
+                        player = event['player']
+                        attr_display = event['attribute'].replace('_', ' ').title()
+                        story = f"DEVELOPMENT: {player.full_name}'s {attr_display} has improved to {event['new_value']}!"
+                        self.news_log.append({'date': self.current_date, 'story': story})
+
+            except Exception as e:
+                print(f"Error processing player development: {e}")
+
+    def _process_room_politics_weekly(self):
+            """Weekly room-politics tick (module 03, Wave 2): practice plans are
+            executed, captaincy crises surface, demanding coaches' shelf life
+            ticks. User and AI teams run the same engine; only the choices
+            differ (the GM's vs automated)."""
+            try:
+                import dressing_room as _dr
+                league = getattr(self, "league", None)
+                teams = list(getattr(league, "teams", []) or [])
+                date_str = ""
+                try:
+                    date_str = self.current_date.isoformat()
+                except Exception:
+                    pass
+                for team in teams:
+                    try:
+                        # Multiplayer parity: a club run by a remote human gets
+                        # the user's tick (their stored plan runs; crises are
+                        # flagged for the human's decision), never the AI tick.
+                        _human = _dr.is_user_team(
+                            team, getattr(self, "game_manager", self))
+                        if not _human:
+                            try:
+                                import game_classes as _gc
+                                _human = bool(_gc.is_human_managed(team))
+                            except Exception:
+                                pass
+                        if _human:
+                            _urt = _dr.user_room_politics_tick(
+                                team, date_str=date_str, league=league)
+                            # Coach's leash, surfaced: the human GM decides --
+                            # never an auto-firing. One alert per hot-seat
+                            # episode; the flag clears (and re-arms) in
+                            # coach_hot_seat_check when the seat cools.
+                            try:
+                                _hs = (_urt or {}).get("coach_hot_seat")
+                                if isinstance(_hs, dict) and _hs.get("coach_name"):
+                                    _drf = _dr.ensure_dressing_room_fields(team)
+                                    if not _drf.get("coach_hot_seat_surfaced"):
+                                        _drf["coach_hot_seat_surfaced"] = True
+                                        self._alert_coach_hot_seat(
+                                            team, _hs, date_str)
+                            except Exception:
+                                pass
+                        else:
+                            _dr.ai_room_politics_tick(
+                                team, date_str=date_str, league=league, app=self)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+    def _process_single_game_result(self, game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
+                                          stats_from_events=True, preseason=False):
+            """Process a single game result - used for user team games.
+
+            stats_from_events: when True (default), player season stats are
+                derived from notable_events. Pass False when the sim engine
+                (e.g. GameSim) already updated player.stats itself, to avoid
+                double counting.
+            preseason: exhibition -- the result is stored for viewing but
+                never touches the standings.
+            """
+            # Update league standings (safely) -- never for preseason.
+            home_score, away_score = scores
+
+            if not preseason:
+                # Ensure teams exist in standings
+                if home_team.team_name not in self.league.standings:
+                    self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+                if away_team.team_name not in self.league.standings:
+                    self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+
+            # Detect if game went to overtime/shootout (for OTL point)
+            # NHL rule: loser in OT/SO gets 1 point (OTL)
+            went_to_ot = len([e for e in notable_events if e.get('period', 0) > 3]) > 0
+
+            # Grudge-week report card: marketed hard and fizzled gets called out.
+            try:
+                _ufights = 0
+                if sim_engine is not None:
+                    _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
+                self._grudge_week_grade(game_date, home_team, away_team,
+                                        home_score, away_score, went_to_ot,
+                                        fights=_ufights)
+            except Exception:
+                pass
+
+            # Winner gets 2 points (regular season only -- preseason
+            # exhibitions never touch the table).
+            if not preseason:
+                self.league.standings[winner.team_name]['W'] += 1
+                self.league.standings[winner.team_name]['Points'] += 2
+
+                # Loser: OTL point if game went to OT/SO, else regulation loss
+                if went_to_ot:
+                    self.league.standings[loser.team_name]['OTL'] += 1
+                    self.league.standings[loser.team_name]['Points'] += 1
+                else:
+                    self.league.standings[loser.team_name]['L'] += 1
+
+                # Sync the Team objects too (the dashboard, standings window,
+                # and season-review builder read team.wins/losses/ot_losses/
+                # games_played/goals_for/goals_against -- not league.standings).
+                # The canonical Team.update_record() keeps streaks consistent.
+                try:
+                    _wl, _ll = (home_team, away_team) if winner == home_team \
+                        else (away_team, home_team)
+                    _wl.update_record("WIN")
+                    _ll.update_record("LOSS", overtime=went_to_ot)
+                    home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+                    home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+                    away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+                    away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+                except Exception:
+                    pass
+
+            # Store game result for later viewing
+            player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
+            game_stats = getattr(sim_engine, 'game_stats', None) or {}
+            game_result_team_stats = None
+            if not game_stats:
+                # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
+                # flatten to the {pid: {...}} shape the box score expects.
+                by_id = {}
+                for _tm in (home_team, away_team):
+                    for _p in getattr(_tm, 'roster', []) or []:
+                        by_id[_p.id] = _p
+                for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                    if not isinstance(_pmap, dict):
+                        continue
+                    for _pid, _st in _pmap.items():
+                        if not isinstance(_st, dict) or _pid not in by_id:
+                            continue
+                        # Defensive record: the shared attribute-driven roll --
+                        # the same single decision GameSim applies live, so a
+                        # quick-simmed game leaves the same statistical trail.
+                        # Rolled ONCE here; the values below feed both the
+                        # per-game box score and (below, under stats_from_events)
+                        # the season totals, so the two always agree. Goalies
+                        # are skipped like GameSim's end-of-game roll.
+                        try:
+                            from game_classes import roll_defensive_game_stats as _rdg
+                            _pos = getattr(getattr(by_id[_pid], "primary_position",
+                                                    None), "name", "")
+                            if _pos == "GOALIE":
+                                _dh, _dt, _db = 0, 0, 0
+                            else:
+                                _dh, _dt, _db = _rdg(by_id[_pid])
+                        except Exception:
+                            _dh, _dt, _db = 0, 0, 0
+                        game_stats[_pid] = {
+                            'player': by_id[_pid],
+                            'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
+                            'shots_on_goal': _st.get('shots', 0),
+                            'saves': _st.get('saves', 0),
+                            'shots_against': 0,  # derived in the box score
+                            'goals_against': 0,
+                            'hits': _dh,
+                            'blocked_shots': _db,
+                            'takeaways': _dt,
+                            'giveaways': 0,
+                            'faceoffs_won': 0,   # filled by the faceoff roll below
+                            'faceoffs_lost': 0,
+                            '_def_roll': (_dh, _dt, _db),
+                        }
+                # Faceoffs: the shared per-game model (GameSim resolves them
+                # live; the quick path was leaving zeros). Writes per-player
+                # won/lost into the game_stats built above.
+                try:
+                    from game_classes import roll_faceoff_game_stats as _rfo
+                    _fo_home, _fo_away = _rfo(home_team.roster, away_team.roster)
+                    for _fo_map in (_fo_home, _fo_away):
+                        for _fpid, (_fw, _fl) in _fo_map.items():
+                            if _fpid in game_stats:
+                                game_stats[_fpid]['faceoffs_won'] = _fw
+                                game_stats[_fpid]['faceoffs_lost'] = _fl
+                except Exception:
+                    pass
+                # Team aggregates for the box-score team-stats section
+                # (AdvGS has no team_stats of its own).
+                try:
+                    _team_agg = {}
+                    for _pid, _gs in game_stats.items():
+                        _pl = _gs.get('player')
+                        _tnm = getattr(_pl, 'team_name', None)
+                        if not _tnm:
+                            continue
+                        _ag = _team_agg.setdefault(_tnm, {
+                            'hits': 0, 'blocked_shots': 0, 'takeaways': 0,
+                            'giveaways': 0, 'faceoffs_won': 0, 'shots': 0,
+                        })
+                        _ag['hits'] += _gs.get('hits', 0)
+                        _ag['blocked_shots'] += _gs.get('blocked_shots', 0)
+                        _ag['takeaways'] += _gs.get('takeaways', 0)
+                        _ag['giveaways'] += _gs.get('giveaways', 0)
+                        _ag['faceoffs_won'] += _gs.get('faceoffs_won', 0)
+                        _ag['shots'] += _gs.get('shots_on_goal', 0)
+                    if _team_agg:
+                        game_result_team_stats = dict(_team_agg)
+                    else:
+                        game_result_team_stats = None
+                except Exception:
+                    game_result_team_stats = None
+                # GAP-001 (parity): the AdvGS records chance grades per game in
+                # sim.stats but never flushed them to season stats. Mirror the
+                # GameSim finalization flush so both engines feed the analytics
+                # integration's per-player aggregates. This block only runs for
+                # the AdvGS shape (GameSim has game_stats and skips it); the
+                # stats_from_events guard keeps preseason exhibitions and the
+                # GameSim path (already flushed in its finalization) from
+                # double-counting.
+                if stats_from_events:
+                    try:
+                        for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                            if not isinstance(_pmap, dict):
+                                continue
+                            for _pid, _st in _pmap.items():
+                                if not isinstance(_st, dict) or _pid not in by_id:
+                                    continue
+                                _pl = by_id[_pid]
+                                try:
+                                    if getattr(getattr(_pl, 'primary_position', None), 'name', '') == 'GOALIE':
+                                        continue
+                                    for _g in ('a', 'b', 'c'):
+                                        _sk = f'grade_{_g}_shots'
+                                        _gk = f'grade_{_g}_goals'
+                                        setattr(_pl.stats, _sk,
+                                                (getattr(_pl.stats, _sk, 0) or 0) + (_st.get(_sk, 0) or 0))
+                                        setattr(_pl.stats, _gk,
+                                                (getattr(_pl.stats, _gk, 0) or 0) + (_st.get(_gk, 0) or 0))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+            game_result = {
+                'date': game_date,
+                'home_team': home_team,
+                'away_team': away_team,
+                'home_score': home_score,
+                'away_score': away_score,
+                'winner': winner,
+                'events': events,
+                'notable_events': notable_events,
+                'player_ratings': player_ratings,
+                'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
+                'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
+                # Per-team game stats: AdvGS has none of its own, so use the
+                # aggregates built from the flattened per-player stats above.
+                'team_stats': (game_result_team_stats
+                               if game_result_team_stats
+                               else getattr(sim_engine, 'team_stats', {})),
+                'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
+                'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
+                # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
+                'lines': self._snapshot_game_lines(home_team, away_team),
+            }
+            # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
+            # the game (integration read; missing data stays missing).
+            try:
+                _toi, _fat = self._snapshot_game_toi_fatigue(
+                    sim_engine, home_team, away_team)
+                game_result['player_toi'] = _toi
+                game_result['player_fatigue'] = _fat
+            except Exception:
+                pass
+
+            self._record_game_result(game_result)
+
+            # Three stars of the game (NHL media criteria) -- stamped on the
+            # result and recorded onto the players. Preseason names no stars.
+            try:
+                import stars as _stars_mod
+                _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                            preseason=preseason,
+                                            game_date=game_date)
+            except Exception as _se:
+                print(f"Three-stars error (non-fatal): {_se}")
+
+            # Generate media events for the game (if media system enabled)
+            if hasattr(self, 'media_system') and self.media_system:
+                self.media_system.process_game_result(game_result)
+
+            # Update player stats from game events
+            # Records: goals, assists, shots, saves, PIM
+            # (Skipped when the sim engine already updated player.stats itself.)
+            if stats_from_events:
+                # Build roster lookups for assist selection
+                home_roster = {p.id: p for p in home_team.roster}
+                away_roster = {p.id: p for p in away_team.roster}
+
+                # Identify starting goalies for save tracking
+                def get_starting_goalie(team):
+                    goalies = [p for p in team.roster
+                              if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
+                    return goalies[0] if goalies else None
+
+                home_goalie = get_starting_goalie(home_team)
+                away_goalie = get_starting_goalie(away_team)
+
+                for event in notable_events:
+                    event_type = event.get('event')
+                    player = event.get('player')
+                    team_name = event.get('team')
+
+                    if not player:
+                        continue
+
+                    if event_type == 'Goal':
+                        # Scorer gets goal + shot
+                        player.stats.goals += 1
+                        player.stats.shots += 1
+
+                        # Assists: up to 2 teammates, selected by the SHARED
+                        # attribute-weighted decision (mesh_system.assist_weight)
+                        # -- the same call both engines make. BUG-023: the old
+                        # filter checked .name != "G" but the enum member name is
+                        # "GOALIE" ("G" is the value), so goalies were never
+                        # excluded; and uniform random.sample bypassed the entire
+                        # multi-attribute assist rework for user-team games
+                        # (backup goalie at 8 assists in October S1).
+                        team_roster = home_roster if team_name == home_team.team_name else away_roster
+                        potential_assisters = [
+                            p for p in team_roster.values()
+                            if p.id != player.id
+                            and getattr(p, 'primary_position', None)
+                            and p.primary_position.name != "GOALIE"
+                        ]
+                        # P2 (scoring calibration 2026-09-29): trust the sim's
+                        # own attribute-weighted assist ledger when the Goal
+                        # event carries one -- this is the same single source of
+                        # truth the box score uses, so the season log agrees with
+                        # it and star playmakers are no longer diluted by a
+                        # uniform re-roll. Legacy events without an assist ledger
+                        # fall back to the BUG-023 attribute-weighted re-roll
+                        # (never uniform, never goalies) at the P1 rate so the
+                        # user's team credits assists at league intensity.
+                        event_assists = event.get('assists', None)
+                        if event_assists is not None:
+                            for assister in event_assists:
+                                pos_name = getattr(getattr(assister, 'primary_position', None), 'name', '')
+                                if (assister is not None
+                                        and getattr(assister, 'id', None) != player.id
+                                        and pos_name not in ("GOALIE", "G")
+                                        and getattr(assister, 'stats', None) is not None):
+                                    assister.stats.assists += 1
+                        else:
+                            num_assists = random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                            if potential_assisters and num_assists > 0:
+                                try:
+                                    from mesh_system import assist_weight as _aw_ev
+                                    _tm_ev = home_team if team_name == home_team.team_name else away_team
+                                    _ws = [max(0.05, _aw_ev(p, player, _tm_ev))
+                                           for p in potential_assisters]
+                                    assisters = []
+                                    _pool = list(potential_assisters)
+                                    _wp = list(_ws)
+                                    for _ in range(min(num_assists, len(_pool))):
+                                        _pick = random.choices(_pool, weights=_wp, k=1)[0]
+                                        _i = _pool.index(_pick)
+                                        assisters.append(_pick)
+                                        del _pool[_i]
+                                        del _wp[_i]
+                                except Exception:
+                                    assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                                for assister in assisters:
+                                    assister.stats.assists += 1
+
+                        # Opposing goalie: shot against (goal counts as shot faced, not a save)
+                        opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                        if opp_goalie:
+                            opp_goalie.stats.shots_against += 1
+                            opp_goalie.stats.goals_against += 1
+
+                    elif event_type == 'Shootout Goal':
+                        # NHL rule: shootout goals don't count in player stats
+                        pass
+
+                    elif event_type == 'Shot':
+                        # Shooter gets a shot on goal
+                        player.stats.shots += 1
+                        # Opposing goalie gets a save + shot against
+                        opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                        if opp_goalie:
+                            opp_goalie.stats.saves += 1
+                            opp_goalie.stats.shots_against += 1
+
+                    elif event_type == 'Penalty':
+                        # Standard minor penalty: 2 PIM
+                        player.stats.penalties += 1
+                        player.stats.penalties_in_minutes += 2
+
+            # Games played: all roster players get credit -- but only when stats
+            # are derived from events (quick sim). GameSim already credited GP
+            # to dressed players itself; running this too would double-count.
+            if stats_from_events:
+                # (In real NHL only dressed players get GP, but sim doesn't track scratches)
+                for team in [home_team, away_team]:
+                    for player in team.roster:
+                        player.stats.games_played += 1
+                # Goalie decisions: the events path credits goals/saves above
+                # but not W/L/SO. GameSim and the lightweight path credit them,
+                # so do it here too -- monthly awards and the record book must
+                # see the same numbers on every sim path.
+                if not preseason:
+                    for _team, _opp_score, _won in (
+                            (home_team, away_score, winner is home_team),
+                            (away_team, home_score, winner is away_team)):
+                        _g = get_starting_goalie(_team)
+                        if _g is None:
+                            continue
+                        if _won:
+                            _g.stats.wins += 1
+                        else:
+                            _g.stats.losses += 1
+                        if _opp_score == 0:
+                            _g.stats.shutouts += 1
+                # Defensive record: the per-game roll already happened once in
+                # the flattening above (stored as _def_roll on each game_stats
+                # entry) -- reuse those exact values so the season totals agree
+                # with the box score. Fall back to a fresh shared roll only if
+                # the flattening didn't run (shouldn't happen on this path).
+                try:
+                    from game_classes import roll_defensive_game_stats as _rdg
+                    for team in [home_team, away_team]:
+                        for player in team.roster:
+                            try:
+                                if getattr(getattr(player, "primary_position",
+                                                   None), "name", "") == "GOALIE":
+                                    continue
+                                _gs = game_stats.get(getattr(player, "id", None), {})
+                                _roll = _gs.get("_def_roll") if isinstance(_gs, dict) else None
+                                if _roll is None:
+                                    _roll = _rdg(player)
+                                _h, _t, _b = _roll
+                                player.stats.hits += _h
+                                player.stats.takeaways += _t
+                                player.stats.blocked_shots += _b
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+                # Goalie saves: quick-sim notable_events carry goals only
+                # ('Shot' save events never make the notable list), so derive
+                # saves from the engine's full event log, whose SHOT entries
+                # carry a result. Shootout attempts never log SHOT entries,
+                # so no shootout contamination by construction.
+                try:
+                    for _le in getattr(sim_engine, 'event_log', []) or []:
+                        if not isinstance(_le, dict) or _le.get('type') != 'SHOT':
+                            continue
+                        _det = _le.get('details') or {}
+                        if _det.get('result') != 'SAVE':
+                            continue
+                        _shooter = home_roster.get(_det.get('shooter_id'))
+                        _opp = away_goalie if _shooter is not None else home_goalie
+                        if _shooter is None:
+                            _shooter = away_roster.get(_det.get('shooter_id'))
+                            _opp = home_goalie
+                        if _shooter is None or _opp is None:
+                            continue
+                        _opp.stats.saves += 1
+                        _opp.stats.shots_against += 1
+                except Exception:
+                    pass
+
+            # Strip the internal _def_roll bookkeeping (used above to sync
+            # season totals with the per-game box score) before storing.
+            try:
+                for _gs in game_stats.values():
+                    if isinstance(_gs, dict):
+                        _gs.pop("_def_roll", None)
+            except Exception:
+                pass
+
+            # Update news log for user team games
+            if self.user_team in (home_team, away_team):
+                opponent = away_team if self.user_team == home_team else home_team
+                result = "won" if (winner == self.user_team) else "lost"
+                # Format score from user team perspective (user score first)
+                if self.user_team == home_team:
+                    user_score = home_score
+                    opp_score = away_score
+                else:
+                    user_score = away_score
+                    opp_score = home_score
+
+                self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
+
+                # Generate post-game emails for user team games
+                self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
+
+    def _process_training_programs(self):
+            """Run one weekly session for each active Development-Center program.
+
+            Programs live on game_manager.training_programs (persisted in saves)
+            and are keyed to the GAME date, not the wall clock. The module-level
+            ACTIVE_TRAINING_PROGRAMS registry is kept as a mirror for the
+            Development Center window.
+            """
+            try:
+                from enhanced_practice_system import (
+                    PracticeEngine, PracticeType, ACTIVE_TRAINING_PROGRAMS,
+                    FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+                from datetime import date
+            except Exception:
+                return
+            gm = getattr(self, 'game_manager', None)
+            user_team = getattr(self, 'user_team', None) or (getattr(gm, 'user_team', None) if gm else None)
+            if gm is None or not user_team:
+                return
+            league = (getattr(self, 'league', None)
+                      or (getattr(gm, 'league', None) if gm else None))
+            if not hasattr(gm, 'training_programs') or gm.training_programs is None:
+                gm.training_programs = {}
+            game_today = getattr(self, 'current_date', None) or date.today()
+
+            # One-time adoption: programs assigned through the window registry
+            # get stamped with the current game date so they run their full term.
+            for pid, prog in list(ACTIVE_TRAINING_PROGRAMS.items()):
+                if pid not in gm.training_programs:
+                    adopted = dict(prog)
+                    adopted['assigned'] = game_today
+                    gm.training_programs[pid] = adopted
+
+            engine = PracticeEngine()
+            # Every club's programs run, not just the host's: a client GM's
+            # training assignment lives in the same registry. (AI clubs never
+            # write programs, so SP behavior is unchanged.)
+            players = {}
+            _teams_by_name = {}
+            for _t in (getattr(league, 'teams', None) or []):
+                try:
+                    _teams_by_name[getattr(_t, 'team_name', '')] = _t
+                    for roster_list in (_t.roster, _t.ahl_roster,
+                                        _t.prospects):
+                        for pl in roster_list or []:
+                            players[getattr(pl, 'id', None)] = (pl, _t)
+                except Exception:
+                    continue
+            expired = []
+            for pid, prog in list(gm.training_programs.items()):
+                assigned = prog.get('assigned')
+                if isinstance(assigned, str):
+                    try:
+                        assigned = date.fromisoformat(assigned)
+                    except Exception:
+                        assigned = None
+                if assigned is None or (game_today - assigned).days >= 30:
+                    expired.append(pid)
+                    continue
+                _hit = players.get(pid)
+                if not _hit:
+                    continue
+                player, _pteam = _hit
+                # The drill is run by the player's own coaching staff, not
+                # the host's -- fall back to the host club only for legacy
+                # programs stamped without a team.
+                _coach_team = (_teams_by_name.get(prog.get('team'))
+                               or _pteam or user_team)
+                ptype = FOCUS_TO_PRACTICE_TYPE.get(prog.get('focus'), PracticeType.SKATING)
+                intensity = INTENSITY_LABEL_TO_ENUM.get(prog.get('intensity'))
+                if intensity is None:
+                    continue
+                try:
+                    can, _ = engine.can_practice(player, ptype, intensity)
+                    if can:
+                        # Team context: the real coaching staff runs the drill
+                        # (who teaches it, archetype affinity, attitude, fit,
+                        # system) instead of a flat trainer number.
+                        engine.execute_practice(player, ptype, intensity, 60, 12,
+                                                team=_coach_team)
+                except Exception:
+                    continue
+            for pid in expired:
+                gm.training_programs.pop(pid, None)
+                ACTIVE_TRAINING_PROGRAMS.pop(pid, None)
+            # Keep the window registry in sync for display purposes
+            for pid, prog in gm.training_programs.items():
+                ACTIVE_TRAINING_PROGRAMS[pid] = prog
+
+    def _rebuild_result_index(self):
+            """Full rebuild of the derived indexes from the current list."""
+            by_date = {}
+            by_matchup = {}
+            for r in self.game_results:
+                key = self._result_date_key(r.get('date'))
+                if key is None:
+                    continue
+                by_date.setdefault(key, []).append(r)
+                by_matchup[(key, id(r.get('home_team')),
+                            id(r.get('away_team')))] = r
+            self._results_by_date = by_date
+            self._results_by_matchup = by_matchup
+            self._results_index_src = self.game_results
+
+    def _run_phase2_maintenance(self):
+            """Run Phase 2 maintenance operations - optimized to reduce frequency"""
+            try:
+                # Memory optimization (every 30 days instead of 10 to reduce impact)
+                if self.memory_optimizer and self.current_date.day % 30 == 0:
+                    self.memory_optimizer.optimize_memory()
+
+                # Database optimization (every 2 weeks instead of weekly)
+                if self.db_manager and self.current_date.weekday() == 0 and self.current_date.day <= 7:  # First Monday of month
+                    self.db_manager.optimize_performance()
+
+                # Lazy loading cleanup (every 14 days instead of 5)
+                if self.lazy_manager and self.current_date.day % 14 == 0:
+                    self.lazy_manager.optimize_memory_usage()
+
+            except Exception as e:
+                print(f"Phase 2 maintenance error: {e}")
+
+    def _simulate_game_with_pbp_visual(self, home_team, away_team,
+                                           outdoor=None, coach_instruction=None):
+            """Run the modern visual play-by-play window modally for a user game.
+
+            Opens the live PBP viewer (rink + player bubbles driven by real sim
+            events) and blocks the daily-sim loop until the game is watched to
+            the final whistle and the window is closed. Returns the standard
+            6-tuple (winner, loser, scores, events, notable_events, sim_engine)
+            so the result processes exactly like any other sim.
+
+            D1: coach_instruction is the user's explicit game-day call,
+            forwarded to open_pbp_window (applied via the standard channel).
+            """
+            from pbp_visual_sim import open_pbp_window
+
+            # Deployment directive: same direction-cache fill as the batch path.
+            try:
+                from deployment_policy import set_team_direction as _set_tdir
+                import trade_storylines as _ts
+                _set_tdir({home_team.team_name: _ts.stance(self, home_team.team_name),
+                           away_team.team_name: _ts.stance(self, away_team.team_name)})
+            except Exception:
+                pass
+
+            # Adaptive Rivals: AI scouts the user and adjusts tactics for this game.
+            # Reverts to base identity afterwards.
+            _adapted_team = None
+            _adapted_plan = []
+            try:
+                from adaptive_rivals import adapt_for_opponent
+                user = getattr(self, 'user_team', None)
+                user_name = user.team_name if user else None
+                ai_team = None
+                if home_team.team_name == user_name and away_team.team_name != user_name:
+                    ai_team = away_team
+                elif away_team.team_name == user_name and home_team.team_name != user_name:
+                    ai_team = home_team
+                if ai_team is not None and user is not None:
+                    _adapted_plan = adapt_for_opponent(
+                        ai_team, user, getattr(self, 'game_results', []))
+                    _adapted_team = ai_team
+            except Exception:
+                pass
+
+            holder = {}
+            win_ref = {}
+
+            def _on_done(sim):
+                holder['sim'] = sim
+                # Capture the played event stream (carries period info for OT detection)
+                try:
+                    holder['pbp_events'] = list(win_ref['win'].events)
+                except Exception:
+                    holder['pbp_events'] = []
+                # Export shot chart to the career store (replayable evidence)
+                try:
+                    from shot_charts import ShotChartStore
+                    viz = win_ref.get('win')
+                    shotmap = getattr(viz, '_shotmap', []) if viz else []
+                    if shotmap:
+                        if not getattr(self, 'shot_chart_store', None):
+                            self.shot_chart_store = ShotChartStore()
+                        # Build game dict
+                        gid = f"{home_team.team_name}_{away_team.team_name}_{self.current_date.isoformat()}"
+                        game_dict = {
+                            "game_id": gid,
+                            "date": self.current_date.isoformat(),
+                            "home": home_team.team_name,
+                            "away": away_team.team_name,
+                            "shots": shotmap,  # list of dicts from _record_shotmap
+                        }
+                        self.shot_chart_store.add(game_dict)
+                except Exception:
+                    pass  # shot chart export is non-fatal
+                # Only allow closing once the final whistle has played
+                try:
+                    win_ref['win'].protocol("WM_DELETE_WINDOW", win_ref['win'].destroy)
+                except Exception:
+                    pass
+
+            win_ref['win'] = None
+
+            # Muck 2026-10-02: hide the day-sim loading toast before the
+            # visualizer opens -- the visualizer IS the feedback while
+            # watching; the loading bar should only show for quick-sim.
+            # Never raises; overlay is re-shown by the day loop if needed.
+            try:
+                self._update_day_sim_overlay(False)
+            except Exception:
+                pass
+
+            win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
+                                  rivalries=getattr(getattr(self, "league", None),
+                                                    "rivalries", []),
+                                  user_team=getattr(self, "user_team", None),
+                                  outdoor=outdoor,
+                                  coach_instruction=coach_instruction)
+            win_ref['win'] = win
+            # Prevent closing before the sim finishes: the result is needed below.
+            # (Re-enabled by _on_done when game_end plays.)
+            win.protocol("WM_DELETE_WINDOW", lambda: None)
+            # Failsafe: if the sim thread dies without emitting game_end, don't
+            # trap the user forever. Only release the close-block once the sim
+            # thread has actually finished — a healthy game runs ~7+ minutes at
+            # 1x, so a flat 3-minute timer would let the user close mid-game and
+            # we'd process a partial result as final.
+            def _failsafe():
+                try:
+                    if getattr(win, 'sim_done', False):
+                        win.protocol("WM_DELETE_WINDOW", win.destroy)
+                        return
+                except Exception:
+                    pass
+                try:
+                    win.after(60000, _failsafe)
+                except Exception:
+                    pass
+            win.after(180000, _failsafe)
+            # Absolute backstop: never trap the user longer than 12 minutes.
+            try:
+                win.after(720000,
+                          lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+            except Exception:
+                pass
+
+            self.wait_window(win)
+
+            sim = holder.get('sim')
+            if sim is None:
+                # Closed before the final whistle (backstop) or the sim thread
+                # died: the visual sim is partial/unusable. Fall back to a fast
+                # silent sim so the recorded result is always a valid full game.
+                from simulation import GameSim as _GameSim
+                sim = _GameSim(home_team, away_team)
+                sim.simulate_game()
+
+            home_score = getattr(sim, 'home_score', 0)
+            away_score = getattr(sim, 'away_score', 0)
+            scores = (home_score, away_score)
+            if home_score > away_score:
+                winner, loser = home_team, away_team
+            elif away_score > home_score:
+                winner, loser = away_team, home_team
+            else:
+                # Should not happen (OT/shootout always resolves), pick home
+                winner, loser = home_team, away_team
+
+            events = getattr(sim, 'game_log', []) or []
+            notable_events = list(getattr(sim, 'notable_events', []) or [])
+
+            # Career service time (waiver-exemption input).
+            try:
+                self._credit_nhl_games_played(home_team, away_team)
+            except Exception:
+                pass
+
+            # GameSim notable events lack period info; derive OT/shootout from the
+            # played PBP stream so standings award the OTL point correctly.
+            pbp_events = holder.get('pbp_events', [])
+            periods = {e.get('period', 0) for e in pbp_events if isinstance(e, dict)}
+            went_to_ot = any(p > 3 for p in periods)
+            had_shootout = any(isinstance(e, dict) and e.get('type') == 'shootout_end'
+                               for e in pbp_events)
+            if went_to_ot:
+                notable_events.append({'period': 5 if had_shootout else 4,
+                                       'event': 'overtime'})
+
+            # Adaptive Rivals: revert AI tactics + file tactical intel
+            if _adapted_team is not None:
+                try:
+                    from adaptive_rivals import revert_adaptation
+                    revert_adaptation(_adapted_team, _adapted_plan)
+                except Exception:
+                    pass
+                try:
+                    import tactics as _tx
+                    _ts = ((getattr(sim, 'team_stats', None) or {})
+                           .get(user_name, {})) or {}
+                    _ppg = _ts.get('power_play_goals', 0) or 0
+                    _ppo = _ts.get('power_play_opportunities', 0) or 0
+                    _pp_pct = (_ppg / _ppo) if _ppo else None
+                    _ugoals = (home_score if home_team.team_name == user_name
+                               else away_score)
+                    _agoals = (away_score if home_team.team_name == user_name
+                               else home_score)
+                    _tx.record_tactical_intel(_adapted_team, user, _ugoals,
+                                              _agoals, _ts.get('shots_on_goal'),
+                                              _pp_pct)
+                except Exception:
+                    pass
+
+            return winner, loser, scores, events, notable_events, sim
+
+    def _simulate_games_batch(self, games):
+            """Simulate multiple games efficiently using LIGHTWEIGHT batch processing"""
+            # Ultra-fast simulation for non-user games
+            batch_results = []
+            user_team = getattr(self, 'user_team', None)  # Add user_team reference
+
+            for game in games:
+                # Extract game data. A malformed entry is a data problem, not a
+                # sim problem -- it is skipped loudly below, never silently.
+                try:
+                    if isinstance(game, dict):
+                        game_date = game.get('date')
+                        home_team = game.get('home_team')
+                        away_team = game.get('away_team')
+                    elif isinstance(game, tuple) and len(game) >= 3:
+                        game_date, home_team, away_team = game[:3]
+                    else:
+                        continue
+                except Exception:
+                    continue
+                if home_team is None or away_team is None:
+                    # Corrupt schedule entry: no two clubs, nothing to sim. Loud
+                    # skip -- the season-slate audit flags the short clubs.
+                    print(f"🛟 SLATE-GUARANTEE: corrupt schedule entry on "
+                          f"{game_date} -- missing "
+                          f"{'home' if home_team is None else 'away'} team; "
+                          f"entry skipped")
+                    continue
+                # Preseason exhibitions: quick-simmed with no footprint --
+                # no stats, no standings, no career GP, no lore.
+                is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
+
+                # Pregame presentation is best-effort: a failure here must never
+                # take the game down with it, and never `continue` past the sim.
+                _outdoor_info = None
+                try:
+                    # Narrative ledger: grudge-week presentation for non-user games.
+                    # One dict lookup per game; only genuine league-wide feuds
+                    # (weight >= 60) earn the inbox card. Never blocks the sim.
+                    # (Skipped for preseason -- exhibitions build no lore.)
+                    if not is_preseason:
+                        try:
+                            from narrative_ledger import (get_ledger, interpret,
+                                                          incident_short)
+                            from headlines import deliver_spec as _deliver_spec
+                            _led = get_ledger(self)
+                            _cand = _led.callback_candidate(home_team.team_name,
+                                                            away_team.team_name)
+                            if _cand is not None and _cand.get("weight", 0) >= 60:
+                                _facts = _cand.get("facts") or {}
+                                _home = home_team.team_name
+                                _spec = {
+                                    "kind": "grudge_callback",
+                                    "home": _home,
+                                    "away": away_team.team_name,
+                                    "short": incident_short(_facts),
+                                    "first_meeting": not _cand.get("ref_count"),
+                                    "room_line":
+                                        interpret(_cand, "room", _home) or "",
+                                    "fans_line":
+                                        interpret(_cand, "fans", _home) or "",
+                                    "media_line":
+                                        interpret(_cand, "media", _home) or "",
+                                    "league_line":
+                                        interpret(_cand, "league", _home) or "",
+                                    "involved": (home_team.team_name,
+                                                 away_team.team_name),
+                                }
+                                if _deliver_spec(self, _spec):
+                                    _led.mark_referenced(_cand["id"])
+                        except Exception:
+                            pass
+
+                    # Grudge-week presentation for genuine feuds (sellout talk,
+                    # loud-building billing); hollow overhype gets graded post-game.
+                    # (Not for preseason.)
+                    if not is_preseason:
+                        self._grudge_week_market(game_date, home_team, away_team)
+                    # Legacy events: outdoor-game billing (~3/season, no spam).
+                    _outdoor_info = None
+                    try:
+                        import outdoor_games as _ogb
+                        _outdoor_info = _ogb.outdoor_info_for(game)
+                        if _outdoor_info is not None:
+                            self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                         away_team)
+                    except Exception:
+                        _outdoor_info = None
+                    # Pregame ceremony (news only on the lightweight path).
+                    try:
+                        import immortality as _im4
+                        _im4.consume_ceremony(self, home_team, None)
+                    except Exception:
+                        pass
+
+                except Exception as _pre_e:
+                    # Pregame presentation failed -- log it loudly, keep the
+                    # game. The sim below still runs; nothing is dropped.
+                    import traceback as _tb
+                    print(f"Pregame presentation failed (non-fatal, game still "
+                          f"simmed): {_pre_e}")
+                    _tb.print_exc()
+
+                # SLATE GUARANTEE (2026-10-02, BUG-003/004/005): the sim below
+                # NEVER raises and NEVER drops the game. Tier 0 is the normal
+                # path (full event sim for 'full' leagues, otherwise the
+                # lightweight sim); a failure retries via the lightweight sim;
+                # a further failure falls back to a deterministic, loudly-logged
+                # last-resort result. The preseason flag flows through every
+                # tier -- exhibitions never touch standings or stats.
+                winner, loser, scores, went_to_ot, full_sim = \
+                    self._sim_game_guaranteed(home_team, away_team, game,
+                                               game_date, is_preseason)
+
+                # Post-game processing is best-effort too: even if it fails,
+                # the result is still recorded below -- the game is never
+                # dropped, and the season slate stays whole.
+                try:
+                    # Career service time: every rostered player on both clubs
+                    # banks one NHL game (waiver-exemption input). Not in
+                    # preseason.
+                    try:
+                        self._credit_nhl_games_played(home_team, away_team,
+                                                      preseason=is_preseason)
+                    except Exception:
+                        pass
+
+                    # Update standings immediately (no batch delay) -- never for
+                    # preseason exhibitions.
+                    self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot,
+                                                preseason=is_preseason)
+
+                    # Legacy events: permanent season memory for outdoor games.
+                    if _outdoor_info is not None:
+                        try:
+                            import outdoor_games as _ogr
+                            _ogr.record_outdoor_result(self, _outdoor_info,
+                                                       scores[0], scores[1])
+                        except Exception:
+                            pass
+
+                    # Media engine: post-game coverage (cheap, additive).
+                    try:
+                        import media_engine
+                        _mev = media_engine.cover_game(
+                            getattr(self, 'league', None), home_team, away_team,
+                            winner, loser, scores, went_to_ot, game_date)
+                        media_engine.route_events(self, _mev, game_date)
+                    except Exception:
+                        pass
+
+                    # Tactics: rooms learn their systems one game at a time.
+                    try:
+                        import tactics as _tx
+                        _tx.tick_tactics_familiarity(home_team)
+                        _tx.tick_tactics_familiarity(away_team)
+                    except Exception:
+                        pass
+
+                except Exception as _post_e:
+                    # Post-game processing failed -- log it loudly (BUG-001
+                    # diagnostic: full traceback, never just str(e)) but keep
+                    # the result anyway. The game is NEVER dropped.
+                    import traceback as _tb2
+                    print(f"Post-game processing failed (non-fatal, result "
+                          f"kept): {_post_e}")
+                    _tb2.print_exc()
+
+                # GUARANTEED: a scheduled game always produces a recorded
+                # result -- this line is reached for every non-corrupt entry,
+                # no matter which sim tier produced the result or whether the
+                # presentation/processing above failed.
+                batch_results.append((game_date, home_team, away_team, winner,
+                                      loser, scores, went_to_ot, full_sim))
+
+            # Store minimal game results for performance
+            for game_date, home_team, away_team, winner, loser, scores, went_to_ot, full_sim in batch_results:
+                home_score, away_score = scores
+
+                # Lore: deliver any headlines the sim collected (line brawls,
+                # ...), including CPU-vs-CPU games.
+                if full_sim is not None:
+                    try:
+                        import headlines
+                        headlines.drain_sim_headlines(self, full_sim)
+                    except Exception:
+                        pass
+
+                # Narrative: quick-simmed games never modeled fights/brawls, so
+                # roll them post-game through the shared incident module; record
+                # the night's stories for both engines. Headlines only if the
+                # user's team was involved (no league-wide spam).
+                # (Skipped for preseason -- exhibitions build no lore.)
+                _gfights = 0
+                if not is_preseason:
+                    try:
+                        _sim_cls = type(full_sim).__name__ if full_sim is not None else ""
+                        _nres = self._narrative_postgame(
+                            full_sim, home_team, away_team, scores,
+                            went_ot=bool(went_to_ot), shootout=False,
+                            roll_incidents=_sim_cls != "GameSim",
+                            deliver_headlines=bool(user_team) and
+                            user_team in (home_team, away_team),
+                            game_date=game_date)
+                        _gfights = int((_nres or {}).get("fights", 0) or 0)
+                    except Exception:
+                        _gfights = 0
+
+                # W3: post-game wear-and-tear -> persistent player condition.
+                # GameSim path only (it records real per-player TOI seconds; the
+                # lightweight path tracks no TOI). Rest days come from the actual
+                # schedule date gaps (back-to-backs included).
+                if full_sim is not None and not is_preseason:
+                    try:
+                        from condition_system import apply_postgame_wear_for_game
+                        _toi = dict(getattr(full_sim, 'player_toi_seconds', None) or {})
+                        _gsec = float(getattr(full_sim, '_w3_game_seconds', 0.0) or 0.0)
+                        _gf = getattr(full_sim, 'goaltender_fatigue', None) or {}
+                        try:
+                            from game_classes import PlayerPosition as _W3_PP
+                            for _team in (home_team, away_team):
+                                for _p in getattr(_team, 'roster', []) or []:
+                                    if getattr(_p, 'primary_position', None) == _W3_PP.GOALIE \
+                                            and _gf.get(getattr(_p, 'id', None), 100) < 100:
+                                        _toi[_p.id] = _gsec  # dressed goalie: whole game
+                        except Exception:
+                            pass
+                        _intensity = max(0.8, min(1.4, float(
+                            getattr(full_sim, 'physical_intensity', 1.0) or 1.0)))
+                        if went_to_ot:
+                            _intensity = min(1.5, _intensity + 0.1)
+                        apply_postgame_wear_for_game(
+                            home_team, away_team, game_date,
+                            getattr(self.league, 'schedule', None),
+                            toi_by_id=_toi, intensity=_intensity)
+                    except Exception:
+                        pass
+
+                # Store minimal game result
+                game_result = {
+                    'date': game_date,
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'home_score': home_score,
+                    'away_score': away_score,
+                    'winner': winner,
+                    'events': [],  # No events for batch games
+                    'notable_events': [],  # No notable events
+                    'player_ratings': {},  # No player ratings
+                    'event_log': [],  # No event log
+                    'overtime': went_to_ot,  # Track OT for OTL points
+                    'shootout': False,
+                    # Post-game Lines tab: the combos actually dressed
+                    # (Muck 2026-10-02). Never raises; empty when unknown.
+                    'lines': self._snapshot_game_lines(home_team, away_team),
+                }
+                if full_sim is not None:
+                    # Full-detail league: keep the event stream for reports/viewer
+                    game_result['event_log'] = getattr(full_sim, 'event_log', []) or []
+                    game_result['notable_events'] = getattr(full_sim, 'notable_events', []) or []
+                    game_result['events'] = getattr(full_sim, 'game_log', []) or []
+                    game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
+                    game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
+                    # NEW-A6: same TOI/fatigue snapshot as the detailed path.
+                    try:
+                        _toi, _fat = self._snapshot_game_toi_fatigue(
+                            full_sim, home_team, away_team)
+                        game_result['player_toi'] = _toi
+                        game_result['player_fatigue'] = _fat
+                    except Exception:
+                        pass
+
+                # Add to game results (keeps the date/matchup indexes in sync)
+                self._record_game_result(game_result)
+
+                # Three stars of the game (regular season only).
+                try:
+                    import stars as _stars_mod2
+                    _stars_mod2.record_game_stars(
+                        game_result, home_team, away_team,
+                        preseason=is_preseason, game_date=game_date)
+                except Exception as _se2:
+                    print(f"Three-stars error (non-fatal): {_se2}")
+
+                # Hollow overhype: marketed as grudge week, delivered a
+                # snoozer -- the marketing wrote checks the game couldn't cash.
+                # (_gfights came from the narrative post-game hook above, which
+                # also stamped _fights_total onto the sim.)
+                self._grudge_week_grade(game_date, home_team, away_team,
+                                        home_score, away_score, went_to_ot,
+                                        fights=_gfights)
+
+                # Only generate news for user team games
+                if user_team and user_team in (home_team, away_team):
+                    opponent = away_team if user_team == home_team else home_team
+                    result = "won" if (winner == user_team) else "lost"
+                    # Format score from user team perspective
+                    if user_team == home_team:
+                        user_score = home_score
+                        opp_score = away_score
+                    else:
+                        user_score = away_score
+                        opp_score = home_score
+
+                    self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
+
+            # Clean up game tracking flags
+            all_teams = []
+            for game in games:
+                try:
+                    # Extract teams based on game format (same logic as above)
+                    if isinstance(game, dict):
+                        home_team = game.get('home_team')
+                        away_team = game.get('away_team')
+                    elif isinstance(game, tuple) and len(game) >= 3:
+                        _, home_team, away_team = game[:3]
+                    else:
+                        continue
+
+                    if home_team:
+                        all_teams.append(home_team)
+                    if away_team:
+                        all_teams.append(away_team)
+                except Exception:
+                    continue
+
+            for team in all_teams:
+                if hasattr(team, 'roster'):
+                    for player in team.roster:
+                        if hasattr(player, '_game_added'):
+                            delattr(player, '_game_added')
+
+    def _start_offseason(self):
+            """Start the offseason phase."""
+            # Season continuity guard (Muck 2026-10-02): validate that the
+            # season year follows recorded history without gaps before any
+            # rollover logic runs. Detection only -- never blocks or mutates.
+            try:
+                self._validate_season_continuity()
+            except Exception:
+                pass
+            # Cup recap backstop: if the champion was decided outside the daily
+            # loop (bulk sims), the inbox still gets the awarding story. Once.
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+            # Controversy cooldown + staff rep + Cup bonus. Reads standings before
+            # league.end_of_season() wipes them.
+            self._update_offseason_reputations()
+            # Captaincy torch-passing (captaincy_change.py): AI clubs rarely
+            # and conservatively hand the C to a plainly worthier successor.
+            # Same assess/apply logic the human GM faces -- no free lunch.
+            try:
+                self._ai_offseason_captaincy_changes()
+            except Exception:
+                pass
+            # League Memory: record the completed season (champion, awards,
+            # standings) before league.end_of_season() wipes the stats.
+            try:
+                self._record_season_to_history()
+            except Exception:
+                pass
+            # Board season review (manager_career.BoardSystem.season_review):
+            # the year-end reckoning -- expectation vs reality, confidence
+            # delta, and the season rollover (honeymoon decay, patience
+            # erosion, counter resets). Must run before league.end_of_season()
+            # wipes the standings and stats it reads. Previously this method
+            # had no caller, so every season played as "year 1" forever.
+            try:
+                self._offseason_board_review()
+            except Exception:
+                pass
+            # Immortality (immortality.py): retirements, HOF ballot, retired
+            # numbers, era arguments. Runs on recorded career totals, before
+            # league.end_of_season() wipes the stats. Purely additive.
+            try:
+                self._offseason_immortality()
+            except Exception:
+                pass
+            # Copycat league: AI teams steal the Cup champion's systems.
+            # (Familiarity cost included -- copying isn't free.)
+            try:
+                import tactics as _tx
+                _CAT_LABEL = {"pp": "power play", "pk": "penalty kill",
+                              "ozone": "offensive-zone system",
+                              "forecheck": "forecheck",
+                              "dzone": "defensive-zone coverage"}
+                for _tn, _cat, _sys, _lore in _tx.offseason_copycat(
+                        getattr(self, 'league', None)):
+                    _sysname = _tx.CATALOGS.get(_cat, {}).get(_sys, {}).get(
+                        "name", _sys)
+                    _lorebit = f" — {_lore}" if _lore else ""
+                    self.add_news(
+                        f"Copycat league: {_tn} install the {_sysname} "
+                        f"{_CAT_LABEL.get(_cat, 'system')} after watching the "
+                        f"champions win with it{_lorebit}.")
+            except Exception:
+                pass
+            # Buyout window (June 15-30, real NHL timing): AI GMs clear dead
+            # weight; the user's candidates arrive as an interactive inbox
+            # message (same pattern as RFA qualifying). The stamped date moves
+            # INTO the window -- previously the July-1 jump skipped June 15-30
+            # entirely, so the transaction_windows gate meant nobody (user or
+            # AI) could ever execute a buyout. Runs before the draft (June
+            # 23-25), matching the real calendar order.
+            try:
+                self._set_current_date(date(self.league.season_year + 1, 6, 15))
+            except Exception:
+                pass
+            try:
+                import buyout_window as _bw
+                _bw_summary = _bw.process_buyout_window(
+                    self.league, app=self, rng=getattr(self, "_rng", None)) or {}
+                _n_bought = len(_bw_summary.get("ai_buyouts") or [])
+                if _n_bought:
+                    self.add_news(
+                        f"Buyout window (June 15-30): {_n_bought} player"
+                        f"{'s' if _n_bought != 1 else ''} bought out "
+                        f"league-wide.")
+            except Exception:
+                debug_print("Buyout window failed (non-fatal):")
+                import traceback
+                traceback.print_exc()
+            # Tentpole guarantee: the draft lottery (May 8) and entry draft
+            # (June 23-25) are date-triggered, but the July-1 jump below would
+            # otherwise skip them every season. Run them now when missed; the
+            # per-year guards make it a no-op when the date path already ran.
+            # Must precede league.end_of_season(), which wipes the standings the
+            # draft order is built from.
+            self._guarantee_offseason_tentpoles()
+            # D5: offseason staff carousel -- AI clubs approach expiring
+            # staff (the "stud assistant in his final year who wants a
+            # head-coach job" case). Runs BEFORE end_of_season() so the
+            # tick below only decrements the staff who stayed.
+            try:
+                import staff_poaching as _sp
+                _pn5 = _sp.offseason_staff_poach(self.league, self.user_team)
+                if _pn5:
+                    self.league.staff_contract_news = (
+                        list(getattr(self.league, "staff_contract_news", None)
+                             or []) + [str(_m) for _m in _pn5])
+            except Exception:
+                pass
+            # Age players and reset stats
+            self.league.end_of_season()
+
+            # D5 follow-up: the contract tick above held expired staff for
+            # renewal instead of releasing them. Their offer arrives as one
+            # interactive inbox message (never a popout). Decline/ignore
+            # walks them to the free-agent pool.
+            # MP: every human-managed club gets its own message; clients
+            # answer via the routed staff_renew action.
+            try:
+                import staff_renewals as _srq
+                _human = []
+                try:
+                    from game_classes import is_human_managed as _ihm
+                    for _t in (getattr(self.league, "teams", None) or []):
+                        try:
+                            if _ihm(_t):
+                                _human.append(_t)
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+                if not _human:
+                    _uq = getattr(self, "user_team", None)
+                    if _uq is not None:
+                        _human = [_uq]
+                for _hq in _human:
+                    _srq.queue_user_renewal_message(self.league, _hq, self)
+            except Exception:
+                pass
+
+            # Draft rights lifecycle: end_of_season() (game_classes) collected
+            # re-entry / UFA / retirement / warning messages on league.rights_news.
+            # Flush them to the inbox here (the monthly Jan-Jun beat hook would
+            # otherwise hold July's rights news until January).
+            try:
+                _rn = list(getattr(self.league, "rights_news", None) or [])
+                for _msg in _rn:
+                    try:
+                        self.add_news(str(_msg))
+                    except Exception:
+                        pass
+                if _rn:
+                    self.league.rights_news = []
+            except Exception:
+                pass
+            # Prospect junior/college award headlines from end_of_season.
+            try:
+                _pn = list(getattr(self.league, "prospect_awards_news", None)
+                           or [])
+                for _msg in _pn:
+                    try:
+                        self.add_news("🏆 " + str(_msg))
+                    except Exception:
+                        pass
+                if _pn:
+                    self.league.prospect_awards_news = []
+            except Exception:
+                pass
+            # Rivalry-review verdicts from end_of_season.
+            try:
+                _rn = list(getattr(self.league, "rivalry_review_news", None)
+                           or [])
+                for _msg in _rn:
+                    try:
+                        self.add_news("⚔️ " + str(_msg))
+                    except Exception:
+                        pass
+                if _rn:
+                    self.league.rivalry_review_news = []
+            except Exception:
+                pass
+            # D5: staff contract expiries + offseason poach moves.
+            try:
+                _sn = list(getattr(self.league, "staff_contract_news", None)
+                           or [])
+                for _msg in _sn:
+                    try:
+                        self.add_news("🧑‍💼 " + str(_msg))
+                    except Exception:
+                        pass
+                if _sn:
+                    self.league.staff_contract_news = []
+            except Exception:
+                pass
+            # Snapshot staff breakthrough headlines for the year-end recap
+            # (delivered below), which runs after these lists are drained.
+            try:
+                self._season_review_staff_news = list(
+                    getattr(self.league, "staff_breakthrough_news", None) or [])
+            except Exception:
+                self._season_review_staff_news = []
+            # Staff breakthrough headlines from end_of_season.
+            try:
+                _bn = list(getattr(self.league, "staff_breakthrough_news", None)
+                           or [])
+                for _msg in _bn:
+                    try:
+                        self.add_news("📈 " + str(_msg))
+                    except Exception:
+                        pass
+                if _bn:
+                    self.league.staff_breakthrough_news = []
+            except Exception:
+                pass
+            # ELC slide headlines from end_of_season (CBA 9.1(d)).
+            try:
+                _sn = list(getattr(self.league, "elc_slide_news", None) or [])
+                for _msg in _sn:
+                    try:
+                        self.add_news("📝 " + str(_msg))
+                    except Exception:
+                        pass
+                if _sn:
+                    self.league.elc_slide_news = []
+            except Exception:
+                pass
+
+            # Restricted free agency (rfa_system.py): qualifying offers at the
+            # real CBA minimums, rare AI offer sheets with real pick
+            # compensation, and salary arbitration at real-life-calibrated filing
+            # rates. AI clubs are processed end-to-end; the user's qualifying
+            # decisions arrive as an interactive inbox message. Runs after
+            # end_of_season() expired the contracts above.
+            try:
+                import player_decision as _pd
+                _pd.seed_league_decision_fields(self.league)
+            except Exception:
+                pass
+            try:
+                import rfa_system as _rfa
+                _rfa_summary = _rfa.process_rfa_offseason(
+                    self.league, app=self, rng=getattr(self, "_rng", None))
+                if _rfa_summary.get("arbitration_awards"):
+                    self.add_news(
+                        f"Arbitration tracker: "
+                        f"{_rfa_summary['arbitration_filings']} filed, "
+                        f"{len(_rfa_summary['arbitration_awards'])} resolved.")
+            except Exception:
+                pass
+
+            # BUG-015: generate the new season's slate. generate_schedule() was
+            # only ever called on new-career paths, so after the first rollover
+            # the league had zero scheduled games -- season 2+ never started
+            # (standings frozen at 0-0-0, the season-end safety net had no last
+            # date to key on). Real NHL timing: the schedule drops in late June,
+            # i.e. right here, before the July-1 jump. The template cache makes
+            # the rebuild cheap; generation is deterministic per season_year so
+            # a re-run is idempotent.
+            try:
+                self.league.generate_schedule()
+                try:
+                    import outdoor_games as _og
+                    _og.schedule_outdoor_games(self.league)
+                except Exception:
+                    pass
+            except Exception:
+                import traceback
+                traceback.print_exc()
+            # A new schedule was generated: drop cached season dates/games so the
+            # season-end safety net in simulate_day recomputes from the new slate
+            # instead of the previous season's.
+            self._season_last_game_date = None
+            if hasattr(self, '_schedule_cache'):
+                self._schedule_cache.clear()
+            if hasattr(self, '_strength_cache'):
+                self._strength_cache.clear()
+
+            # Generate new draft class (quality from settings: Weak/Normal/Strong/Generational)
+            # The upcoming entry draft is held in June of next calendar year; stamp
+            # the class with that year and fold in this summer's rights re-entries
+            # (unsigned CHL prospects re-entering the draft). The class is
+            # regenerated for real on draft day in _hold_entry_draft, which clears
+            # league.draft_reentries after consuming them -- so this call must NOT
+            # clear the list.
+            draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
+            from draft_generator import generate_draft_class
+            _gen_kwargs = {"num_prospects": 336, "quality": draft_quality}  # 7 rounds x 32 = 224 picks + ~112 undrafted (Eastside-style)
+            try:
+                import inspect as _inspect
+                _params = _inspect.signature(generate_draft_class).parameters
+                if "draft_year" in _params:
+                    _gen_kwargs["draft_year"] = self.league.season_year + 1
+                if "reentries" in _params:
+                    _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None) or []
+            except Exception:
+                pass
+            self.league.draft_prospects = generate_draft_class(**_gen_kwargs)  # 7 rounds × 32 teams = 224 players
+
+            # Undrafted European free agents: a thin yearly batch (4-8, ~5) of
+            # older Euro-league players appended to the FA pool. Mostly AHL/tweener
+            # material with usually 0-1 plausible NHL gamble; true impact talent at
+            # ~10%/offseason, never scheduled. The AI sees them as ordinary free
+            # agents. Runs once per real offseason, before the July-1 jump
+            # (guarded by league._euro_fa_year -- a second pass for the same
+            # offseason would append a duplicate batch).
+            try:
+                from euro_free_agents import run_euro_free_agency
+                _efa_year = self.league.season_year
+                if getattr(self.league, "_euro_fa_year", None) != _efa_year:
+                    _efa_summary = run_euro_free_agency(
+                        self.league, _efa_year, app=self) or {}
+                    if _efa_summary.get("added"):
+                        self.league._euro_fa_year = _efa_year
+            except Exception:
+                pass
+
+            # Post-draft "steal of the draft" retrospective: late-round picks whose
+            # displayed stock has exploded since draft day get their retrospective
+            # now, once per player, rather than pre-draft hype they never had.
+            try:
+                from draft_stories import steal_retrospective
+                for _story in (steal_retrospective(self.league) or [])[:2]:
+                    self.add_news(
+                        f"{_story.get('title', 'Draft')} — {_story.get('text', '')}")
+            except Exception:
+                pass
+
+            # Reset the deadline manager's per-season state so last year's
+            # trade activity doesn't leak into the new season's intel panel.
+            try:
+                from trade_deadline_manager import get_deadline_manager
+                get_deadline_manager(getattr(self, 'game_manager', None)).reset_for_new_season()
+            except Exception:
+                pass
+
+            # Update the current date to offseason
+            self._set_current_date(date(self.league.season_year, 7, 1))  # Jump to July 1st (Free Agency)
+
+            messagebox.showinfo("Offseason", 
+                               f"Welcome to the {self.league.season_year}-{self.league.season_year + 1} offseason!\n\n"
+                               "• Players have aged one year\n"
+                               "• Stats have been reset\n"
+                               "• New draft class available\n"
+                               "• Free agency is now open")
+
+            self.update_all_views()
+
+    def _update_day_sim_overlay(self, busy, status=""):
+            """Show/hide the day-sim loading toast (Muck 2026-10-02).
+
+            The day sim blocks the main thread; without a visible loading
+            prompt the app looks crashed. The toast is a small non-modal
+            spinner + status in the bottom-right corner -- deliberately not
+            modal and not centered, so it never covers crucial info and can
+            never block the Game Day Watch/Quick choice. Never raises.
+            """
+            try:
+                overlay = getattr(self, '_day_sim_overlay', None)
+                if busy:
+                    if overlay is None or not overlay.is_showing:
+                        try:
+                            from day_sim_loading import DaySimLoadingOverlay
+                            overlay = DaySimLoadingOverlay(self)
+                            self._day_sim_overlay = overlay
+                        except Exception:
+                            return
+                    if status:
+                        try:
+                            overlay.set_status(status)
+                        except Exception:
+                            pass
+                else:
+                    # Auto-advance owns the overlay between days: keep it up
+                    # (no flicker) and show the new date instead of tearing it
+                    # down and rebuilding it every day.
+                    if getattr(self, '_auto_advance', False):
+                        if overlay is not None and bool(overlay.is_showing):
+                            try:
+                                overlay.set_status(
+                                    "Auto-advancing… %s  (ESC to stop)"
+                                    % self.current_date.strftime('%b %d, %Y'))
+                            except Exception:
+                                pass
+                        return
+                    if overlay is not None:
+                        try:
+                            overlay.destroy()
+                        except Exception:
+                            pass
+                        try:
+                            self._day_sim_overlay = None
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    def _update_team_colors(self):
+            """Update button colors to match the user's team colors"""
+            if hasattr(self, 'user_team') and self.user_team and hasattr(self, 'modern_theme'):
+                self.modern_theme.update_team_colors(self.style, self.user_team.team_name)
+            # App-wide accent follows the user's team: every CustomTkinter
+            # widget built after this call (nav pills, primary buttons,
+            # selected states) and the game visualizer wear the team color.
+            try:
+                if getattr(self, 'user_team', None):
+                    import ctk_theme
+                    from team_identity_system import accent_for_team
+                    accent, hover, _text = accent_for_team(self.user_team.team_name)
+                    ctk_theme.set_team_accent(accent, hover, _text)
+                    # Plain-tkinter dashboard reads modern_ui.AppColors at
+                    # build time -- keep it in step (ACCENT_BG is a whisper
+                    # of the accent over the window background).
+                    from modern_ui import AppColors
+                    AppColors.ACCENT = accent
+                    AppColors.ACCENT_DIM = hover
+                    AppColors.ACCENT_BG = _mix_hex(accent, "#0e0e11", 0.85)
+                    # Contrast-safe text colors for the team accent: _text is
+                    # readable ON the accent (standings, buttons); the on-dark
+                    # variant is the accent itself made readable on dark bgs.
+                    AppColors.ACCENT_TEXT = _text
+                    from team_identity_system import ensure_text_contrast
+                    # The on-dark variant is ensured against the actual whisper
+                    # bg it sits on (PillBadge), not pure dark -- the whisper is
+                    # a touch lighter and that matters at the margin.
+                    AppColors.ACCENT_ON_DARK = ensure_text_contrast(
+                        accent, AppColors.ACCENT_BG)
+            except Exception:
+                pass
+
 
 def launch_game_viewer_with_sim(home_team, away_team):
     """
