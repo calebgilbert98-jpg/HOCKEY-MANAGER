@@ -313,6 +313,19 @@ class HubPage(QWidget):
                                        sub=sub)
             more_grid.addWidget(tile, 0, i)
             self._nav_tiles[key] = tile
+        # ---- secondary tiles row 2: mainline feature ports ----
+        secondary2 = [
+            ("practice", "PRACTICE", "\U0001f3d2", "Drills & coach runs", "practice_center"),
+            ("goals", "SEASON GOALS", "\U0001f3af", "Player targets", "season_goals"),
+            ("offseason", "OFFSEASON", "\u2600", "Summer programs", "offseason_programs"),
+            ("jerseys", "JERSEYS", "\U0001f455", "Jersey numbers", "jersey_numbers"),
+            ("gmrels", "GM RELATIONS", "\U0001f91d", "GM relationships", "gm_relationships"),
+        ]
+        for i, (key, label, icon, sub, screen) in enumerate(secondary2):
+            tile = self._make_nav_tile(label, icon, screen, big=False,
+                                       sub=sub)
+            more_grid.addWidget(tile, 1, i)
+            self._nav_tiles[key] = tile
         # 6th column spacer to match HTML 6-col grid (5 tiles + empty)
         outer.addLayout(more_grid)
         outer.addSpacing(12)
@@ -1561,9 +1574,11 @@ class MainWindow(QMainWindow):
         # circular-import issues and keep startup fast.
         from native_ui.screens.ahl import AhIScreen
         from native_ui.screens.analytics import AnalyticsScreen
+        from native_ui.screens.awards_ceremony import AwardsCeremonyScreen
         from native_ui.screens.calendar import CalendarScreen
         from native_ui.screens.camp import CampScreen
         from native_ui.screens.captains import CaptainsScreen
+        from native_ui.screens.boxscore import BoxscoreScreen
         from native_ui.screens.coach_checkin import CoachCheckinScreen
         from native_ui.screens.compare import CompareScreen
         from native_ui.screens.contract_negotiation import ContractNegotiationScreen
@@ -1593,6 +1608,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.playoffs import PlayoffsScreen
         from native_ui.screens.practice_center import PracticeCenterScreen
         from native_ui.screens.records import RecordsScreen
+        from native_ui.screens.recall_picker import RecallPickerScreen
         from native_ui.screens.replay import ReplayScreen
         from native_ui.screens.roster import RosterScreen
         from native_ui.screens.save import SaveScreen
@@ -1630,6 +1646,7 @@ class MainWindow(QMainWindow):
             "multiplayer": MultiplayerScreen,
             "practice_center": PracticeCenterScreen,
             "camp": CampScreen,
+            "boxscore": BoxscoreScreen,
             "captains": CaptainsScreen,
             "staff": StaffScreen,
             "staff_detail": StaffDetailScreen,
@@ -1655,6 +1672,7 @@ class MainWindow(QMainWindow):
             "lottery": LotteryScreen,
             "history": HistoryScreen,
             "season_summary": SeasonSummaryScreen,
+            "awards_ceremony": AwardsCeremonyScreen,
             "ahl": AhIScreen,
             "calendar": CalendarScreen,
             "team": TeamScreen,
@@ -1665,6 +1683,7 @@ class MainWindow(QMainWindow):
             "save": SaveScreen,
             "watch": WatchScreen,
             "replay": ReplayScreen,
+            "recall_picker": RecallPickerScreen,
             "compare": CompareScreen,
             "coach_checkin": CoachCheckinScreen,
             "manager": ManagerScreen,
