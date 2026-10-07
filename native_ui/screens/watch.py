@@ -23,11 +23,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QComboBox, QTabWidget, QTextBrowser,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
     QGraphicsRectItem, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QWidget, QVBoxLayout, QFrame, QShortcut,
+    QScrollArea, QWidget, QVBoxLayout, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import (
-    QBrush, QColor, QPen, QPainter, QPainterPath, QKeySequence,
+    QBrush, QColor, QPen, QPainter, QPainterPath, QKeySequence, QShortcut,
 )
 
 from .base import BaseScreen

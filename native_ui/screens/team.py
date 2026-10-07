@@ -284,7 +284,10 @@ class TeamScreen(BaseScreen):
                         [nm, pos, gp_, g_, a_, str(pts)]):
                     item = QTableWidgetItem(str(txt))
                     if col == 5:
-                        item.setStyleSheet("font-weight: 700;")
+                        from PySide6.QtGui import QFont
+                        _f = item.font()
+                        _f.setBold(True)
+                        item.setFont(_f)
                     table.setItem(i, col, item)
             cl.addWidget(table)
             self._host_layout.addWidget(card)

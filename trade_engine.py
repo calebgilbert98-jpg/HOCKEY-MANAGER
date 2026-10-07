@@ -2993,6 +2993,28 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     except Exception:
         pass
 
+    # Dress-minimum guard (BUG FIX 2026-10-07): a trade must not leave
+    # either club unable to dress 18 skaters + 2 goalies. The AI market
+    # was trading away both of a team's goalies (e.g. Anaheim -> Florida
+    # day 1), leaving the club unable to play games. Incoming assets
+    # count toward the post-deal lineup (1-for-1 goalie swap stays legal).
+    try:
+        import roster_limits as _rl2
+        for _src_team, _out, _in in ((user_team, user_assets, partner_assets),
+                                     (partner_team, partner_assets, user_assets)):
+            _out_players = [a for a in (_out or [])
+                            if not isinstance(a, DraftPick)]
+            _in_players = [a for a in (_in or [])
+                           if not isinstance(a, DraftPick)]
+            if _out_players and _rl2.would_break_dress_minimum(
+                    _src_team, _out_players, _in_players):
+                _tname = getattr(_src_team, "team_name", "?")
+                return _blocked(
+                    f"{_tname} would be unable to dress a full lineup "
+                    f"(18 skaters + 2 goalies) after this trade -- deal blocked.")
+    except Exception:
+        pass
+
     # Retention preflight -- every term validated BEFORE anything moves.
     # An illegal term (over 50%, no slot left, 15% aggregate breached,
     # third retaining club, no cap hit to retain) kills the deal instead

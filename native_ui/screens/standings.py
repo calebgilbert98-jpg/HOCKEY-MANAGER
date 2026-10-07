@@ -340,7 +340,10 @@ class StandingsScreen(BaseScreen):
         pillbox = self._pill_row(_STANDINGS_VIEWS, self.view, self._on_view)
         inner = pillbox.layout()
         while inner.count():
-            lay.addWidget(inner.takeAt(0).widget())
+            _item = inner.takeAt(0)
+            _w = _item.widget() if _item else None
+            if _w:
+                lay.addWidget(_w)
         pillbox.deleteLater()
 
     def _on_view(self, v):
