@@ -26,6 +26,11 @@ try:
 except ImportError:
     MediaSystem = None
 
+try:
+    import manager_career
+except ImportError:
+    manager_career = None
+
 SALARY_CAP = 104_000_000  # 2026-27 NHL cap (modern day)
 
 START_DATE = date(datetime.now().year, 9, 1)  # start of preseason
@@ -2127,7 +2132,7 @@ NHL League Office""",
         Young players grow toward potential; veterans decline with age.
         Notable changes for the user's team get logged as news.
         """
-        if not hasattr(self, '_dev_engine'):
+        if getattr(self, '_dev_engine', None) is None:
             self._dev_engine = PlayerDevelopmentEngine()
         
         notable = []
