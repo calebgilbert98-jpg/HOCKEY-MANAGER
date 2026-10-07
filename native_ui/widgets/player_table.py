@@ -3,8 +3,9 @@
 Sortable, clickable player list used across roster, free agents,
 scouting, draft, and other screens. Replaces the HTML tables in web UI.
 """
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QMenu
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 
 
 class PlayerTable(QTableWidget):
@@ -38,6 +39,39 @@ class PlayerTable(QTableWidget):
 
         self._players = []
         self.cellDoubleClicked.connect(self._on_double_click)
+
+        # Right-click context menu (Caleb: "everything should be clickable")
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+        self._main_window = None  # set via set_main_window()
+
+    def set_main_window(self, main_window):
+        """Set for context menu navigation."""
+        self._main_window = main_window
+
+    def _on_context_menu(self, pos):
+        if not self._main_window:
+            return
+        try:
+            from .context_menu import EntityContextMenu
+            row = self.rowAt(pos.y())
+            if row < 0 or row >= len(self._players):
+                return
+            player = self._players[row]
+            # Check if this is the user's team (for extra menu items)
+            is_user = False
+            try:
+                team = getattr(
+                    self._main_window.game, "user_team", None)
+                if team and player in (getattr(team, "roster", None) or []):
+                    is_user = True
+            except Exception:
+                pass
+            menu = EntityContextMenu.player_menu(
+                self._main_window, player, is_user_team=is_user)
+            menu.exec(self.mapToGlobal(pos))
+        except Exception as e:
+            print(f"[player-table] context menu failed: {e}")
 
     def set_players(self, players):
         """Populate from a list of player objects. Direct Python objects,
