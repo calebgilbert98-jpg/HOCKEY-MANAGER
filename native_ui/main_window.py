@@ -279,13 +279,13 @@ class HubPage(QWidget):
                 except Exception:
                     pass
 
-                # Morale (average)
+                # Morale (average, 1-10 scale mapped to 10-100 like morale screen)
                 try:
                     roster = getattr(team, "roster", None) or []
                     if roster:
                         morales = [getattr(p, "morale", 5) or 5 for p in roster]
                         avg = sum(morales) / len(morales) if morales else 5
-                        self.set_tile("morale", f"{avg:.1f}", "Team morale")
+                        self.set_tile("morale", f"{avg*10:.0f}", "Team morale")
                 except Exception:
                     pass
 
