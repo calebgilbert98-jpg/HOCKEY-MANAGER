@@ -73,10 +73,26 @@ def launch(url=SETUP_URL):
         try:
             # --app: chromeless window (no tabs/address bar). Looks native.
             # --start-maximized: fill the screen on launch.
-            # (No --user-data-dir: a relative one broke Edge on some
-            # machines; the default profile is the reliable choice.)
+            # --user-data-dir: ISOLATED profile for the game. This is what
+            # makes it feel like a Steam game instead of a browser tab:
+            # no extensions (Grammarly, ad blockers, etc.), no browsing
+            # history, no saved passwords, no dev tools access to the
+            # user's real profile. The game gets its own clean sandbox.
+            # Uses an absolute path (relative paths broke Edge on some
+            # machines).
+            try:
+                _base = os.path.dirname(os.path.abspath(__file__))
+                # Go up from web_ui/ to the game root, then into a profile dir
+                _root = os.path.dirname(_base)
+                _profile_dir = os.path.join(_root, ".edge-profile")
+                os.makedirs(_profile_dir, exist_ok=True)
+            except Exception:
+                _profile_dir = None
+            _args = [exe, "--start-maximized", f"--app={url}"]
+            if _profile_dir:
+                _args.insert(1, f"--user-data-dir={_profile_dir}")
             subprocess.Popen(
-                [exe, "--start-maximized", f"--app={url}"],
+                _args,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
             )

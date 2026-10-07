@@ -1,5 +1,32 @@
 /* Puck Dynasty global nav behavior: dropdown toggles + current-page highlight. */
 (function () {
+  /* Disable Grammarly and browser spellcheck on all text inputs/textareas.
+     This is a standalone game, not a web page — writing extensions should
+     never inject into it. Grammarly respects data-gramm="false". */
+  function _disableWritingExtensions(root) {
+    try {
+      (root || document).querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable]').forEach(function (el) {
+        el.setAttribute('data-gramm', 'false');
+        el.setAttribute('data-gramm_editor', 'false');
+        el.setAttribute('spellcheck', 'false');
+        el.setAttribute('autocomplete', 'off');
+      });
+    } catch (e) { /* ignore */ }
+  }
+  _disableWritingExtensions(document);
+  // Also catch dynamically-added inputs (modals, etc.)
+  try {
+    new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        m.addedNodes.forEach(function (n) {
+          if (n.nodeType === 1) _disableWritingExtensions(n);
+        });
+      });
+    }).observe(document.body, {childList: true, subtree: true});
+  } catch (e) { /* ignore */ }
+})();
+
+(function () {
   /* DISABLED 2026-10-06: the beforeunload shutdown beacon was killing the
      server on normal page navigations (not just window close), causing
      "connection refused" and slow loads. The 60s heartbeat timeout is
