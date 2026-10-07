@@ -1985,8 +1985,11 @@ class DraftScreen(BaseScreen):
             row.addWidget(num)
             owner = QLabel(b.get("owner", "")
                            + (" \u2b50" if b.get("is_user_pick") else ""))
-            owner.setFixedWidth(200)
-            row.addWidget(owner)
+            owner.setMinimumWidth(120)
+            owner.setMaximumWidth(280)
+            owner.setWordWrap(False)
+            owner.setToolTip(b.get("owner", ""))
+            row.addWidget(owner, 1)
             pr = b.get("prospect") or {}
             if b.get("made"):
                 pl = QLabel(f"{pr.get('name', '?')}  "

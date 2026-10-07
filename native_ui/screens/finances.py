@@ -336,7 +336,9 @@ def _make_table(columns, rows, stretch_last=True):
 def _kv_rows(pairs):
     """Small key-value table. Values may be pre-formatted strings."""
     tbl = _make_table(["Item", "Value"], [(k, v) for k, v in pairs])
-    tbl.setMaximumHeight(24 * (len(pairs) + 1) + 4)
+    # Use row height from the table instead of hardcoded 24px
+    row_h = tbl.rowHeight(0) if tbl.rowCount() > 0 else 24
+    tbl.setMaximumHeight(row_h * (len(pairs) + 1) + 8)
     return tbl
 
 
