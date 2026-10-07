@@ -38,7 +38,7 @@
 .btn-ghost:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue); }
 
 /* ---- two-panel layout ---- */
-.le-grid { display: grid; grid-template-columns: 310px 1fr; gap: 20px; align-items: start; }
+.le-grid { display: grid; grid-template-columns: 360px 1fr; gap: 20px; align-items: start; }
 @media (max-width: 900px) { .le-grid { grid-template-columns: 1fr; } }
 
 /* ---- roster panel (kit .bpanel class added in HTML for styling) ---- */
