@@ -1,0 +1,101 @@
+"""Reusable player table widget.
+
+Sortable, clickable player list used across roster, free agents,
+scouting, draft, and other screens. Replaces the HTML tables in web UI.
+"""
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+from PySide6.QtCore import Qt, Signal
+
+
+class PlayerTable(QTableWidget):
+    """Sortable table of players with click-to-open-profile."""
+
+    player_clicked = Signal(object)  # emits the player object
+
+    # Columns: (key, header, width)
+    COLUMNS = [
+        ("name", "PLAYER", 180),
+        ("pos", "POS", 60),
+        ("age", "AGE", 50),
+        ("overall", "OVR", 60),
+        ("cap_hit", "CAP HIT", 100),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(len(self.COLUMNS))
+        self.setHorizontalHeaderLabels([c[1] for c in self.COLUMNS])
+        self.verticalHeader().setVisible(False)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTableWidget.SelectRows)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setSortingEnabled(True)
+
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        for i, (_, _, w) in enumerate(self.COLUMNS):
+            self.setColumnWidth(i, w)
+
+        self._players = []
+        self.cellDoubleClicked.connect(self._on_double_click)
+
+    def set_players(self, players):
+        """Populate from a list of player objects. Direct Python objects,
+        no JSON serialization."""
+        self._players = list(players or [])
+        self.setRowCount(len(self._players))
+        self.setSortingEnabled(False)
+        for row, p in enumerate(self._players):
+            self._set_row(row, p)
+        self.setSortingEnabled(True)
+
+    def _set_row(self, row, p):
+        vals = {
+            "name": getattr(p, "full_name", "?"),
+            "pos": self._pos_str(p),
+            "age": str(getattr(p, "age", "?")),
+            "overall": str(self._overall(p)),
+            "cap_hit": self._cap_str(p),
+        }
+        for col, (key, _, _) in enumerate(self.COLUMNS):
+            item = QTableWidgetItem(vals[key])
+            # Numeric columns sort numerically
+            if key in ("age", "overall"):
+                try:
+                    item.setData(Qt.UserRole, int(vals[key]))
+                except (ValueError, TypeError):
+                    pass
+            # Store player ref on the name column
+            if key == "name":
+                item.setData(Qt.UserRole + 1, p)
+            self.setItem(row, col, item)
+
+    def _on_double_click(self, row, col):
+        if 0 <= row < len(self._players):
+            self.player_clicked.emit(self._players[row])
+
+    @staticmethod
+    def _pos_str(p):
+        pos = getattr(p, "position", "?")
+        # Handle enum or string
+        return getattr(pos, "value", str(pos))
+
+    @staticmethod
+    def _overall(p):
+        try:
+            from game_classes import to_100_scale
+            return to_100_scale(getattr(p, "overall", 50))
+        except Exception:
+            return getattr(p, "overall", "?")
+
+    @staticmethod
+    def _cap_str(p):
+        try:
+            contract = getattr(p, "contract", None)
+            if contract:
+                hit = getattr(contract, "cap_hit",
+                              getattr(contract, "salary", 0))
+                return f"${hit / 1e6:.2f}M"
+        except Exception:
+            pass
+        return "—"
