@@ -6,6 +6,7 @@ into the game logic.
 """
 import sys
 import os
+import re
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -97,242 +98,892 @@ class TopBar(QWidget):
 
 
 class HubPage(QWidget):
-    """Main dashboard: team header, tiles, standings, leaders, ticker."""
+    """Main dashboard: HTML-hub clone — team header, hero, tiles,
+    stat strip, panels, scrolling ticker. Team-color themed."""
 
+    # ---------- color helpers (mirror web hub.js) ----------
+    @staticmethod
+    def _hex_rgb(hexstr):
+        m = re.match(r'^#([0-9a-fA-F]{6})$', str(hexstr or '').strip())
+        if not m:
+            return None
+        n = int(m.group(1), 16)
+        return ((n >> 16) & 255, (n >> 8) & 255, n & 255)
+
+    @classmethod
+    def _mix_hex(cls, a, b, t):
+        ca, cb = cls._hex_rgb(a), cls._hex_rgb(b)
+        if not ca or not cb:
+            return a
+        c = [round(ca[i] + (cb[i] - ca[i]) * t) for i in range(3)]
+        return '#%02x%02x%02x' % tuple(c)
+
+    @classmethod
+    def _rgba(cls, hexstr, alpha):
+        c = cls._hex_rgb(hexstr)
+        if not c:
+            return hexstr
+        return 'rgba(%d,%d,%d,%s)' % (c[0], c[1], c[2], alpha)
+
+    def _team_colors(self, team_name):
+        """Return (primary, deep, soft, wash, glow) from real team data."""
+        primary = '#3B82F6'
+        try:
+            from team_identity_system import NHLTeamIdentity
+            ident = NHLTeamIdentity()
+            tc = ident.get_team_colors(team_name or '')
+            if tc and self._hex_rgb(getattr(tc, 'primary', '')):
+                primary = tc.primary
+        except Exception:
+            pass
+        deep = self._mix_hex(primary, '#000000', 0.45)
+        soft = self._mix_hex(primary, '#0e1626', 0.55)
+        wash = self._rgba(primary, 0.10)
+        glow = self._rgba(primary, 0.28)
+        return primary, deep, soft, wash, glow
+
+    # ---------- construction ----------
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self._main = main_window
-        self.setObjectName("hub-central")
+        self.setObjectName("hub-page")
+        self._ticker_items = []
+        self._ticker_pos = 0
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 16, 24, 16)
-        outer.setSpacing(16)
+        outer.setContentsMargins(30, 12, 30, 0)
+        outer.setSpacing(0)
 
-        # Team header
-        self.team_label = QLabel("—")
-        self.team_label.setStyleSheet(
-            "font-size: 32px; font-weight: 900; color: #ffffff;")
-        self.record_label = QLabel("—")
-        self.record_label.setStyleSheet(
-            "font-size: 14px; color: #8b95ab;")
-        outer.addWidget(self.team_label)
-        outer.addWidget(self.record_label)
+        # ---- franchise header ----
+        fhead = QHBoxLayout()
+        fhead.setSpacing(16)
+        left = QVBoxLayout()
+        left.setSpacing(2)
+        self.eyebrow = QLabel("FRANCHISE")
+        self.eyebrow.setObjectName("hub-eyebrow")
+        left.addWidget(self.eyebrow)
+        self.team_label = QLabel("\u2014")
+        self.team_label.setObjectName("hub-team")
+        left.addWidget(self.team_label)
+        # pills row (date + streak)
+        pills = QHBoxLayout()
+        pills.setSpacing(8)
+        self.date_pill = QLabel("\u2014")
+        self.date_pill.setObjectName("hub-pill")
+        self.streak_pill = QLabel("\u2014")
+        self.streak_pill.setObjectName("hub-pill")
+        pills.addWidget(self.date_pill)
+        pills.addWidget(self.streak_pill)
+        pills.addStretch()
+        left.addLayout(pills)
+        fhead.addLayout(left)
+        fhead.addStretch()
+        self.record_label = QLabel("0-0-0")
+        self.record_label.setObjectName("hub-record")
+        self.record_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        fhead.addWidget(self.record_label)
+        outer.addLayout(fhead)
 
-        # Continue button row
-        btn_row = QHBoxLayout()
-        self.continue_btn = QPushButton("Continue")
-        self.continue_btn.setObjectName("primary-btn")
-        self.continue_btn.setCursor(Qt.PointingHandCursor)
-        self.continue_btn.clicked.connect(self._main.on_continue)
-        btn_row.addWidget(self.continue_btn)
-        btn_row.addStretch()
-        outer.addLayout(btn_row)
+        # thin rule
+        rule = QFrame()
+        rule.setObjectName("hub-rule")
+        rule.setFixedHeight(1)
+        outer.addWidget(rule)
+        outer.addSpacing(10)
 
-        # Tile grid
+        # ---- hero CONTINUE SEASON banner ----
+        self.hero = QFrame()
+        self.hero.setObjectName("hub-hero")
+        self.hero.setCursor(Qt.PointingHandCursor)
+        self.hero.mousePressEvent = lambda e: self._main.on_continue()
+        hero_l = QVBoxLayout(self.hero)
+        hero_l.setContentsMargins(26, 16, 26, 12)
+        hero_l.setSpacing(8)
+        hero_top = QHBoxLayout()
+        hero_top.setSpacing(18)
+        self.ready_pill = QLabel("\u25cf Ready to play")
+        self.ready_pill.setObjectName("hub-ready-pill")
+        hero_top.addWidget(self.ready_pill)
+        hero_title = QLabel("CONTINUE SEASON")
+        hero_title.setObjectName("hub-hero-title")
+        hero_top.addWidget(hero_title)
+        hero_top.addStretch()
+        # arrow circle + next game
+        self.hero_arrow = QLabel("\u2192")
+        self.hero_arrow.setObjectName("hub-hero-arrow")
+        self.hero_arrow.setAlignment(Qt.AlignCenter)
+        hero_top.addWidget(self.hero_arrow)
+        self.hero_next = QLabel("Next: \u2014")
+        self.hero_next.setObjectName("hub-hero-next")
+        hero_top.addWidget(self.hero_next)
+        hero_l.addLayout(hero_top)
+        # auto-advance row
+        hero_foot = QHBoxLayout()
+        self.auto_btn = QPushButton("\u25b6 Auto-advance")
+        self.auto_btn.setObjectName("hub-auto-btn")
+        self.auto_btn.setCursor(Qt.PointingHandCursor)
+        self.auto_btn.clicked.connect(self._on_auto_advance)
+        hero_foot.addWidget(self.auto_btn)
+        hero_foot.addStretch()
+        hero_l.addLayout(hero_foot)
+        outer.addWidget(self.hero)
+        outer.addSpacing(12)
+
+        # ---- primary tiles: ROSTER / INBOX / SCHEDULE / TEAM STATS ----
         tile_grid = QGridLayout()
         tile_grid.setSpacing(12)
-        self._tiles = {}
-        tile_defs = [
-            ("record", "RECORD", 0, 0),
-            ("standing", "DIVISION", 0, 1),
-            ("streak", "STREAK", 0, 2),
-            ("cap", "CAP SPACE", 0, 3),
-            ("next_game", "NEXT GAME", 1, 0),
-            ("top_scorer", "TOP SCORER", 1, 1),
-            ("injuries", "INJURIES", 1, 2),
-            ("morale", "MORALE", 1, 3),
+        self._nav_tiles = {}
+        primary = [
+            ("roster", "ROSTER", "\U0001f465", "roster"),
+            ("inbox", "INBOX", "\U0001f4e5", "inbox"),
+            ("schedule", "SCHEDULE", "\U0001f4c5", "schedule"),
+            ("stats", "TEAM STATS", "\U0001f4ca", "stats"),
         ]
-        for key, title, r, c in tile_defs:
-            tile = self._make_tile(title)
-            tile_grid.addWidget(tile, r, c)
-            self._tiles[key] = tile
+        for i, (key, label, icon, screen) in enumerate(primary):
+            tile = self._make_nav_tile(label, icon, screen, big=True)
+            tile_grid.addWidget(tile, 0, i)
+            self._nav_tiles[key] = tile
+        # inbox badge
+        self.inbox_badge = QLabel("0")
+        self.inbox_badge.setObjectName("hub-badge")
+        self.inbox_badge.setAlignment(Qt.AlignCenter)
+        self.inbox_badge.hide()
+        self._nav_tiles["inbox"]._badge_holder.addWidget(self.inbox_badge)
         outer.addLayout(tile_grid)
+        outer.addSpacing(14)
+
+        # ---- MORE label ----
+        more = QLabel("MORE")
+        more.setObjectName("hub-more-label")
+        outer.addWidget(more)
+        outer.addSpacing(8)
+
+        # ---- secondary tiles ----
+        more_grid = QGridLayout()
+        more_grid.setSpacing(12)
+        secondary = [
+            ("lines", "LINES", "\U0001f4cb", "Line combinations", "lines"),
+            ("trades", "TRADES", "\u21c4", "Trade center", "trades"),
+            ("scouting", "SCOUTING", "\U0001f50d", "Assignments", "scouting"),
+            ("staff", "STAFF", "\U0001f454", "Coaches & management", "staff"),
+            ("tactics", "TACTICS", "\U0001f3af", "Systems & practice", "tactics"),
+        ]
+        for i, (key, label, icon, sub, screen) in enumerate(secondary):
+            tile = self._make_nav_tile(label, icon, screen, big=False,
+                                       sub=sub)
+            more_grid.addWidget(tile, 0, i)
+            self._nav_tiles[key] = tile
+        # 6th column spacer to match HTML 6-col grid (5 tiles + empty)
+        outer.addLayout(more_grid)
+        outer.addSpacing(12)
+
+        # ---- stat strip (8 blocks) ----
+        strip = QHBoxLayout()
+        strip.setSpacing(8)
+        self._strip = {}
+        strip_defs = [
+            ("record", "RECORD"), ("points", "POINTS"),
+            ("gf", "GOALS / GM"), ("ga", "AGAINST / GM"),
+            ("pp", "POWER PLAY"), ("pk", "PENALTY KILL"),
+            ("streak", "STREAK"), ("cap", "CAP SPACE"),
+        ]
+        for key, label in strip_defs:
+            cell = self._make_strip_cell(label)
+            strip.addWidget(cell, 1)
+            self._strip[key] = cell
+        outer.addLayout(strip)
+        outer.addSpacing(12)
+
+        # ---- panels row ----
+        panels = QHBoxLayout()
+        panels.setSpacing(12)
+        self.panel_next = self._make_panel("NEXT GAME")
+        panels.addWidget(self.panel_next, 11)
+        self.panel_stand = self._make_panel("DIVISION")
+        panels.addWidget(self.panel_stand, 13)
+        self.panel_lead = self._make_panel("TEAM LEADERS")
+        panels.addWidget(self.panel_lead, 15)
+        self.panel_form = self._make_panel("RECENT FORM")
+        panels.addWidget(self.panel_form, 10)
+        outer.addLayout(panels)
 
         outer.addStretch()
 
-        # Ticker at bottom (clickable -> news screen)
-        self.ticker = QLabel("Loading scores…")
-        self.ticker.setObjectName("ticker")
-        self.ticker.setAlignment(Qt.AlignCenter)
+        # ---- ticker (bottom, scrolling marquee) ----
+        tick_wrap = QHBoxLayout()
+        tick_wrap.setSpacing(0)
+        tick_wrap.setContentsMargins(0, 0, 0, 0)
+        tick_label = QLabel("PUCK DYNASTY WIRE")
+        tick_label.setObjectName("hub-ticker-label")
+        tick_wrap.addWidget(tick_label)
+        self.ticker = QLabel("Loading scores\u2026")
+        self.ticker.setObjectName("hub-ticker")
         self.ticker.setCursor(Qt.PointingHandCursor)
         self.ticker.mousePressEvent = lambda e: self._main.show_screen("news")
-        outer.addWidget(self.ticker)
+        tick_wrap.addWidget(self.ticker, 1)
+        outer.addLayout(tick_wrap)
 
-    def _make_tile(self, title):
+        # ticker scroll timer
+        self._ticker_timer = QTimer(self)
+        self._ticker_timer.timeout.connect(self._scroll_ticker)
+        self._ticker_timer.start(120)
+
+        self._apply_base_styles()
+
+    # ---------- widget factories ----------
+    def _apply_base_styles(self):
+        self.setStyleSheet("""
+            #hub-page { background: #060a13; }
+            #hub-eyebrow {
+                font-size: 12px; font-weight: 800; letter-spacing: 3px;
+                color: #3B82F6;
+            }
+            #hub-team {
+                font-size: 46px; font-weight: 900; color: #ffffff;
+            }
+            #hub-record {
+                font-size: 30px; font-weight: 800; color: #ffffff;
+                letter-spacing: 1px;
+            }
+            #hub-pill {
+                background: rgba(255,255,255,0.08);
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 12px; padding: 4px 12px;
+                font-size: 12px; color: #e5e9f0;
+            }
+            #hub-rule { background: rgba(255,255,255,0.09); border: none; }
+            #hub-ready-pill {
+                background: rgba(6,12,26,0.32);
+                border: 1px solid rgba(255,255,255,0.28);
+                border-radius: 14px; padding: 6px 14px;
+                font-size: 13px; font-weight: 600; color: #ffffff;
+            }
+            #hub-hero-title {
+                font-size: 44px; font-weight: 900; color: #ffffff;
+            }
+            #hub-hero-arrow {
+                background: #ffffff; color: #1c3f92;
+                border-radius: 22px; min-width: 44px; min-height: 44px;
+                max-width: 44px; max-height: 44px;
+                font-size: 22px; font-weight: 800;
+            }
+            #hub-hero-next { font-size: 15px; color: rgba(255,255,255,0.94); }
+            #hub-auto-btn {
+                background: #1b2334; color: #c6cdd8;
+                border: 1px solid #2a3550; border-radius: 8px;
+                padding: 6px 14px; font-size: 13px;
+            }
+            #hub-auto-btn:hover { border-color: #3B82F6; color: #f2f5fa; }
+            #hub-more-label {
+                font-size: 12px; font-weight: 800; letter-spacing: 4px;
+                color: rgba(255,255,255,0.38);
+            }
+            #hub-badge {
+                background: #f0435a; color: #ffffff; border-radius: 16px;
+                min-width: 32px; min-height: 32px; max-width: 32px; max-height: 32px;
+                font-size: 16px; font-weight: 800;
+            }
+            #hub-strip-cell {
+                background: #131a26;
+                border: 1px solid rgba(255,255,255,0.07);
+                border-radius: 4px; padding: 8px 10px;
+            }
+            #hub-strip-val { font-size: 22px; font-weight: 800; color: #ffffff; }
+            #hub-strip-label {
+                font-size: 10px; font-weight: 700; letter-spacing: 1px;
+                color: #3B82F6;
+            }
+            #hub-strip-sub { font-size: 10px; color: #6b7280; }
+            #hub-panel {
+                background: #070b14;
+                border: 1px solid #1b2740; border-radius: 3px;
+            }
+            #hub-panel-head {
+                font-size: 13px; font-weight: 700; letter-spacing: 2px;
+                color: #ffffff;
+                background: #0e1626; padding: 8px 12px;
+            }
+            #hub-ticker-label {
+                background: #1e3a8a; color: #ffffff;
+                font-size: 11px; font-weight: 800; letter-spacing: 2px;
+                padding: 8px 14px;
+            }
+            #hub-ticker {
+                background: #04060b; color: #f4f6fb;
+                font-size: 13px; font-weight: 600; letter-spacing: 0.6px;
+                padding: 8px 12px;
+            }
+        """)
+
+    def _make_nav_tile(self, label, icon, screen, big=True, sub=""):
         frame = QFrame()
-        frame.setObjectName("tile")
+        frame.setObjectName("hub-nav-tile")
         frame.setCursor(Qt.PointingHandCursor)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 12, 16, 12)
-        t = QLabel(title)
-        t.setObjectName("tile-title")
-        v = QLabel("—")
-        v.setObjectName("tile-value")
-        s = QLabel("")
-        s.setObjectName("tile-sub")
-        layout.addWidget(t)
-        layout.addWidget(v)
-        layout.addWidget(s)
-        frame.mousePressEvent = lambda e, t=title: self._main.on_tile_click(t)
-        # Store refs for updates
-        frame._value_label = v
-        frame._sub_label = s
+        frame.setMinimumHeight(132 if big else 96)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(4)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        ic = QLabel(icon)
+        ic.setStyleSheet(
+            "font-size: %dpx; color: #3B82F6; background: transparent; border: none;"
+            % (32 if big else 26))
+        top.addWidget(ic)
+        top.addStretch()
+        badge_holder = QVBoxLayout()
+        badge_holder.setContentsMargins(0, 0, 0, 0)
+        top.addLayout(badge_holder)
+        lay.addLayout(top)
+        lay.addStretch()
+        lb = QLabel(label)
+        lb.setStyleSheet(
+            "font-size: %dpx; font-weight: 900; color: #ffffff; background: transparent;"
+            % (22 if big else 17))
+        lay.addWidget(lb)
+        if sub:
+            sb = QLabel(sub)
+            sb.setStyleSheet(
+                "font-size: 12px; color: rgba(255,255,255,0.55);"
+                " background: transparent;")
+            lay.addWidget(sb)
+        frame.setStyleSheet(
+            "#hub-nav-tile { background: #0d1526;"
+            " border: 1px solid rgba(255,255,255,0.09);"
+            " border-radius: 10px; }")
+        frame.mousePressEvent = lambda e, s=screen: self._main.show_screen(s)
+        frame._badge_holder = badge_holder
         return frame
 
-    def set_tile(self, key, value, sub=""):
-        if key in self._tiles:
-            self._tiles[key]._value_label.setText(str(value))
-            self._tiles[key]._sub_label.setText(str(sub))
+    def _make_strip_cell(self, label):
+        cell = QFrame()
+        cell.setObjectName("hub-strip-cell")
+        lay = QVBoxLayout(cell)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(1)
+        val = QLabel("\u2014")
+        val.setObjectName("hub-strip-val")
+        val.setAlignment(Qt.AlignCenter)
+        lab = QLabel(label)
+        lab.setObjectName("hub-strip-label")
+        lab.setAlignment(Qt.AlignCenter)
+        sub = QLabel("")
+        sub.setObjectName("hub-strip-sub")
+        sub.setAlignment(Qt.AlignCenter)
+        lay.addWidget(val)
+        lay.addWidget(lab)
+        lay.addWidget(sub)
+        cell._val = val
+        cell._sub = sub
+        return cell
 
+    def _make_panel(self, title):
+        panel = QFrame()
+        panel.setObjectName("hub-panel")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        head = QLabel(title)
+        head.setObjectName("hub-panel-head")
+        lay.addWidget(head)
+        body_wrap = QWidget()
+        body = QVBoxLayout(body_wrap)
+        body.setContentsMargins(12, 10, 12, 10)
+        body.setSpacing(6)
+        lay.addWidget(body_wrap)
+        panel._body = body
+        panel._head = head
+        return panel
+
+    def _clear_panel(self, panel):
+        while panel._body.count():
+            item = panel._body.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+            else:
+                sub = item.layout()
+                if sub:
+                    while sub.count():
+                        si = sub.takeAt(0)
+                        sw = si.widget()
+                        if sw:
+                            sw.deleteLater()
+
+    # ---------- interactions ----------
+    def _on_auto_advance(self):
+        game = getattr(self._main, "game", None)
+        if game and hasattr(game, "toggle_auto_advance"):
+            try:
+                game.toggle_auto_advance()
+            except Exception as e:
+                print("[hub] auto-advance failed: %s" % e)
+        else:
+            print("[hub] auto-advance not available on this game object")
+
+    def _scroll_ticker(self):
+        if not self._ticker_items:
+            return
+        text = "   \u2022   ".join(self._ticker_items)
+        if len(text) < 2:
+            return
+        self._ticker_pos = (self._ticker_pos + 1) % len(text)
+        window = 140
+        doubled = text + "   \u2022   " + text
+        start = self._ticker_pos % len(text)
+        self.ticker.setText(doubled[start:start + window].upper())
+
+    # ---------- data helpers ----------
+    def set_tile(self, key, value, sub=""):
+        # Back-compat shim: old tile keys map to strip cells
+        if key in self._strip:
+            self._strip[key]._val.setText(str(value))
+            self._strip[key]._sub.setText(str(sub))
+
+    def _game_val(self, obj, *names, default=None):
+        for n in names:
+            if isinstance(obj, dict):
+                v = obj.get(n, None)
+            else:
+                v = getattr(obj, n, None)
+            if v is not None:
+                return v
+        return default
+
+    def _sched_teams(self, g):
+        home = self._game_val(g, "home_team", "home", default="?")
+        away = self._game_val(g, "away_team", "away", default="?")
+        return home, away
+
+    def _sched_played(self, g):
+        return bool(self._game_val(g, "played", default=False))
+
+    # ---------- refresh ----------
     def refresh(self, game=None):
-        """Populate from the live game object. Direct Python access --
-        no HTTP, no serialization."""
-        # Fall back to main window's game when called without args
-        # (e.g. from show_screen's generic refresh call)
         if game is None:
             game = getattr(self._main, "game", None)
         if game is None:
             return
         try:
-            # Resolve game manager (handles both app and gm objects)
             gm = getattr(game, "game_manager", None) or game
             team = getattr(gm, "user_team", None) or getattr(game, "user_team", None)
-            if team:
-                self.team_label.setText(
-                    getattr(team, "team_name", "—").upper())
-                # Record
-                wins = getattr(team, "wins", 0) or 0
-                losses = getattr(team, "losses", 0) or 0
-                otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
-                self.record_label.setText(f"{wins}-{losses}-{otl}")
-                self.set_tile("record", f"{wins}-{losses}-{otl}", "Season record")
+            if not team:
+                return
+            team_name = getattr(team, "team_name", "") or ""
+            primary, deep, soft, wash, glow = self._team_colors(team_name)
 
-                # Division rank
-                try:
-                    division = getattr(team, "division", "") or ""
-                    league = getattr(self._main.game, "league", None)
-                    if league and division:
-                        div_teams = [t for t in getattr(league, "teams", [])
-                                     if getattr(t, "division", "") == division]
-                        # Sort by points
-                        def _pts(t):
-                            w = getattr(t, "wins", 0) or 0
-                            o = getattr(t, "otl", 0) or 0
-                            return w * 2 + o
-                        div_teams.sort(key=_pts, reverse=True)
-                        rank = next((i + 1 for i, t in enumerate(div_teams)
-                                     if t is team), None)
-                        if rank:
-                            suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
-                            self.set_tile("standing", f"{rank}{suffix}",
-                                          f"of {len(div_teams)} in {division}")
-                        else:
-                            self.set_tile("standing", division, "Division")
+            # ---- team theming ----
+            self.eyebrow.setStyleSheet(
+                "font-size: 12px; font-weight: 800; letter-spacing: 3px; "
+                "color: %s;" % primary)
+            self.hero.setStyleSheet(
+                "#hub-hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                " stop:0 %s, stop:0.55 #1f5ad0, stop:1 #16367f);"
+                " border-radius: 12px; }" % deep)
+            for _key, tile in self._nav_tiles.items():
+                tile.setStyleSheet(
+                    "#hub-nav-tile { background: #0d1526;"
+                    " border: 1px solid rgba(255,255,255,0.09);"
+                    " border-top: 3px solid %s;"
+                    " border-radius: 10px; }" % soft)
+            for _key, cell in self._strip.items():
+                cell.setStyleSheet(
+                    "#hub-strip-cell { background: #131a26;"
+                    " border: 1px solid rgba(255,255,255,0.07);"
+                    " border-top: 2px solid %s;"
+                    " border-radius: 4px; padding: 8px 10px; }" % soft)
+
+            # ---- header ----
+            self.team_label.setText(team_name.upper())
+            wins = getattr(team, "wins", 0) or 0
+            losses = getattr(team, "losses", 0) or 0
+            otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
+            self.record_label.setText("%d-%d-%d" % (wins, losses, otl))
+
+            try:
+                date = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+                datestr = str(date) if date else ""
+                m = re.search(r"(19|20)\d{2}", datestr)
+                if m:
+                    y = int(m.group(0))
+                    self.eyebrow.setText(
+                        "FRANCHISE \u00b7 %d-%s SEASON" % (y, str(y + 1)[2:]))
+                if date:
+                    try:
+                        self.date_pill.setText(
+                            "\U0001f4c5 " + date.strftime("%B %d, %Y"))
+                    except Exception:
+                        self.date_pill.setText("\U0001f4c5 " + datestr)
+            except Exception:
+                pass
+
+            try:
+                recent = getattr(team, "recent_results", None) or []
+                if recent:
+                    self.streak_pill.setText(
+                        "\U0001f525 " + str(recent[-1]).upper())
+                else:
+                    self.streak_pill.setText("\U0001f525 \u2014")
+            except Exception:
+                pass
+
+            # ---- strip ----
+            gp = wins + losses + otl
+            self._strip["record"]._val.setText("%d-%d-%d" % (wins, losses, otl))
+            self._strip["record"]._sub.setText("%d GP" % gp)
+
+            division = getattr(team, "division", "") or ""
+            div_teams = []
+            try:
+                league = getattr(game, "league", None) or getattr(gm, "league", None)
+                if league and division:
+                    div_teams = [t for t in (getattr(league, "teams", []) or [])
+                                 if getattr(t, "division", "") == division]
+
+                    def _pts(t):
+                        return (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
+                    div_teams.sort(key=_pts, reverse=True)
+                rank = next((i + 1 for i, t in enumerate(div_teams) if t is team), None)
+                pts = wins * 2 + otl
+                self._strip["points"]._val.setText(str(pts))
+                if rank:
+                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
+                    self._strip["points"]._sub.setText(
+                        "%d%s in division" % (rank, suffix))
+                else:
+                    self._strip["points"]._sub.setText(division or "")
+            except Exception:
+                pass
+
+            try:
+                gf = getattr(team, "goals_for", 0) or 0
+                ga = getattr(team, "goals_against", 0) or 0
+                if gp > 0:
+                    self._strip["gf"]._val.setText("%.1f" % (gf / gp))
+                    self._strip["ga"]._val.setText("%.1f" % (ga / gp))
+                self._strip["gf"]._sub.setText("Offense")
+                self._strip["ga"]._sub.setText("Defense")
+            except Exception:
+                pass
+
+            try:
+                pp = getattr(team, "power_play_pct", None)
+                pk = getattr(team, "penalty_kill_pct", None)
+                self._strip["pp"]._val.setText(
+                    ("%.1f%%" % pp) if pp is not None else "\u2014")
+                self._strip["pk"]._val.setText(
+                    ("%.1f%%" % pk) if pk is not None else "\u2014")
+                self._strip["pp"]._sub.setText("Conversion")
+                self._strip["pk"]._sub.setText("Kill rate")
+            except Exception:
+                pass
+
+            try:
+                recent = getattr(team, "recent_results", None) or []
+                if recent:
+                    last10 = recent[-10:]
+                    w = sum(1 for r in last10 if str(r).upper().startswith("W"))
+                    l = sum(1 for r in last10 if str(r).upper().startswith("L"))
+                    o = len(last10) - w - l
+                    self._strip["streak"]._val.setText(
+                        ("%d-%d-%d" % (w, l, o)) if o else ("%d-%d" % (w, l)))
+                else:
+                    self._strip["streak"]._val.setText("\u2014")
+                self._strip["streak"]._sub.setText("Last 10")
+            except Exception:
+                pass
+
+            try:
+                from salary_cap_system import cap_breakdown
+                bd = cap_breakdown(team)
+                space = bd.get("space", 0)
+                self._strip["cap"]._val.setText("$%.2fM" % (space / 1e6))
+                self._strip["cap"]._sub.setText("Salary cap")
+            except Exception:
+                pass
+
+            # ---- next game (dict-safe) ----
+            next_txt = "Next: \u2014"
+            next_game = None
+            try:
+                league = getattr(game, "league", None) or getattr(gm, "league", None)
+                sched = getattr(league, "schedule", None) or []
+                upcoming = [g for g in sched
+                            if not self._sched_played(g)
+                            and team_name in self._sched_teams(g)]
+                if upcoming:
+                    next_game = upcoming[0]
+                    home, away = self._sched_teams(next_game)
+                    if home == team_name:
+                        next_txt = "Next: %s at %s" % (away, team_name)
                     else:
-                        self.set_tile("standing", division or "—", "Division")
-                except Exception:
-                    pass
+                        next_txt = "Next: %s at %s" % (team_name, home)
+            except Exception:
+                pass
+            self.hero_next.setText(next_txt)
+            if next_game is not None:
+                self._fill_next_panel(next_game, team_name)
 
-                # Cap space
-                try:
-                    from salary_cap_system import cap_breakdown
-                    bd = cap_breakdown(team)
-                    space = bd.get("space", 0)
-                    self.set_tile("cap", f"${space/1e6:.1f}M", "Cap space")
-                except Exception:
-                    pass
+            # ---- inbox badge ----
+            try:
+                inbox = getattr(game, "inbox", None) or getattr(gm, "inbox", None) or []
+                unread = 0
+                for msg in inbox:
+                    if isinstance(msg, dict):
+                        if not msg.get("read", False):
+                            unread += 1
+                    elif not getattr(msg, "read", False):
+                        unread += 1
+                if unread > 0:
+                    self.inbox_badge.setText(str(unread))
+                    self.inbox_badge.show()
+                else:
+                    self.inbox_badge.hide()
+            except Exception:
+                pass
 
-                # Injuries
-                try:
-                    roster = getattr(team, "roster", None) or []
-                    injured = sum(1 for p in roster if getattr(p, "is_injured", False))
-                    self.set_tile("injuries", str(injured), "Injured")
-                except Exception:
-                    pass
+            # ---- panels ----
+            self._fill_standings(div_teams, team, division, primary, wash)
+            self._fill_leaders(team)
+            self._fill_form(team)
 
-                # Streak (last 10 games)
-                try:
-                    recent = getattr(team, "recent_results", None) or []
-                    if recent:
-                        last10 = recent[-10:]
-                        w = sum(1 for r in last10 if str(r).upper().startswith("W"))
-                        l = sum(1 for r in last10 if str(r).upper().startswith("L"))
-                        self.set_tile("streak", f"{w}-{l}", "Last 10")
-                except Exception:
-                    pass
-
-                # Next game
-                try:
-                    league = getattr(self._main.game, "league", None)
-                    sched = getattr(league, "schedule", None) or []
-                    team_name = getattr(team, "team_name", "")
-                    upcoming = [g for g in sched
-                                if not getattr(g, "played", True)
-                                and team_name in (getattr(g, "home_team", ""),
-                                                  getattr(g, "away_team", ""))]
-                    if upcoming:
-                        g = upcoming[0]
-                        opp = getattr(g, "away_team", "") if getattr(g, "home_team", "") == team_name else getattr(g, "home_team", "")
-                        self.set_tile("next_game", opp[:12], "Next game")
-                except Exception:
-                    pass
-
-                # Top scorer
-                try:
-                    roster = getattr(team, "roster", None) or []
-                    if roster:
-                        def _pts2(p):
-                            return (getattr(p, "goals", 0) or 0) + (getattr(p, "assists", 0) or 0)
-                        top = max(roster, key=_pts2)
-                        name = getattr(top, "full_name", "?") or "?"
-                        pts = _pts2(top)
-                        # Shorten name to fit
-                        parts = name.split()
-                        short = f"{parts[0][0]}. {parts[-1]}" if len(parts) > 1 else name
-                        self.set_tile("top_scorer", short[:14], f"{pts} PTS")
-                except Exception:
-                    pass
-
-                # Morale (average, 1-100 scale)
-                try:
-                    roster = getattr(team, "roster", None) or []
-                    if roster:
-                        morales = [getattr(p, "morale", 70) or 70 for p in roster]
-                        avg = sum(morales) / len(morales) if morales else 70
-                        self.set_tile("morale", f"{avg:.0f}", "Team morale")
-                except Exception:
-                    pass
-
-                # Ticker: recent headlines
-                try:
-                    game = self._main.game
-                    news = getattr(game, "news_log", None) or []
-                    if news:
-                        # Get latest headline
-                        latest = news[-1] if isinstance(news, list) else None
-                        if latest:
-                            if isinstance(latest, dict):
-                                headline = (latest.get("story") or latest.get("headline")
-                                            or str(latest)[:60])
-                            else:
-                                headline = getattr(latest, "headline", None) or str(latest)[:60]
-                            self.ticker.setText(headline[:80])
-                    else:
-                        # Fall back to recent game results
-                        league = getattr(game, "league", None)
-                        sched = getattr(league, "schedule", None) or []
-                        played = [g for g in sched if getattr(g, "played", False)]
-                        if played:
-                            g = played[-1]
-                            ht = getattr(g, "home_team", "?")
-                            at = getattr(g, "away_team", "?")
-                            hs = getattr(g, "home_score", 0)
-                            aws = getattr(g, "away_score", 0)
-                            self.ticker.setText(f"Final: {at} {aws} - {ht} {hs}")
-                except Exception:
-                    pass
+            # ---- ticker ----
+            self._fill_ticker(game, gm)
         except Exception as e:
-            print(f"[hub] refresh failed: {e}")
+            print("[hub] refresh failed: %s" % e)
+
+    def _fill_next_panel(self, g, team_name):
+        panel = self.panel_next
+        self._clear_panel(panel)
+        home, away = self._sched_teams(g)
+        is_home = (home == team_name)
+        try:
+            when = self._game_val(g, "date", default="")
+            datestr = when.strftime("%a %b %d").upper()
+        except Exception:
+            datestr = str(self._game_val(g, "date", default="")).upper()
+        date_l = QLabel(datestr or "")
+        date_l.setStyleSheet(
+            "font-size: 12px; letter-spacing: 1px; color: #9aa3b2;"
+            " background: transparent;")
+        panel._body.addWidget(date_l)
+
+        def _team_col(abbr, name):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            a = QLabel(abbr)
+            a.setStyleSheet(
+                "font-size: 26px; font-weight: 800; color: #ffffff;"
+                " background: transparent;")
+            n = QLabel(name)
+            n.setStyleSheet(
+                "font-size: 12px; color: #f4f6fb; background: transparent;")
+            n.setWordWrap(True)
+            col.addWidget(a)
+            col.addWidget(n)
+            return col
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        my_abbr = team_name[:3].upper()
+        if is_home:
+            opp_abbr = away[:3].upper()
+            row.addLayout(_team_col(opp_abbr, away))
+            at = QLabel("@")
+            at.setStyleSheet(
+                "font-size: 18px; color: #3B82F6; font-weight: 700;"
+                " background: transparent;")
+            row.addWidget(at)
+            row.addLayout(_team_col(my_abbr, team_name))
+        else:
+            opp_abbr = home[:3].upper()
+            row.addLayout(_team_col(my_abbr, team_name))
+            at = QLabel("@")
+            at.setStyleSheet(
+                "font-size: 18px; color: #3B82F6; font-weight: 700;"
+                " background: transparent;")
+            row.addWidget(at)
+            row.addLayout(_team_col(opp_abbr, home))
+        panel._body.addLayout(row)
+        venue = QLabel("HOME" if is_home else "AWAY")
+        venue.setStyleSheet(
+            "font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #3B82F6;"
+            " border: 1px solid #3B82F6; border-radius: 3px; padding: 2px 10px;"
+            " background: transparent;")
+        panel._body.addWidget(venue)
+
+    def _fill_standings(self, div_teams, team, division, primary, wash):
+        panel = self.panel_stand
+        panel._head.setText(
+            ("%s DIVISION" % division.upper()) if division else "DIVISION STANDINGS")
+        panel._head.setStyleSheet(
+            "font-size: 13px; font-weight: 700; letter-spacing: 2px;"
+            " color: #ffffff; background: #0e1626; padding: 8px 12px;"
+            " border-bottom: 2px solid %s;" % primary)
+        self._clear_panel(panel)
+        if not div_teams:
+            e = QLabel("No standings data")
+            e.setStyleSheet("color: #6b7280; font-size: 12px; background: transparent;")
+            panel._body.addWidget(e)
+            return
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        headers = ["#", "TEAM", "W", "L", "OTL", "PTS"]
+        for j, h in enumerate(headers):
+            l = QLabel(h)
+            l.setStyleSheet(
+                "font-size: 11px; letter-spacing: 1px; color: #6b7280;"
+                " background: transparent;")
+            l.setAlignment(Qt.AlignLeft if j == 1 else Qt.AlignRight)
+            grid.addWidget(l, 0, j)
+        for i, t in enumerate(div_teams[:8]):
+            w = getattr(t, "wins", 0) or 0
+            lv = getattr(t, "losses", 0) or 0
+            o = getattr(t, "otl", 0) or 0
+            pts = w * 2 + o
+            tn = getattr(t, "team_name", "?") or "?"
+            abbr = getattr(t, "abbreviation", None) or tn[:3].upper()
+            me = (t is team)
+            vals = [str(i + 1), "%s  %s" % (abbr, tn),
+                    str(w), str(lv), str(o), str(pts)]
+            for j, v in enumerate(vals):
+                lab = QLabel(v)
+                st = "font-size: 12.5px; color: #f4f6fb; padding: 3px 6px;" \
+                     " background: transparent;"
+                if me:
+                    st = "font-size: 12.5px; color: #ffffff; padding: 3px 6px;" \
+                         " background: %s; font-weight: 700;" % wash
+                if j == 5:
+                    st += " font-weight: 800;"
+                lab.setStyleSheet(st)
+                lab.setAlignment(Qt.AlignLeft if j == 1 else Qt.AlignRight)
+                grid.addWidget(lab, i + 1, j)
+        panel._body.addLayout(grid)
+
+    def _fill_leaders(self, team):
+        panel = self.panel_lead
+        self._clear_panel(panel)
+        try:
+            roster = [p for p in (getattr(team, "roster", None) or [])
+                      if not getattr(p, "is_goalie", False)]
+            if not roster:
+                return
+            cols = QHBoxLayout()
+            cols.setSpacing(10)
+            for title, keyfn in [
+                    ("POINTS", lambda p: (getattr(p, "goals", 0) or 0)
+                     + (getattr(p, "assists", 0) or 0)),
+                    ("GOALS", lambda p: getattr(p, "goals", 0) or 0),
+                    ("ASSISTS", lambda p: getattr(p, "assists", 0) or 0)]:
+                col = QVBoxLayout()
+                col.setSpacing(2)
+                t = QLabel(title)
+                t.setStyleSheet(
+                    "font-size: 11px; letter-spacing: 1px; color: #9aa3b2;"
+                    " background: transparent;")
+                col.addWidget(t)
+                top3 = sorted(roster, key=keyfn, reverse=True)[:3]
+                for i, p in enumerate(top3):
+                    name = getattr(p, "full_name", "?") or "?"
+                    pos = getattr(p, "position", "") or ""
+                    val = keyfn(p)
+                    row = QHBoxLayout()
+                    row.setSpacing(6)
+                    rk = QLabel(str(i + 1))
+                    rk.setStyleSheet(
+                        "font-size: 11px; color: #6b7280; background: transparent;")
+                    nm = QLabel(name)
+                    nm.setStyleSheet(
+                        "font-size: 12.5px; color: #f4f6fb; background: transparent;")
+                    em = QLabel(pos)
+                    em.setStyleSheet(
+                        "font-size: 11px; color: #6b7280; background: transparent;")
+                    vl = QLabel(str(val))
+                    vl.setStyleSheet(
+                        "font-size: 15px; font-weight: 800; color: #ffffff;"
+                        " background: transparent;")
+                    row.addWidget(rk)
+                    row.addWidget(nm, 1)
+                    row.addWidget(em)
+                    row.addWidget(vl)
+                    col.addLayout(row)
+                cols.addLayout(col, 1)
+            panel._body.addLayout(cols)
+        except Exception as e:
+            print("[hub] leaders failed: %s" % e)
+
+    def _fill_form(self, team):
+        panel = self.panel_form
+        self._clear_panel(panel)
+        try:
+            recent = getattr(team, "recent_results", None) or []
+            if recent:
+                streak_l = QLabel("STREAK   " + str(recent[-1]).upper())
+            else:
+                streak_l = QLabel("STREAK   \u2014")
+            streak_l.setStyleSheet(
+                "font-size: 12px; letter-spacing: 2px; color: #9aa3b2;"
+                " background: transparent;")
+            panel._body.addWidget(streak_l)
+            if not recent:
+                e = QLabel("No games yet")
+                e.setStyleSheet(
+                    "color: #6b7280; font-size: 12px; padding: 6px 0;"
+                    " background: transparent;")
+                panel._body.addWidget(e)
+                return
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            for r in recent[-10:]:
+                s = str(r).upper()
+                if s.startswith("W"):
+                    res, bg = "W", "#16a34a"
+                elif s.startswith("L"):
+                    res, bg = "L", "#dc2626"
+                else:
+                    res, bg = "OTL", "#b45309"
+                cell = QLabel(res)
+                cell.setAlignment(Qt.AlignCenter)
+                cell.setStyleSheet(
+                    "font-size: 13px; font-weight: 800; color: #ffffff;"
+                    " background: %s; border-radius: 3px; padding: 6px 4px;" % bg)
+                row.addWidget(cell, 1)
+            panel._body.addLayout(row)
+        except Exception as e:
+            print("[hub] form failed: %s" % e)
+
+    def _fill_ticker(self, game, gm):
+        items = []
+        try:
+            news = getattr(game, "news_log", None) or getattr(gm, "news_log", None) or []
+            seq = news if isinstance(news, list) else []
+            for n in seq[-30:]:
+                if isinstance(n, dict):
+                    txt = n.get("story") or n.get("headline") or ""
+                else:
+                    txt = getattr(n, "headline", None) or getattr(n, "story", None) or str(n)
+                txt = str(txt).strip()
+                if txt and len(txt) > 8:
+                    items.append(txt)
+        except Exception:
+            pass
+        if not items:
+            try:
+                league = getattr(game, "league", None) or getattr(gm, "league", None)
+                sched = getattr(league, "schedule", None) or []
+                played = [g for g in sched if self._sched_played(g)]
+                for g in played[-15:]:
+                    home, away = self._sched_teams(g)
+                    hs = self._game_val(g, "home_score", "home_goals", default=0)
+                    aws = self._game_val(g, "away_score", "away_goals", default=0)
+                    items.append("FINAL: %s %s - %s %s" % (away, aws, home, hs))
+            except Exception:
+                pass
+        if not items:
+            items = ["Welcome to Puck Dynasty"]
+        self._ticker_items = items
+        self._ticker_pos = 0
+        self.ticker.setText(("   \u2022   ".join(items)).upper()[:400])
 
 
 class MainWindow(QMainWindow):
