@@ -1623,7 +1623,7 @@ class MainWindow(QMainWindow):
                 cls = getattr(mod, cls_name)
                 self._screen_classes[name] = cls
             except Exception as e:
-                print(f"[nav] failed to register {name}: {e}")
+                _nav_error(f"[nav] failed to register {name}: {e}")
 
     def register_screen(self, name, screen_class):
         """Register a screen class for lazy instantiation."""
@@ -1641,7 +1641,7 @@ class MainWindow(QMainWindow):
                 try:
                     inner.refresh()
                 except Exception as e:
-                    print(f"[nav] refresh {name} failed: {e}")
+                    _nav_error(f"[nav] refresh {name} failed: {e}")
             return
         # Lazy instantiate
         cls = self._screen_classes.get(name)
@@ -1658,9 +1658,9 @@ class MainWindow(QMainWindow):
                 if hasattr(screen, "refresh"):
                     screen.refresh()
             except Exception as e:
-                print(f"[nav] failed to create screen {name}: {e}")
+                _nav_error(f"[nav] failed to create screen {name}: {e}")
         else:
-            print(f"[nav] unknown screen: {name}")
+            _nav_error(f"[nav] unknown screen: {name}")
 
     def show_player(self, player):
         """Open a player profile. Used by roster double-click, context menus."""
@@ -1984,6 +1984,25 @@ class MainWindow(QMainWindow):
         self._shortcut_cheat_sheet()
 
 
+def _nav_error(msg):
+    """Surface navigation/registration failures visibly.
+
+    The Windows build runs with console=False, so print() goes nowhere.
+    Write to a log file next to the executable AND pop a message box for
+    the critical setup path.
+    """
+    try:
+        import os
+        log_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])),
+                                "puck_dynasty_errors.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            import datetime
+            f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+    print(msg)
+
+
 def run(game=None):
     """Launch the native Puck Dynasty application."""
     app = QApplication(sys.argv)
@@ -1995,5 +2014,23 @@ def run(game=None):
     # Show setup wizard if no game OR game has no career started yet
     # (fresh GameManager from launcher has user_team=None -- V-A1 fix)
     if game is None or getattr(game, "user_team", None) is None:
-        window.show_screen("setup")
+        try:
+            window.show_screen("setup")
+        except Exception as e:
+            _nav_error(f"[nav] setup wizard failed on launch: {e}")
+        # Verify the setup screen actually became visible; if the screen
+        # module failed to register (e.g. missing from the bundle), the
+        # user would otherwise be stranded on an empty hub with no error.
+        cur = window.stack.currentWidget()
+        is_setup = cur is window._screens.get("setup")
+        if not is_setup:
+            from PySide6.QtWidgets import QMessageBox
+            detail = "registered screens: " + ", ".join(
+                sorted(window._screen_classes.keys())[:8]) + "..."
+            _nav_error(f"[nav] setup screen not shown after launch. {detail}")
+            QMessageBox.critical(
+                window, "Setup unavailable",
+                "The new-career setup wizard could not be loaded.\n\n"
+                "Please report this and attach puck_dynasty_errors.log "
+                "from the install folder.")
     return app.exec()

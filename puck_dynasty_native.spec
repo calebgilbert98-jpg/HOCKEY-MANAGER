@@ -4,6 +4,12 @@
 
 import os as _os
 
+# Collect every native_ui screen/widget submodule.  Screens are loaded via
+# dynamic __import__ in MainWindow._register_all_screens, which PyInstaller's
+# static analysis cannot see -- without this, the Windows bundle ships with
+# NO screens (setup wizard never appears, all nav clicks silently fail).
+from PyInstaller.utils.hooks import collect_submodules as _collect_submodules
+
 block_cipher = None
 
 _spec_dir = _os.path.dirname(_os.path.abspath(SPEC))
@@ -32,7 +38,9 @@ a = Analysis(
         'native_ui.screens', 'native_ui.screens.base',
         'native_ui.widgets', 'native_ui.widgets.player_table',
         'native_ui.widgets.attribute_bar',
-    ] + _first_party,
+    ] + _collect_submodules('native_ui.screens') \
+      + _collect_submodules('native_ui.widgets') \
+      + _first_party,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
