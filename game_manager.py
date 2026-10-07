@@ -5849,8 +5849,13 @@ NHL League Office""",
         # Draft state is per-year on the league (draft_held_years); nothing to reset.
 
         # Check if playoffs should start
+        # Headless detection: if running without UI, auto quick-sim
+        # (prevents soft-lock when dialog can't be answered)
+        _is_headless = getattr(self, '_headless_sim', False)
         if getattr(self, '_bulk_simming', False):
             result = True  # bulk sims auto-start playoffs, matching test behavior
+        elif _is_headless:
+            result = False  # headless: auto quick-sim, don't wait for dialog
         else:
             # Gating T2-Phase 3: non-modal choice card. Yes opens the
             # bracket; No quick-sims headless. Dismiss = defer (the card
@@ -9570,56 +9575,14 @@ NHL League Office""",
             pass
 
     def _show_season_summary(self):
-        """Display end of season summary with stats and awards."""
-        season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
-        
-        # Create a summary window
-        summary_window = InGamePopup(self)
-        summary_window.title(f"{season_str} Season Summary")
-        summary_window.geometry("900x700")
-        summary_window.configure(background=self.BG_COLOR)
-        summary_window.transient(self)
-        summary_window.grab_set()
-        
-        # Main container with scrolling
-        main_frame = ttk.Frame(summary_window, style='Panel.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        # Title
-        ttk.Label(main_frame, text=f"{season_str} Season Complete!", 
-                 font=(self.FONT_FAMILY, 20, 'bold'), style='Title.TLabel').pack(pady=(0, 20))
-        
-        # Create notebook for different summary sections
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill='both', expand=True)
-        
-        # Awards Tab
-        awards_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(awards_frame, text="Awards")
-        self._create_awards_section(awards_frame)
-        
-        # League Leaders Tab
-        leaders_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(leaders_frame, text="League Leaders")
-        self._create_leaders_section(leaders_frame)
-        
-        # Your Team Tab
-        team_frame = ttk.Frame(notebook, style='Panel.TFrame')
-        notebook.add(team_frame, text="Your Team")
-        self._create_team_summary_section(team_frame)
-        
-        # Awards ceremony button -- the full reveal experience
-        ttk.Button(main_frame, text="Watch Awards Ceremony",
-                  command=self.open_awards_ceremony,
-                  style='Accent.TButton').pack(pady=(10, 0))
-
-        # Close button
-        ttk.Button(main_frame, text="Continue", 
-                  command=summary_window.destroy, style='TButton').pack(pady=20)
-        
-        # Wait for window to close
-        self.wait_window(summary_window)
-
+        """Display end of season summary with stats and awards.
+        Native: use _ui_notify instead of Tkinter popup (was crashing headless sims)."""
+        try:
+            season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
+            self._ui_notify("info", "Season Complete",
+                f"{season_str} season has ended. Awards and summaries available in History.")
+        except Exception:
+            pass
     def open_playoffs_window(self):
         """Open the NHL Playoffs window (UI-safe: routes via _ui_notify)."""
         self._ui_notify('open_screen', screen='playoffs', title='Playoffs')
@@ -14853,6 +14816,60 @@ NHL League Office""",
         winner, loser, scores, _game_log, _notable = sim.run()
         went_to_ot = any(p > 3 for p in periods)
         return winner, loser, scores, went_to_ot, sim
+
+    def _calculate_team_strength(self, team):
+        """Quick team strength calculation for lightweight simulation.
+        Moved from HockeyManagerGUI (main.py) -- pure game logic, no UI.
+        Bot audit 2026-10-07: was missing from GameManager (B-O5)."""
+        # Use cached calculation if available
+        cache_key = f"strength_{team.team_name}"
+        if hasattr(self, '_strength_cache') and cache_key in self._strength_cache:
+            return self._strength_cache[cache_key]
+        
+        if not hasattr(self, '_strength_cache'):
+            self._strength_cache = {}
+        
+        # Enhanced strength calculation based on key players
+        total_strength = 0
+        player_count = 0
+
+        # Injured or suspended players don't dress: use available skaters
+        # (fall back to full roster if the team is decimated)
+        skaters = [p for p in team.roster
+                   if not getattr(p, 'is_injured', False)
+                   and not (getattr(p, 'suspension_games_remaining', 0)
+                            or 0)]
+        if len(skaters) < 14:
+            skaters = list(team.roster)
+
+        # Sample top players for speed, but weight by position importance
+        sorted_roster = sorted(skaters, key=lambda p: p.overall_rating(), reverse=True)
+        top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:9]
+        top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]  
+        top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:2]
+        
+        # Weight positions appropriately
+        for player in top_forwards:
+            total_strength += player.overall_rating() * 0.6
+            player_count += 0.6
+            
+        for player in top_defense:
+            total_strength += player.overall_rating() * 0.3
+            player_count += 0.3
+            
+        for player in top_goalies:
+            total_strength += player.overall_rating() * 0.1
+            player_count += 0.1
+        
+        # Normalize to 0.5-1.0 range for goal calculation.
+        avg_ovr = (total_strength / max(player_count, 1)) if player_count > 0 else 80.0
+        strength = 0.5 + (avg_ovr - 70) / 40.0
+        strength = max(0.5, min(1.0, strength))
+        
+        # Cache the result
+        self._strength_cache[cache_key] = strength
+        
+        return strength
 
     def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
         """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
