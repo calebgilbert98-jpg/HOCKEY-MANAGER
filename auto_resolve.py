@@ -170,7 +170,7 @@ def auto_run_practice(team, app=None):
     Returns (sessions_run, error_msg)."""
     try:
         from enhanced_practice_system import (
-            PracticeCenterView, PracticeType, PracticeIntensity)
+            PracticeType, PracticeIntensity)
     except Exception as e:
         return 0, f"Practice system unavailable: {e}"
     try:
@@ -181,16 +181,15 @@ def auto_run_practice(team, app=None):
     if not roster:
         return 0, "No healthy players available"
 
-    # We need a practice system instance. PracticeCenterView wraps it,
-    # but for headless auto we instantiate the underlying system directly.
+    # We need a practice engine instance. PracticeEngine is the real
+    # headless-safe engine (no tkinter); the old PracticeSystem name
+    # never existed, and instantiating the ctk PracticeCenterView as a
+    # fallback only ever failed (a Team is not a tkinter master).
     try:
-        from enhanced_practice_system import PracticeSystem
-        ps = PracticeSystem()
-    except Exception:
-        try:
-            ps = PracticeCenterView(team=team)._system
-        except Exception as e:
-            return 0, f"Could not init practice system: {e}"
+        from enhanced_practice_system import PracticeEngine
+        ps = PracticeEngine()
+    except Exception as e:
+        return 0, f"Could not init practice system: {e}"
 
     def _attr(p, name, default=50):
         try:
