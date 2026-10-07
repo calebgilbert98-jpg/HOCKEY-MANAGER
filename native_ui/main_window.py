@@ -254,7 +254,7 @@ class MainWindow(QMainWindow):
             "season_goals": ("native_ui.screens.season_goals", "SeasonGoalsScreen"),
             "offseason_programs": ("native_ui.screens.offseason_programs", "OffseasonProgramsScreen"),
             "jersey_numbers": ("native_ui.screens.jersey_numbers", "JerseyNumbersScreen"),
-            "gm_relationships": ("native_ui.screens.gm_relationships", "GMRelationshipsScreen"),
+            "gm_relationships": ("native_ui.screens.gm_relationships", "GmRelationshipsScreen"),
             "trades": ("native_ui.screens.trades", "TradesScreen"),
             "free_agents": ("native_ui.screens.free_agents", "FreeAgentsScreen"),
             "waivers": ("native_ui.screens.waivers", "WaiversScreen"),
@@ -269,7 +269,7 @@ class MainWindow(QMainWindow):
             "lottery": ("native_ui.screens.lottery", "LotteryScreen"),
             "history": ("native_ui.screens.history", "HistoryScreen"),
             "season_summary": ("native_ui.screens.season_summary", "SeasonSummaryScreen"),
-            "ahl": ("native_ui.screens.ahl", "AHLScreen"),
+            "ahl": ("native_ui.screens.ahl", "AhIScreen"),
             "calendar": ("native_ui.screens.calendar", "CalendarScreen"),
             "team": ("native_ui.screens.team", "TeamScreen"),
             "inbox": ("native_ui.screens.inbox", "InboxScreen"),
@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
             "compare": ("native_ui.screens.compare", "CompareScreen"),
             "coach_checkin": ("native_ui.screens.coach_checkin", "CoachCheckinScreen"),
             "manager": ("native_ui.screens.manager", "ManagerScreen"),
-            "fa_frenzy": ("native_ui.screens.fa_frenzy", "FAFrenzyScreen"),
+            "fa_frenzy": ("native_ui.screens.fa_frenzy", "FaFrenzyScreen"),
             "fantasy_draft": ("native_ui.screens.fantasy_draft", "FantasyDraftScreen"),
             "scouting": ("native_ui.screens.scouting", "ScoutingScreen"),
             "contract_negotiation": ("native_ui.screens.contract_negotiation", "ContractNegotiationScreen"),
@@ -429,6 +429,13 @@ class MainWindow(QMainWindow):
         close.clicked.connect(dlg.accept)
         layout.addWidget(close)
         dlg.exec()
+        # If the club can't dress 18+2, offer the AHL recall picker.
+        # maybe_open_recall_picker is a no-op when there's no shortfall.
+        try:
+            from .dialogs.recall_picker import maybe_open_recall_picker
+            maybe_open_recall_picker(self.game, parent=self)
+        except Exception as e:
+            print(f"[native] recall picker failed: {e}")
 
     def refresh(self):
         if self.game:
