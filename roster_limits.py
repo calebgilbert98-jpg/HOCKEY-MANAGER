@@ -739,9 +739,21 @@ def _recall_block_reason(p):
 
 
 def _player_nhl_salary(p) -> int:
+    """Cap hit of a player if recalled: salary + signing bonus - retained.
+
+    Must match salary_cap_system._contract_aav (used by compliance_charge
+    for the 'current' total in _recall_fits_cap). Using base salary alone
+    would underestimate the hit by the signing bonus and allow recalls
+    that actually break the cap.
+    """
     try:
         c = getattr(p, "contract", None)
-        return int(getattr(c, "salary", 0) or 0)
+        if c is None:
+            return 0
+        hit = int(getattr(c, "salary", 0) or 0)
+        hit += int(getattr(c, "signing_bonus", 0) or 0)
+        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        return max(0, hit)
     except Exception:
         return 0
 
@@ -1276,14 +1288,32 @@ def ai_crease_maintenance(team, league=None):
             _cands.sort(key=_overall, reverse=True)
             _fa = _cands[0]
             try:
-                from game_classes import Contract as _Contract
-            except Exception:
-                break
-            try:
                 from salary_cap_system import league_minimum_salary as _lms
                 _min_sal = int(_lms() or 775000)
             except Exception:
                 _min_sal = 775000
+            # Root-cause guards: don't sign into a cap violation or a
+            # 51st SPC. A real GM checks both before offering a deal.
+            # (Recall path above is already cap-checked.)
+            try:
+                if not ai_can_sign_spc(team):
+                    break
+            except Exception:
+                pass
+            try:
+                from salary_cap_system import total_cap_charge as _tcc
+                _cap = int(getattr(team, "salary_cap", 0) or 0)
+                _cur = int(_tcc(team) or 0)
+                # Leave a small buffer; LTIR relief complicates the true
+                # ceiling, so stay conservative here.
+                if _cap > 0 and _cur + _min_sal > _cap:
+                    break
+            except Exception:
+                pass
+            try:
+                from game_classes import Contract as _Contract
+            except Exception:
+                break
             try:
                 _fa.contract = _Contract(salary=_min_sal, years_remaining=1,
                                          two_way=False)
