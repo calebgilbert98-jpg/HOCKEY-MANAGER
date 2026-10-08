@@ -27,7 +27,15 @@ Wiring:
 import random
 from typing import Any, Dict, List, Optional
 
-import customtkinter as ctk
+try:
+    import customtkinter as ctk
+except ImportError:
+    # Headless environments (sim bots, servers) don't have customtkinter.
+    # The lottery logic (run_lottery/lottery_reveal_text) is pure Python;
+    # only LotteryRevealView needs the GUI toolkit. Import must not fail
+    # headless -- without this the offseason draft lottery is silently
+    # skipped and the season-transition stalls.
+    ctk = None
 
 # Reverse-standings rank (1 = worst) -> odds %. Real NHL numbers.
 LOTTERY_ODDS: List[float] = [
@@ -235,7 +243,13 @@ def apply_user_reactions(app: Any, rows: List[Dict[str, Any]]) -> None:
 # The televised reveal window
 # ---------------------------------------------------------------------------
 
-class LotteryRevealView(ctk.CTkFrame):
+# LotteryRevealView base: ctk.CTkFrame when the GUI toolkit is present,
+# plain object headless (the view is never instantiated without a GUI --
+# the lottery sim logic above doesn't touch it).
+_LotteryRevealViewBase = ctk.CTkFrame if ctk is not None else object
+
+
+class LotteryRevealView(_LotteryRevealViewBase):
     """Broadcast-style countdown reveal, picks 16 -> 1, as a Tier-1 screen.
 
     Same televised countdown behavior as the old InGamePopup window, now

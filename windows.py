@@ -6,7 +6,18 @@ import tkinter as tk
 from tkinter import ttk
 from popup_system import (messagebox, InGamePopup, ask_card, confirm_card,
                           cards_available)
-import customtkinter as ctk
+try:
+    import customtkinter as ctk
+except ImportError:
+    # Headless environments (sim bots, servers) don't have customtkinter.
+    # This module is mostly GUI views, but it also hosts pure helpers
+    # (e.g. buyout_schedule) that headless code paths import -- e.g. the
+    # offseason buyout window. Import must not fail headless.
+    ctk = None
+
+# View base: ctk.CTkFrame when the GUI toolkit is present, plain object
+# headless (views are never instantiated without a GUI).
+_CTkFrameBase = ctk.CTkFrame if ctk is not None else object
 from game_classes import (StaffRole, PlayerPosition, to_100_scale,
     position_label,)
 import random
@@ -288,7 +299,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
-class RosterView(ctk.CTkFrame):
+class RosterView(_CTkFrameBase):
     """Roster Management (CustomTkinter): dark cards, modern tab bar,
     pill filters, styled stat tables, depth-chart tiles, cap tab."""
 
@@ -2612,7 +2623,7 @@ class RosterWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class FreeAgencyView(ctk.CTkFrame):
+class FreeAgencyView(_CTkFrameBase):
     """Free Agency Market (CustomTkinter): dark cards, pill filters,
     styled stat tables, CTk dialogs for contracts/comparison/analysis."""
 
@@ -5145,7 +5156,7 @@ except Exception:
     pass
 
 
-class TradeWindow(ctk.CTkFrame):
+class TradeWindow(_CTkFrameBase):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history.
 
     Gating Phase 2: a Tier-1 screen (``show_screen("trade", ...)``), not a
@@ -6695,7 +6706,7 @@ class TradeWindow(ctk.CTkFrame):
         self._history_visible = True
 
 
-class ScoutingView(ctk.CTkFrame):
+class ScoutingView(_CTkFrameBase):
     """Modern Scouting Department: fog-of-war prospects, regional scouts, draft board."""
 
     def __init__(self, parent, app=None):
@@ -7379,7 +7390,7 @@ class ScoutingWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class DraftView(ctk.CTkFrame):
+class DraftView(_CTkFrameBase):
     """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
 
     # Map any potential-grade variant onto a draft_night.grade_color key.
@@ -10340,7 +10351,7 @@ class DraftWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class ScheduleView(ctk.CTkFrame):
+class ScheduleView(_CTkFrameBase):
     """League Schedule (CustomTkinter): tabbed My Team / League tables,
     month-filter combo, color-coded game rows (win/loss/today), modern
     action buttons. All schedule logic preserved."""
@@ -11207,7 +11218,7 @@ class ScheduleWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class FinancesView(ctk.CTkFrame):
+class FinancesView(_CTkFrameBase):
     """Comprehensive financial management window with detailed breakdown and projections.
 
     Rebuilt with CustomTkinter (Sept 2026): CTkToplevel shell, CTkTabview
@@ -12618,7 +12629,7 @@ class FinancesWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class NewsView(ctk.CTkFrame):
+class NewsView(_CTkFrameBase):
     """League news feed — modern CTk rebuild.
 
     Two-pane layout: a scrollable feed of rounded article cards (headline,
@@ -12960,7 +12971,7 @@ class NewsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class GMOptionsView(ctk.CTkFrame):
+class GMOptionsView(_CTkFrameBase):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
@@ -13021,7 +13032,7 @@ class GMOptionsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class ContractNegotiationView(ctk.CTkFrame):
+class ContractNegotiationView(_CTkFrameBase):
     """Contract talks as a full-screen view (FM/EHM style).
 
     Offer builder on the left, team/player context on the right: cap space,
@@ -13870,7 +13881,7 @@ class ContractNegotiationWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
-class WaiversView(ctk.CTkFrame):
+class WaiversView(_CTkFrameBase):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
@@ -14373,7 +14384,7 @@ class WaiversWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class ContractExtensionsView(ctk.CTkFrame):
+class ContractExtensionsView(_CTkFrameBase):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
@@ -14743,7 +14754,7 @@ class ContractExtensionsWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
-class ExtensionNegotiationView(ctk.CTkFrame):
+class ExtensionNegotiationView(_CTkFrameBase):
     def __init__(self, parent, player, market_value, max_years, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
@@ -15236,7 +15247,7 @@ class ExtensionNegotiationWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
-class StaffContractView(ctk.CTkFrame):
+class StaffContractView(_CTkFrameBase):
     """Full-screen staff contract negotiation.
 
     Jumped to via HockeyManagerGUI.show_screen() (was: a 480x420
@@ -16087,7 +16098,7 @@ class CaptainPushbackDialog(InGamePopup):
             pass
 
 
-class SetCaptainsView(ctk.CTkFrame):
+class SetCaptainsView(_CTkFrameBase):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
@@ -16935,7 +16946,7 @@ class MandatoryCaptainsWindow(InGamePopup):
 
 
 # --- Drag-and-Drop Edit Lines Window ---
-class GMDashboardView(ctk.CTkFrame):
+class GMDashboardView(_CTkFrameBase):
     """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
 
     def __init__(self, parent, app=None):
@@ -17120,7 +17131,7 @@ class GMDashboardWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class SeasonGoalsView(ctk.CTkFrame):
+class SeasonGoalsView(_CTkFrameBase):
     """Season Goals: board expectation, live progress, milestones, youth watch."""
 
     EXPECTATIONS = [
@@ -17317,7 +17328,7 @@ class SeasonGoalsWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
-class TeamAnalyticsView(ctk.CTkFrame):
+class TeamAnalyticsView(_CTkFrameBase):
     """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
 
     def __init__(self, parent, app=None):
@@ -17469,7 +17480,7 @@ class TeamAnalyticsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class SalaryAnalyticsView(ctk.CTkFrame):
+class SalaryAnalyticsView(_CTkFrameBase):
     """Salary Analytics: payroll mix by position, top cap hits, expiring money."""
 
     def __init__(self, parent, app=None):
@@ -17607,7 +17618,7 @@ class SalaryAnalyticsWindow(InGamePopup):
             except AttributeError:
                 pass
         return InGamePopup.__getattr__(self, name)
-class BuyoutCalculatorView(ctk.CTkFrame):
+class BuyoutCalculatorView(_CTkFrameBase):
     """Buyout Calculator: real NHL buyout math with execute."""
 
     def __init__(self, parent, app=None):
@@ -18022,7 +18033,7 @@ class GameDetailWindow(InGamePopup):
                            secondary=True)
 
 
-class TeamOverviewView(ctk.CTkFrame):
+class TeamOverviewView(_CTkFrameBase):
     """Read-only overview of another club (Eastside-style team info).
 
     What you see when you click a team name for a club you don't run:
