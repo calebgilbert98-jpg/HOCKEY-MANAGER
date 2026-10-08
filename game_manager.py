@@ -673,6 +673,17 @@ class GameManager:
         print("Fantasy draft news: A historic fantasy draft has been completed!")
         print(f"All {_picks} drafted players have been redistributed "
               f"among the {len(nhl_teams)} teams using a serpentine draft format.")
+
+        # Draft recap (additive only): persist the full round-by-round
+        # recap of this draft for the draft recap screen + inbox.
+        # Never touches pick logic; guarded so a recap failure can't
+        # break the draft.
+        try:
+            from draft_recap import build_fantasy_draft_recap
+            build_fantasy_draft_recap(self.league, mgr)
+        except Exception as _e:
+            print(f"Draft recap unavailable (non-fatal): {_e}")
+
     def start_interactive_fantasy_draft(self):
         """Start the interactive fantasy draft system"""
         print("Initializing interactive fantasy draft system...")

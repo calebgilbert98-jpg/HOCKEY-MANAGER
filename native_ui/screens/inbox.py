@@ -232,6 +232,8 @@ def _special_action(game, m):
         gm = _resolve_gm(game)
         subject = str(getattr(m, "subject", "") or "").upper()
         sender_type = str(getattr(m, "sender_type", "") or "")
+        if "DRAFT RECAP" in subject and sender_type == "League":
+            return "draft_recap"
         if ("FANTASY DRAFT" in subject and sender_type == "League"
                 and gm is not None
                 and bool(getattr(gm, "pending_fantasy_draft", False))):
@@ -887,7 +889,13 @@ class InboxScreen(BaseScreen):
 
     def _build_special(self, layout, m):
         sa = _special_action(self.game, m)
-        if sa == "fantasy_draft":
+        if sa == "draft_recap":
+            btn = QPushButton("▶  VIEW DRAFT RECAP")
+            btn.setObjectName("primary-btn")
+            btn.setMinimumHeight(44)
+            btn.clicked.connect(lambda: self.navigate_to("draft_recap"))
+            layout.addWidget(btn)
+        elif sa == "fantasy_draft":
             btn = QPushButton("▶  START FANTASY DRAFT")
             btn.setObjectName("primary-btn")
             btn.setMinimumHeight(44)

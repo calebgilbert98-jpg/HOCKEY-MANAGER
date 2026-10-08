@@ -506,6 +506,11 @@ class HistoryScreen(BaseScreen):
             lambda _i: self._load_reviews(init=False))
         ctl.addWidget(self._reviews_year)
         ctl.addStretch()
+        self._recaps_btn = QPushButton("📋 Draft Recaps")
+        self._recaps_btn.setObjectName("primary-btn")
+        self._recaps_btn.clicked.connect(
+            lambda: self.navigate_to("draft_recap"))
+        ctl.addWidget(self._recaps_btn)
         layout.addLayout(ctl)
         self._review_card = QLabel("")
         self._review_card.setWordWrap(True)

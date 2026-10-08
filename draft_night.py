@@ -1084,6 +1084,13 @@ def resume_entry_draft_session(league, session, app=None, force_complete=False):
         pass
     mark_draft_conducted(league, year)
     persist_draft_grades(league, year, full_log)
+    # Draft recap (additive only): war-room sessions finalize here, so the
+    # entry recap is built for this path too. Idempotent + guarded.
+    try:
+        from draft_recap import build_entry_draft_recap
+        build_entry_draft_recap(league, year, full_log)
+    except Exception as _e:
+        print(f"Draft recap unavailable (non-fatal): {_e}")
     try:
         session.completed = True
         league.entry_draft_session = None
@@ -1369,6 +1376,14 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None,
         pass
     mark_draft_conducted(league, year)
     persist_draft_grades(league, year, picks_made)
+    # Draft recap (additive only): persist the full round-by-round recap
+    # of this draft for the draft recap screen + inbox. Guarded so a
+    # recap failure can't break the draft.
+    try:
+        from draft_recap import build_entry_draft_recap
+        build_entry_draft_recap(league, year, picks_made)
+    except Exception as _e:
+        print(f"Draft recap unavailable (non-fatal): {_e}")
 
     # News wire (established behavior): top 10 + the user's haul.
     try:
