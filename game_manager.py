@@ -186,9 +186,33 @@ class GameManager:
         self.open_windows = {}
         # Career shim: headless has no GM career object; provide safe defaults
         # so self.career.prompts_enabled and self.career.board.sacked work.
+        # Includes no-op record_result/on_hired so post-game career updates
+        # don't AttributeError headless (2026-10-08: sim logged
+        # "'SimpleNamespace' object has no attribute 'record_result'").
+        # Note: on_hired lives on career.board (call sites use
+        # career.board.on_hired), not on career directly. The board attrs
+        # (last_crisis, season_wins/losses/otl, expectation, confidence)
+        # let the monthly board review and first-run blocks run cleanly
+        # headless instead of AttributeError-ing into the outer except.
         from types import SimpleNamespace as _SN
-        self.career = _SN(prompts_enabled=False,
-                          board=_SN(sacked=False))
+        def _noop(*a, **k):
+            return None
+        self.career = _SN(
+            prompts_enabled=False,
+            board=_SN(
+                sacked=False,
+                record_result=_noop,
+                on_hired=_noop,
+                last_crisis=None,
+                season_wins=0,
+                season_losses=0,
+                season_otl=0,
+                expectation="playoffs",
+                confidence=60,
+                owner=_SN(label="Board"),
+            ),
+            profile=_SN(record_result=_noop),
+        )
         self.dashboard = None  # UI shim: headless has no dashboard
         self._season_end_handled_year = None
         self.game_manager = self  # self-reference for gm.X compatibility
@@ -14435,7 +14459,6 @@ NHL League Office""",
                 continue
         return None
 
-    @staticmethod
     def _career_weekly_update(self):
         """Happiness/concerns, training morale & injury risk, assistant advice."""
         from game_classes import EmailMessage
