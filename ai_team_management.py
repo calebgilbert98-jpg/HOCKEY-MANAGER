@@ -1965,7 +1965,7 @@ class AITeamManager:
         league = getattr(self, "_league_ref", None)
         if league is None:
             return 0
-        fa_pool = getattr(league, "free_agents", None)
+        fa_pool = free_agents
         if not isinstance(fa_pool, list) or not fa_pool:
             return 0
         try:

@@ -6879,8 +6879,7 @@ NHL League Office""",
                         except Exception:
                             pass
                         _n = _aim._enforce_salary_floor(
-                            _t, getattr(getattr(_a, 'league', None),
-                                        'free_agents', []),
+                            _t, _a.free_agents,
                             getattr(_a, 'current_date', None))
                         _a.add_news(f"Auto-signed {_n} free agent(s) to "
                                     f"reach the salary floor.")
