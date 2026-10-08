@@ -12,7 +12,9 @@ Game data used (all real, same as the web bridge):
   - app.scouting_assignments (dict: player -> scout)
   - team.scouting_reports (dict: player_id -> report)
   - team.staff (filtered for scouts)
-  - league.draft_prospects
+  - league.draft_prospects (+ draft_reentries)
+  - every team in league.teams: roster + ahl_roster + prospects (trade targets)
+  - league.free_agents
 """
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
@@ -155,6 +157,11 @@ class ScoutingScreen(BaseScreen):
     # Database pagination
     DB_PAGE_SIZE = 100
 
+    # Sentinel text for "no team filter" in the DB team combo box.
+    # It is always item 0 (added first in _build_body/_refresh_db_teams);
+    # filter logic must never hardcode this string -- compare by index.
+    _ALL_TEAMS = "All teams"
+
     def __init__(self, game, main_window, parent=None):
         self._db_page = 0
         self._db_filter_q = ""
@@ -165,6 +172,12 @@ class ScoutingScreen(BaseScreen):
         self._db_filter_ovr = "all"
         self._db_cache = []
         super().__init__(game, main_window, parent)
+        # Sync the cached filter state from the actual widget defaults.
+        # The seeds above cannot be trusted to match what the widgets say
+        # (e.g. _db_filter_team="all" vs the widget's "All teams"), and any
+        # hand-seeded copy of widget defaults can drift again. Reading the
+        # widgets is the only source of truth.
+        self._on_db_filter()
 
     def _build_body(self):
         self.tabs = QTabWidget()
@@ -251,6 +264,23 @@ class ScoutingScreen(BaseScreen):
         self._db_status.addItems(["All", "Draft eligible", "Signed", "Free agent"])
         self._db_status.currentIndexChanged.connect(self._on_db_filter)
         filter_row.addWidget(self._db_status)
+
+        self._db_team = QComboBox()
+        self._db_team.addItem(self._ALL_TEAMS)
+        self._db_team.currentIndexChanged.connect(self._on_db_filter)
+        filter_row.addWidget(self._db_team)
+
+        self._db_age = QComboBox()
+        self._db_age.addItems(
+            ["All ages", "Under 21", "21-24", "25-29", "30+"])
+        self._db_age.currentIndexChanged.connect(self._on_db_filter)
+        filter_row.addWidget(self._db_age)
+
+        self._db_ovr = QComboBox()
+        self._db_ovr.addItems(
+            ["All ratings", "85+", "80-84", "75-79", "70-74", "Under 70"])
+        self._db_ovr.currentIndexChanged.connect(self._on_db_filter)
+        filter_row.addWidget(self._db_ovr)
         db_layout.addLayout(filter_row)
 
         # Results table
@@ -335,9 +365,45 @@ class ScoutingScreen(BaseScreen):
                 QMessageBox.warning(self, "Beat", f"Failed: {e}")
 
     # --- Database ---
-    def _on_db_filter(self):
+    def _on_db_filter(self, *args):
+        """Read every filter widget into state, then refresh the list.
+
+        Accepts (and ignores) signal args so it can be connected directly
+        to currentIndexChanged/textChanged.
+        """
+        self._db_filter_q = self._db_search.text().strip().lower()
+        self._db_filter_pos = self._db_pos.currentIndex()
+        self._db_filter_status = self._db_status.currentIndex()
+        self._db_filter_team = self._db_team.currentText()
+        self._db_filter_age = self._db_age.currentIndex()
+        self._db_filter_ovr = self._db_ovr.currentIndex()
         self._db_page = 0
         self._refresh_db()
+
+    def _refresh_db_teams(self):
+        """Populate the team filter from every league team (keeps selection)."""
+        gm = _resolve_gm(self.game)
+        league = _safe(lambda: gm.league)
+        names = sorted({
+            getattr(t, "team_name", "") for t in
+            _safe(lambda: list(getattr(league, "teams", None) or []), [])
+            if getattr(t, "team_name", "")})
+        prev = self._db_team.currentText()
+        self._db_team.blockSignals(True)
+        try:
+            self._db_team.clear()
+            self._db_team.addItem(self._ALL_TEAMS)
+            for name in names:
+                self._db_team.addItem(name)
+            idx = self._db_team.findText(prev) if prev else -1
+            self._db_team.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self._db_team.blockSignals(False)
+        # Keep the cached filter in sync with what the combo actually shows:
+        # if the previously selected team vanished (e.g. league rebuild),
+        # findText returned -1 and the combo reset to ALL_TEAMS — the stale
+        # cached text would otherwise filter to 0 players.
+        self._db_filter_team = self._db_team.currentText()
 
     def _db_prev_page(self):
         if self._db_page > 0:
@@ -348,30 +414,58 @@ class ScoutingScreen(BaseScreen):
         self._db_page += 1
         self._refresh_db()
 
-    def _db_all_prospects(self):
+    def _db_pool(self):
+        """Every scoutable player as (player, status, team_name).
+
+        Covers draft prospects (+ rights re-entries), every league team's
+        NHL roster / AHL roster / prospects (trade-target scouting), and
+        the free-agent pool. Deduped by player id.
+        status is one of "draft", "signed", "free"; team_name is None for
+        prospects and free agents.
+        """
         gm = _resolve_gm(self.game)
         league = _safe(lambda: gm.league)
-        prospects = _safe(
-            lambda: list(getattr(league, "draft_prospects", None) or []), [])
-        # Also include team prospects
-        team = _user_team(self.game)
-        team_prospects = _safe(
-            lambda: list(getattr(team, "prospects", None) or []), [])
+        out = []
         seen = set()
-        all_p = []
-        for p in prospects + team_prospects:
-            pid = getattr(p, "id", id(p))
-            if pid not in seen:
-                seen.add(pid)
-                all_p.append(p)
-        return all_p
+
+        def _add(p, status, team_name):
+            pid = getattr(p, "id", None)
+            key = pid if pid is not None else id(p)
+            if key in seen:
+                return
+            seen.add(key)
+            out.append((p, status, team_name))
+
+        for attr in ("draft_prospects", "draft_reentries"):
+            for p in _safe(
+                    lambda: list(getattr(league, attr, None) or []), []):
+                _add(p, "draft", None)
+        for t in _safe(
+                lambda: list(getattr(league, "teams", None) or []), []):
+            tname = getattr(t, "team_name", "") or ""
+            for attr in ("roster", "ahl_roster", "prospects"):
+                for p in _safe(
+                        lambda: list(getattr(t, attr, None) or []), []):
+                    _add(p, "signed", tname)
+        for p in _safe(
+                lambda: list(getattr(league, "free_agents", None) or []), []):
+            _add(p, "free", None)
+        return out
+
+    # Combo-index -> (lo, hi) bands; unknown index = no band applied.
+    _DB_AGE_BANDS = {1: (0, 20), 2: (21, 24), 3: (25, 29), 4: (30, 200)}
+    _DB_OVR_BANDS = {1: (85, 100), 2: (80, 84), 3: (75, 79),
+                     4: (70, 74), 5: (0, 69)}
 
     def _db_filtered(self):
-        q = self._db_search.text().strip().lower()
-        pos_idx = self._db_pos.currentIndex()
-        all_p = self._db_all_prospects()
+        q = self._db_filter_q
+        pos_idx = self._db_filter_pos
+        status_idx = self._db_filter_status
+        team = self._db_filter_team
+        age_band = self._DB_AGE_BANDS.get(self._db_filter_age)
+        ovr_band = self._DB_OVR_BANDS.get(self._db_filter_ovr)
         out = []
-        for p in all_p:
+        for p, status, tname in self._db_pool():
             if q and q not in getattr(p, "full_name", "").lower():
                 continue
             ps = _pos_str(p).upper()
@@ -382,6 +476,26 @@ class ScoutingScreen(BaseScreen):
                 continue
             if pos_idx == 3 and "G" not in ps:
                 continue
+            if status_idx == 1 and status != "draft":
+                continue
+            if status_idx == 2 and status != "signed":
+                continue
+            if status_idx == 3 and status != "free":
+                continue
+            # Team filter: the "no filter" sentinel is item 0 of the combo,
+            # whatever its display text is. Comparing the selected text
+            # against the combo by index can't drift from the widgets.
+            if (team and self._db_team.findText(team) != 0
+                    and tname != team):
+                continue
+            if age_band is not None:
+                age = getattr(p, "age", None)
+                if age is None or not (age_band[0] <= age <= age_band[1]):
+                    continue
+            if ovr_band is not None:
+                ovr = _overall(p)
+                if not (ovr_band[0] <= ovr <= ovr_band[1]):
+                    continue
             out.append(p)
         return out
 
@@ -475,4 +589,5 @@ class ScoutingScreen(BaseScreen):
                 i, 5, QTableWidgetItem(str(getattr(s, "experience", "?"))))
 
         # Database
+        self._refresh_db_teams()
         self._refresh_db()

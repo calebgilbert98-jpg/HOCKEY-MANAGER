@@ -1331,6 +1331,13 @@ class StatsScreen(BaseScreen):
             f"{' · ' + str(g.get('date')) if g.get('date') else ''}")
         head.setObjectName("section-header")
         self._xg_layout.addWidget(head)
+        gid = g.get("game_id")
+        if gid:
+            chart_btn = QPushButton("View shot chart")
+            chart_btn.setObjectName("primary-btn")
+            chart_btn.clicked.connect(
+                lambda _=False, _gid=gid: self._open_shot_chart(_gid))
+            self._xg_layout.addWidget(chart_btn)
         tot = QLabel(f"<b>{total_xg:.2f}</b> xG · {len(shots)} shots · "
                      f"{n_goals} goals")
         tot.setStyleSheet("font-size: 18px;")
@@ -1356,6 +1363,23 @@ class StatsScreen(BaseScreen):
         rpt.setWordWrap(True)
         self._xg_layout.addWidget(self._card("Analyst Report", rpt))
         self._xg_layout.addStretch()
+
+    def _open_shot_chart(self, game_id):
+        """Open the registered shot chart viewer for an archived game.
+
+        Wires the stats xG tab to the shot_chart_viewer screen with the
+        real game context (Team H fix: set_view had zero callers).
+        """
+        self.navigate_to("shot_chart_viewer")
+        try:
+            scroll = getattr(self.main_window, "_screens", {}).get(
+                "shot_chart_viewer")
+            inner = scroll.widget() if scroll is not None \
+                and hasattr(scroll, "widget") else None
+            if inner is not None and hasattr(inner, "set_view"):
+                inner.set_view(game_id=game_id)
+        except Exception:
+            pass
 
     # -- refresh -----------------------------------------------------------------
 

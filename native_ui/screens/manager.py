@@ -99,6 +99,9 @@ class ManagerScreen(BaseScreen):
         self._exp_combo = None
         self._rels_table = None
         self._rels_rows = []
+        # Active press-conference session: survives refresh() so a presser
+        # is parked (not lost) when the user navigates away and back.
+        self._presser = None
         super().__init__(game, main_window, parent)
 
     # ------------------------------------------------------------------
@@ -173,6 +176,10 @@ class ManagerScreen(BaseScreen):
         press_box, press_lay = _section("Press")
         self._build_press(press_lay)
         grid.addWidget(press_box, 2, 1)
+
+        opp_box, opp_lay = _section("Opposition Report")
+        self._build_opposition(opp_lay)
+        grid.addWidget(opp_box, 3, 0, 1, 2)
 
         scroll.setWidget(content)
         self._layout.addWidget(scroll, 1)
@@ -937,9 +944,105 @@ class ManagerScreen(BaseScreen):
         }
 
     # ------------------------------------------------------------------
-    # Press
+    # Press (interactive press-conference focus card + history)
     # ------------------------------------------------------------------
+    _PRESSER_FOCI = (
+        ("upcoming_game", "Upcoming game"),
+        ("player_performance", "Player performance"),
+        ("trade_rumors", "Trade rumors"),
+    )
+
+    _PRESSER_JOURNALISTS = (
+        "Sarah Chen (Hockey Night)",
+        "Mike Ross (The Athletic)",
+        "Dave Tremblay (TSN)",
+        "Lisa Park (Sportsnet)",
+    )
+
     def _build_press(self, lay):
+        self._render_presser_card(lay)
+        sep = QLabel("Recent press conferences:")
+        sep.setStyleSheet("color: #9aa4b8; font-size: 12px; "
+                          "font-weight: 700; margin-top: 8px;")
+        lay.addWidget(sep)
+        self._build_press_history(lay)
+
+    def _render_presser_card(self, lay):
+        """Interactive focus card: pick a focus, answer questions."""
+        head = QLabel("\U0001f3a4 PRESS CONFERENCE")
+        head.setStyleSheet("font-weight: 800; font-size: 14px; "
+                           "color: #f0c75e;")
+        lay.addWidget(head)
+        st = self._presser
+        if not st:
+            intro = QLabel("Hold a press conference and face the media. "
+                           "Pick a focus:")
+            intro.setWordWrap(True)
+            intro.setStyleSheet("font-size: 13px;")
+            lay.addWidget(intro)
+            row = QHBoxLayout()
+            for key, label in self._PRESSER_FOCI:
+                b = QPushButton(label)
+                b.clicked.connect(
+                    lambda _=False, k=key: self._start_presser(k))
+                row.addWidget(b)
+            row.addStretch()
+            lay.addLayout(row)
+            return
+        focus_lbl = QLabel(f"Focus: {st.get('focus_label', '')}")
+        focus_lbl.setStyleSheet("color: #9aa4b8; font-size: 12px; "
+                                "font-weight: 700;")
+        lay.addWidget(focus_lbl)
+        if st.get("done"):
+            s = QLabel(st.get("summary") or "Press conference complete.")
+            s.setWordWrap(True)
+            s.setStyleSheet("font-size: 13px;")
+            lay.addWidget(s)
+            again = QPushButton("Hold another press conference")
+            again.clicked.connect(self._reset_presser)
+            lay.addWidget(again)
+            return
+        for rec in st.get("answers") or []:
+            q, a = rec.get("question", {}), rec.get("answer", {})
+            ql = QLabel(f"Q: {q.get('question', '')}")
+            ql.setWordWrap(True)
+            ql.setStyleSheet("color: #9aa4b8; font-size: 12px;")
+            al = QLabel(f"A: {a.get('label', '')}")
+            al.setWordWrap(True)
+            al.setStyleSheet("font-size: 13px;")
+            lay.addWidget(ql)
+            lay.addWidget(al)
+            reaction = a.get("reaction", "")
+            if reaction:
+                rl = QLabel(reaction)
+                rl.setWordWrap(True)
+                rl.setStyleSheet("color: #8BC34A; font-size: 12px;")
+                lay.addWidget(rl)
+        questions = st.get("questions") or []
+        idx = st.get("index", 0)
+        if idx < len(questions):
+            q = questions[idx]
+            prog = QLabel(f"Question {idx + 1} of {len(questions)} — "
+                          f"{q.get('journalist', 'Press')}")
+            prog.setStyleSheet("color: #9aa4b8; font-size: 12px; "
+                               "font-weight: 700;")
+            lay.addWidget(prog)
+            qt = QLabel(q.get("question", ""))
+            qt.setWordWrap(True)
+            qt.setStyleSheet("font-size: 14px; font-weight: 700;")
+            lay.addWidget(qt)
+            for ans in q.get("answers") or []:
+                b = QPushButton(str(ans.get("label", "")))
+                b.setStyleSheet("text-align: left; padding: 8px 12px;")
+                b.clicked.connect(
+                    lambda _=False, _q=q, _a=ans:
+                    self._answer_presser_question(_q, _a))
+                lay.addWidget(b)
+            wrap = QPushButton("Wrap up (no more questions)")
+            wrap.clicked.connect(self._finish_presser)
+            lay.addWidget(wrap)
+
+    def _build_press_history(self, lay):
         career = self._career()
         hist = _safe(lambda: list(getattr(career, "press_history", [])
                                   or []), []) or []
@@ -963,3 +1066,548 @@ class ManagerScreen(BaseScreen):
             lay.addLayout(row)
         if len(entries) > 10:
             lay.addWidget(QLabel(f"…and {len(entries) - 10} more."))
+
+    # ------------------------------------------------------------------
+    # Press conference flow
+    # ------------------------------------------------------------------
+    def _presser_form_word(self):
+        """Recent-form word, mirroring mainline _career_form_word."""
+        board = self._board()
+        w = _safe(lambda: int(getattr(board, "season_wins", 0) or 0), 0)
+        l = _safe(lambda: int(getattr(board, "season_losses", 0) or 0), 0)
+        otl = _safe(lambda: int(getattr(board, "season_otl", 0) or 0), 0)
+        games = w + l + otl
+        if games < 3:
+            return "mixed"
+        pct = (w * 2 + otl) / (games * 2)
+        if pct >= 0.65:
+            return "excellent"
+        if pct >= 0.5:
+            return "decent"
+        return "poor"
+
+    def _presser_questions(self, focus):
+        """Build the question list for a presser focus. Never raises."""
+        try:
+            if focus == "upcoming_game":
+                return self._presser_game_questions()
+            if focus == "player_performance":
+                return self._presser_player_questions()
+            if focus == "trade_rumors":
+                return self._presser_rumor_questions()
+        except Exception:
+            pass
+        return []
+
+    def _presser_game_questions(self):
+        """Upcoming-game focus: mainline pre-match question bank."""
+        import manager_career as mc
+        team = self._user_team()
+        opp, _gdate = self._next_opponent()
+        if team is None or opp is None:
+            return []
+        standings = _safe(
+            lambda: getattr(self._league(), "standings", None), {}) or {}
+        report = _safe(
+            lambda: mc.generate_opposition_report(opp, standings), {}) or {}
+        ctx = {
+            "form_word": self._presser_form_word(),
+            "opp": report.get("team") or getattr(opp, "team_name", "them"),
+            "opp_word": str(report.get("danger_level", "dangerous")).lower(),
+        }
+        return _safe(
+            lambda: mc.build_prematch_presser(team, opp, ctx), []) or []
+
+    def _presser_player_questions(self):
+        """Player-performance focus: questions built from real roster stats."""
+        team = self._user_team()
+        roster = [p for p in (_safe(
+            lambda: list(getattr(team, "roster", []) or []), []) or [])
+            if str(getattr(p, "primary_position", "") or "").upper()
+            != "GOALIE"]
+        if not roster:
+            return []
+
+        def _nm(p):
+            return (f"{getattr(p, 'first_name', '?')} "
+                    f"{getattr(p, 'last_name', '?')}").strip()
+
+        def _pts(p):
+            return float(getattr(p, "points", 0) or 0)
+
+        sk = sorted(roster, key=_pts, reverse=True)
+        star, slump = sk[0], sk[-1]
+        star_nm, slump_nm = _nm(star), _nm(slump)
+        star_pts, slump_pts = int(_pts(star)), int(_pts(slump))
+        star_gp = int(_safe(lambda: getattr(star, "games_played", 0), 0) or 0)
+        journalists = self._PRESSER_JOURNALISTS
+        return [
+            {
+                "id": "star_form",
+                "journalist": journalists[0],
+                "question": (f"{star_nm} has {star_pts} points"
+                             f"{f' in {star_gp} games' if star_gp else ''} "
+                             f"— is he your MVP so far?"),
+                "answers": [
+                    {"label": "Praise him: 'He's been our best player'",
+                     "tone": "confident", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 2,
+                     "reaction": (f"{star_nm} hears the praise — the room "
+                                  "lifts. The fans love a coach who backs "
+                                  "his stars.")},
+                    {"label": "Share credit: 'It's a team game'",
+                     "tone": "calm", "morale_effect": 0,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("Measured. The board likes the no-ego "
+                                  "message.")},
+                    {"label": "Demand more: 'I need more from everyone'",
+                     "tone": "honest", "morale_effect": -1,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("Blunt. The dressing room didn't enjoy "
+                                  "that, and the fans grumble.")},
+                ],
+            },
+            {
+                "id": "slump",
+                "journalist": journalists[1],
+                "question": (f"{slump_nm} has {slump_pts} points and looks "
+                             f"lost out there. Are you worried?"),
+                "answers": [
+                    {"label": "Back him: 'He's working through it'",
+                     "tone": "supportive", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 1,
+                     "reaction": (f"{slump_nm} hears his coach went to bat "
+                                  "for him — the room tightens.")},
+                    {"label": "Steady: 'He knows the standard'",
+                     "tone": "calm", "morale_effect": 0,
+                     "board_effect": 0, "fan_effect": 0,
+                     "reaction": "A shrug. Nobody learned anything."},
+                    {"label": "Tough love: 'If he doesn't produce, he sits'",
+                     "tone": "tough", "morale_effect": -1,
+                     "board_effect": 1, "fan_effect": -1,
+                     "reaction": ("The board likes the accountability. The "
+                                  "room went quiet.")},
+                ],
+            },
+        ]
+
+    def _presser_rumor_questions(self):
+        """Trade-rumor focus: questions built from real roster names."""
+        team = self._user_team()
+        roster = [p for p in (_safe(
+            lambda: list(getattr(team, "roster", []) or []), []) or [])
+            if str(getattr(p, "primary_position", "") or "").upper()
+            != "GOALIE"]
+        if not roster:
+            return []
+
+        def _nm(p):
+            return (f"{getattr(p, 'first_name', '?')} "
+                    f"{getattr(p, 'last_name', '?')}").strip()
+
+        def _age(p):
+            return int(_safe(lambda: getattr(p, "age", 99), 99) or 99)
+
+        young = min(roster, key=_age)
+        young_nm, young_age = _nm(young), _age(young)
+        journalists = self._PRESSER_JOURNALISTS
+        return [
+            {
+                "id": "rumor_player",
+                "journalist": journalists[2],
+                "question": (f"{young_nm} ({young_age}) is all over the "
+                             f"rumor mill this week. Is he going anywhere?"),
+                "answers": [
+                    {"label": "Shut it down: 'He's part of the future'",
+                     "tone": "confident", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 2,
+                     "reaction": (f"{young_nm} hears he's wanted — the room "
+                                  "loves it, and so do the fans.")},
+                    {"label": "Open for business: 'We listen to every call'",
+                     "tone": "honest", "morale_effect": -1,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("The board likes a GM maximizing assets. "
+                                  "The room reads the writing on the wall.")},
+                    {"label": "No comment on rumors",
+                     "tone": "evasive", "morale_effect": 0,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("Terse. The rumor mill spins faster, and "
+                                  "the fans grumble.")},
+                ],
+            },
+            {
+                "id": "deadline_add",
+                "journalist": journalists[3],
+                "question": "Are you looking to add before the deadline?",
+                "answers": [
+                    {"label": "Aggressive: 'If the right deal is there, "
+                              "we strike'",
+                     "tone": "confident", "morale_effect": 0,
+                     "board_effect": 1, "fan_effect": 1,
+                     "reaction": ("Ambition plays well in the boardroom and "
+                                  "the stands.")},
+                    {"label": "Loyal: 'I believe in this group'",
+                     "tone": "calm", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 0,
+                     "reaction": ("The room appreciates the vote of "
+                                  "confidence.")},
+                    {"label": "Noncommittal: 'We're always looking'",
+                     "tone": "evasive", "morale_effect": 0,
+                     "board_effect": 0, "fan_effect": 0,
+                     "reaction": "GM-speak. Nobody learned anything."},
+                ],
+            },
+        ]
+
+    def _start_presser(self, focus):
+        """Open a presser on a focus: pick questions, show the card."""
+        label = dict(self._PRESSER_FOCI).get(focus, focus)
+        questions = self._presser_questions(focus)
+        if not questions:
+            self._presser = {
+                "focus": focus, "focus_label": label, "questions": [],
+                "index": 0, "answers": [], "done": True,
+                "summary": (f"No questions from the press on '{label}' "
+                            f"today — nothing to answer."),
+            }
+        else:
+            self._presser = {
+                "focus": focus, "focus_label": label,
+                "questions": questions, "index": 0, "answers": [],
+                "done": False, "summary": "",
+            }
+        self.refresh()
+
+    def _reset_presser(self):
+        self._presser = None
+        self.refresh()
+
+    def _answer_presser_question(self, q, ans):
+        """Record one answer; its effects apply immediately (mainline
+        applies each answer as given); advance or finish the presser."""
+        st = self._presser
+        if not st or st.get("done"):
+            return
+        label = st.get("focus_label") or st.get("focus") or "presser"
+        st["answers"].append({
+            "question": q, "answer": ans,
+            "reaction": ans.get("reaction", "") if isinstance(ans, dict)
+            else "",
+        })
+        st["index"] = st.get("index", 0) + 1
+        self._apply_press_answers([ans], label, record=False)
+        if st["index"] >= len(st.get("questions") or []):
+            self._finish_presser()
+        else:
+            self.refresh()
+
+    def _finish_presser(self):
+        """Record the presser in history and close it (effects were
+        already applied answer-by-answer)."""
+        st = self._presser
+        if not st:
+            return
+        answers = [rec.get("answer") for rec in (st.get("answers") or [])
+                   if isinstance(rec.get("answer"), dict)]
+        label = st.get("focus_label") or st.get("focus") or "presser"
+        if answers:
+            summary = self._presser_summary(answers, label)
+            self._record_presser_history(label, summary)
+        else:
+            summary = "No questions answered — the presser ended quietly."
+        st["done"] = True
+        st["summary"] = summary
+        self.refresh()
+
+    def _presser_summary(self, answers, kind):
+        """Combined summary line for a finished presser."""
+        total_fan = sum(int(a.get("fan_effect", 0) or 0) for a in answers)
+        summary = (f"{kind}: "
+                   + "; ".join(str(a.get("label", "")) for a in answers))
+        if total_fan:
+            summary += (f" [fans {'loved' if total_fan > 0 else 'hated'} "
+                        f"it: {total_fan:+d}]")
+        return summary
+
+    def _record_presser_history(self, kind, summary):
+        career = self._career()
+        hist = _safe(lambda: getattr(career, "press_history", None))
+        if not isinstance(hist, list):
+            return
+        gm = self._gm()
+        cd = (_safe(lambda: getattr(gm, "current_date", None))
+              or _safe(lambda: getattr(self.game, "current_date", None)))
+        iso = cd.isoformat() if cd is not None and hasattr(
+            cd, "isoformat") else ""
+        try:
+            hist.append({"date": iso, "type": f"presser ({kind})",
+                         "summary": summary})
+        except Exception:
+            pass
+
+    def _apply_press_answers(self, answers, kind, record=True):
+        """Apply press-conference answer effects.
+
+        Mirrors mainline ``_career_apply_press_answers``: roster morale,
+        board confidence, fan sentiment, and (unless record=False) a
+        press_history entry. Returns the summary string.
+        """
+        if not answers:
+            return ""
+        team = self._user_team()
+        gm = self._gm()
+        cd = (_safe(lambda: getattr(gm, "current_date", None))
+              or _safe(lambda: getattr(self.game, "current_date", None)))
+        iso = cd.isoformat() if cd is not None and hasattr(
+            cd, "isoformat") else ""
+        total_morale = sum(int(a.get("morale_effect", 0) or 0)
+                           for a in answers)
+        total_board = sum(int(a.get("board_effect", 0) or 0)
+                          for a in answers)
+        total_fan = sum(int(a.get("fan_effect", 0) or 0) for a in answers)
+        if total_morale and team is not None:
+            for p in (getattr(team, "roster", []) or []):
+                try:
+                    m = float(getattr(p, "morale", 70) or 70)
+                    p.morale = max(
+                        1.0, min(100.0, m + (5 if total_morale > 0 else -5)))
+                except Exception:
+                    pass
+        if total_board:
+            board = self._board()
+            if board is not None:
+                _safe(lambda: board.apply_press_board_effect(
+                    total_board, iso))
+        if total_fan and team is not None:
+            try:
+                from fan_sentiment import nudge_fan_sentiment
+                _safe(lambda: nudge_fan_sentiment(
+                    team, total_fan * 2.5,
+                    reason=f"presser ({kind}): {total_fan:+d}",
+                    current_date=cd))
+            except Exception:
+                pass
+        summary = self._presser_summary(answers, kind)
+        if record:
+            self._record_presser_history(kind, summary)
+        return summary
+
+    # ------------------------------------------------------------------
+    # Opposition report (scouting)
+    # ------------------------------------------------------------------
+    def _next_opponent(self):
+        """(opponent_team, game_date) for the next unplayed user-team game.
+
+        Returns (None, None) when there is no upcoming game.
+        """
+        team = self._user_team()
+        league = self._league()
+        if team is None or league is None:
+            return None, None
+        try:
+            from .schedule import (_schedule_entries, _game_played_state,
+                                   _results_by_date, _date_key)
+        except Exception:
+            return None, None
+        gm = self._gm()
+        today = (_safe(lambda: getattr(gm, "current_date", None))
+                 or _safe(lambda: getattr(self.game, "current_date", None)))
+        today_k = _safe(lambda: _date_key(today))
+        by_date = _safe(lambda: _results_by_date(self.game), {}) or {}
+        my_name = _safe(lambda: str(getattr(team, "team_name", "")), "") \
+            or ""
+
+        def _is_mine(x):
+            return x is team or str(getattr(x, "team_name", x) or "") \
+                == my_name
+
+        def _resolve(x):
+            """Team object for a schedule entry side (object or name)."""
+            if getattr(x, "team_name", None) is not None:
+                return x
+            want = str(x or "")
+            for t in (_safe(lambda: list(getattr(league, "teams", [])
+                                         or []), []) or []):
+                if str(getattr(t, "team_name", "") or "") == want:
+                    return t
+            return None
+
+        cands = []
+        for entry in (_safe(lambda: list(_schedule_entries(self.game)), [])
+                      or []):
+            try:
+                home, away = (entry.get("home_team"),
+                              entry.get("away_team"))
+                if not (_is_mine(home) or _is_mine(away)):
+                    continue
+                played = _safe(lambda: _game_played_state(
+                    entry, self.game, by_date)[0], True)
+                if played:
+                    continue
+                dk = _safe(lambda: _date_key(entry.get("date")))
+                if dk is None:
+                    continue
+                if today_k is not None and dk < today_k:
+                    continue
+                opp = _resolve(away if _is_mine(home) else home)
+                if opp is None:
+                    continue
+                cands.append((dk, opp, entry.get("date")))
+            except Exception:
+                continue
+        if not cands:
+            return None, None
+        cands.sort(key=lambda c: c[0])
+        return cands[0][1], cands[0][2]
+
+    @staticmethod
+    def _team_facet_avgs(team):
+        """Average shooting/defense/physicality/skating/goaltending."""
+        roster = [p for p in (_safe(
+            lambda: list(getattr(team, "roster", []) or []), []) or [])
+            if not getattr(p, "is_injured", False)]
+        if not roster:
+            return None
+
+        def _avg(players, attr):
+            vals = [float(getattr(p, attr, 0) or 0) for p in players]
+            return round(sum(vals) / len(vals), 1) if vals else 0.0
+
+        skaters = [p for p in roster
+                   if str(getattr(p, "primary_position", "") or "").upper()
+                   != "GOALIE"]
+        goalies = [p for p in roster
+                   if str(getattr(p, "primary_position", "") or "").upper()
+                   == "GOALIE"]
+        return {
+            "shooting": _avg(skaters, "shooting"),
+            "defense": _avg(skaters, "defense"),
+            "physicality": _avg(skaters, "physicality"),
+            "skating": _avg(skaters, "skating"),
+            "goaltending": _avg(goalies, "goaltending") if goalies else 10.0,
+        }
+
+    def _extra_tactical_advice(self, opp):
+        """Matchup advice from real user-team vs opponent stat comparisons."""
+        mine = self._team_facet_avgs(self._user_team())
+        theirs = self._team_facet_avgs(opp)
+        if not mine or not theirs:
+            return []
+        out = []
+        m, t = mine, theirs
+        if m["shooting"] > t["defense"] + 1.0:
+            out.append(f"Our finishing ({m['shooting']:.1f}) outranks their "
+                       f"slot defense ({t['defense']:.1f}) — get pucks to "
+                       "the net from the slot.")
+        if m["goaltending"] > t["goaltending"] + 1.0:
+            out.append(f"Goaltending edge ({m['goaltending']:.1f} vs "
+                       f"{t['goaltending']:.1f}) — stay patient; they'll "
+                       "have to open up.")
+        if m["defense"] > t["shooting"] + 1.0:
+            out.append(f"Our team defense ({m['defense']:.1f}) smothers "
+                       f"their attack ({t['shooting']:.1f}) — protect the "
+                       "slot and let them shoot from outside.")
+        if m["physicality"] > t["physicality"] + 1.0:
+            out.append(f"We're the heavier side ({m['physicality']:.1f} vs "
+                       f"{t['physicality']:.1f}) — finish every check "
+                       "early and wear them down.")
+        if m["skating"] > t["skating"] + 1.0:
+            out.append(f"Skating advantage ({m['skating']:.1f} vs "
+                       f"{t['skating']:.1f}) — push the pace in transition.")
+        if t["shooting"] > m["defense"] + 1.0:
+            out.append(f"Their attack ({t['shooting']:.1f}) beats our "
+                       f"defense ({m['defense']:.1f}) — collapse low and "
+                       "block the middle.")
+        if t["goaltending"] > m["goaltending"] + 1.0:
+            out.append(f"Their goalie ({t['goaltending']:.1f}) outranks ours "
+                       f"({m['goaltending']:.1f}) — traffic and tips are "
+                       "the way through.")
+        return out
+
+    def _opposition_report_data(self):
+        """Full scout report for the next opponent, or None.
+
+        Combines mainline generate_opposition_report with extra tactical
+        advice derived from real user-vs-opponent stat comparisons, and
+        guarantees at least 3 advice items.
+        """
+        opp, gdate = self._next_opponent()
+        if opp is None:
+            return None
+        import manager_career as mc
+        league = self._league()
+        standings = _safe(
+            lambda: getattr(league, "standings", None), {}) or {}
+        report = _safe(lambda: mc.generate_opposition_report(opp, standings))
+        if not report:
+            return None
+        advice = [a for a in (report.get("tactical_advice") or []) if a]
+        for a in self._extra_tactical_advice(opp):
+            if a and a not in advice:
+                advice.append(a)
+        if len(advice) < 3:
+            danger = report.get("danger_level", "unknown")
+            record = report.get("record", "unknown")
+            team_nm = report.get("team", "the opposition")
+            fillers = [
+                f"No clear matchup edge on paper (danger: {danger}, "
+                f"record {record}) — win the special-teams battle.",
+                f"Limited tape on {team_nm} — establish the forecheck "
+                "early and force them to show their hand.",
+            ]
+            for f in fillers:
+                if len(advice) >= 3:
+                    break
+                if f not in advice:
+                    advice.append(f)
+        while len(advice) < 3:
+            advice.append("Play our game: manage the puck, finish checks, "
+                          "and stay out of the box.")
+        report["tactical_advice"] = advice
+        report["game_date_str"] = _safe(
+            lambda: gdate.isoformat()
+            if hasattr(gdate, "isoformat") else str(gdate), "") or ""
+        return report
+
+    def _build_opposition(self, lay):
+        data = _safe(self._opposition_report_data)
+        if not data:
+            lay.addWidget(QLabel("No upcoming game on the schedule — "
+                                 "no opposition report."))
+            return
+        head = QLabel(f"{data.get('team', 'Opponent')}  ·  "
+                      f"{data.get('game_date_str', '')}")
+        head.setStyleSheet("font-weight: 800; font-size: 15px; "
+                           "color: #f0c75e;")
+        lay.addWidget(head)
+        meta = QLabel(f"Danger: {data.get('danger_level', '?')}  ·  "
+                      f"Record: {data.get('record', '?')}")
+        meta.setStyleSheet("color: #9aa4b8; font-size: 12px;")
+        lay.addWidget(meta)
+        for title, items, color in (
+                ("Strengths", data.get("strengths") or [], "#F44336"),
+                ("Weaknesses", data.get("weaknesses") or [], "#4CAF50")):
+            tl = QLabel(title)
+            tl.setStyleSheet(f"font-weight: 700; color: {color}; "
+                             f"font-size: 13px;")
+            lay.addWidget(tl)
+            for it in items:
+                bl = QLabel(f"• {it}")
+                bl.setWordWrap(True)
+                bl.setStyleSheet("font-size: 13px;")
+                lay.addWidget(bl)
+        kp = data.get("key_players") or []
+        if kp:
+            kpl = QLabel("Key players to watch: " + ", ".join(kp))
+            kpl.setWordWrap(True)
+            kpl.setStyleSheet("font-size: 13px;")
+            lay.addWidget(kpl)
+        al = QLabel("Tactical advice")
+        al.setStyleSheet("font-weight: 700; color: #7fb3ff; "
+                         "font-size: 13px;")
+        lay.addWidget(al)
+        for i, a in enumerate(data.get("tactical_advice") or [], 1):
+            bl = QLabel(f"{i}. {a}")
+            bl.setWordWrap(True)
+            bl.setStyleSheet("font-size: 13px;")
+            lay.addWidget(bl)

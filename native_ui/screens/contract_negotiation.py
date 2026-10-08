@@ -212,37 +212,85 @@ class ContractNegotiationScreen(BaseScreen):
                 QMessageBox.warning(
                     self, "Invalid Terms", str(reason or "Invalid terms."))
                 return
+            # The engine reads offer terms from person.salary and
+            # person.contract_years — the caller MUST set these on the
+            # player BEFORE calling. Passing dollars positionally would
+            # land them in the extension/notify params (real signature:
+            # handle_contract_offer(person, extension=False, notify="popup")).
+            # Snapshot first: if the deal isn't accepted, the offered terms
+            # must not leak into the player's attributes.
+            orig_salary = getattr(self._player, "salary", None)
+            orig_years = getattr(self._player, "contract_years", None)
+            self._player.salary = offer["aav"]
+            self._player.contract_years = offer["years"]
             # Submit the offer — the agent responds via the game's
             # negotiation logic (may accept, counter, or reject)
             result = _safe(
                 lambda: game.handle_contract_offer(
-                    self._player, offer["aav"], offer["years"],
-                    extension=self._is_extension))
-            self._handle_agent_response(result, offer)
+                    self._player, extension=self._is_extension,
+                    notify="popup"))
+            accepted = self._handle_agent_response(result, offer)
+            if not accepted:
+                self._player.salary = orig_salary
+                self._player.contract_years = orig_years
         except Exception as e:
             QMessageBox.warning(self, "Offer", f"Failed: {e}")
 
-    def _handle_agent_response(self, result, offer):
-        """Process the agent's verdict on our offer."""
-        if not result:
+    def _offer_accepted(self, result):
+        """True iff the engine actually signed the deal.
+
+        Real engine shape: True = signed, False/None = refused or blocked
+        (buyout ban, Dec-1 RFA ineligibility, already-signed player,
+        failed validation), "consideration" = UFA bid period, still no
+        deal. Legacy dict-verdict shape: verdict == "accept". Everything
+        else — counter, missing verdict, unrecognized — is not an
+        acceptance.
+        """
+        if result is True:
+            return True
+        if isinstance(result, dict):
+            return str(result.get("verdict", "")).lower() == "accept"
+        return False
+
+    def _handle_agent_response(self, result, offer, signed_title="Deal!",
+                               signed_text=None):
+        """Process the agent's verdict on our offer.
+
+        Returns True iff the deal was actually accepted (the only case
+        where staged terms may stay on the player and we navigate away).
+        signed_title/signed_text let the accept flow keep its "Signed!"
+        wording while sharing the exact same verdict logic.
+        """
+        name = getattr(self._player, "full_name", "Player")
+        if self._offer_accepted(result):
             QMessageBox.information(
-                self, "Offer Submitted",
-                "Your offer has been submitted to the agent.")
-            return
-        verdict = str(result.get("verdict", "")).lower() if isinstance(
-            result, dict) else ""
-        if verdict == "accept":
-            QMessageBox.information(
-                self, "Deal!",
-                f"{getattr(self._player, 'full_name', 'Player')} accepts!")
+                self, signed_title,
+                signed_text if signed_text is not None
+                else f"{name} accepts!")
             self.navigate_to("contracts")
-        elif verdict == "counter":
-            counter = result.get("counter", {}) if isinstance(result, dict) else {}
-            self._show_counter(counter)
-        else:
-            note = result.get("note", "The agent rejected the offer.") \
-                if isinstance(result, dict) else "The agent rejected the offer."
+            return True
+        if result == "consideration":
+            QMessageBox.information(
+                self, "Under Consideration",
+                f"{name} is considering your offer alongside bids from "
+                "other clubs. You'll hear back in a few days — no contract "
+                "has been signed.")
+            return False
+        if isinstance(result, dict):
+            verdict = str(result.get("verdict", "")).lower()
+            if verdict == "counter":
+                counter = result.get("counter", {}) or {}
+                self._show_counter(counter)
+                return False
+            note = result.get("note") or "The agent rejected the offer."
             QMessageBox.information(self, "Rejected", str(note))
+            return False
+        # Falsy or unrecognized: the engine refused or blocked the offer.
+        QMessageBox.information(
+            self, "Offer Not Accepted",
+            f"{name} did not accept the offer — no contract was signed. "
+            "Your negotiation is still open.")
+        return False
 
     def _show_counter(self, counter):
         """Display the agent's counter-offer."""
@@ -272,12 +320,35 @@ class ContractNegotiationScreen(BaseScreen):
             aav = self._agent_ask.get("aav", 0)
             years = self._agent_ask.get("years", 0)
             game = getattr(self.game, "game_manager", None) or self.game
+            # Validate the agent's terms through the same gate as our own
+            # offers — a stale or illegal ask must not slip through.
+            ok, reason = _safe(
+                lambda: game._validate_contract_terms(
+                    self._player, aav, years,
+                    extension=self._is_extension),
+                (True, ""))
+            if not ok:
+                QMessageBox.warning(
+                    self, "Invalid Terms", str(reason or "Invalid terms."))
+                return
+            # Same contract as _on_counter: the engine reads the terms from
+            # person.salary / person.contract_years, so set them first —
+            # but snapshot them so a non-acceptance can't leak the ask
+            # into the player's attributes.
+            orig_salary = getattr(self._player, "salary", None)
+            orig_years = getattr(self._player, "contract_years", None)
+            self._player.salary = aav
+            self._player.contract_years = years
             result = _safe(
                 lambda: game.handle_contract_offer(
-                    self._player, aav, years,
-                    extension=self._is_extension))
-            QMessageBox.information(self, "Signed!", "Contract signed.")
-            self.navigate_to("contracts")
+                    self._player, extension=self._is_extension,
+                    notify="popup"))
+            accepted = self._handle_agent_response(
+                result, {"aav": aav, "years": years},
+                signed_title="Signed!", signed_text="Contract signed.")
+            if not accepted:
+                self._player.salary = orig_salary
+                self._player.contract_years = orig_years
         except Exception as e:
             QMessageBox.warning(self, "Accept", f"Failed: {e}")
 

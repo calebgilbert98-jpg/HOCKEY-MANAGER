@@ -66,14 +66,14 @@ class EntityContextMenu(QMenu):
                             lambda: main_window.show_screen("lines"))
             menu.add_action("Add to Trade Block",
                             lambda: EntityContextMenu._add_trade_block(
-                                game, player))
+                                main_window, game, player))
             menu.add_action("Sign Extension",
                             lambda p=player: EntityContextMenu._open_contracts(
                                 main_window, p))
             menu.addSeparator()
             menu.add_action("Place on Waivers",
-                            lambda: EntityContextMenu._place_waivers(
-                                main_window, game, player),
+                            lambda: EntityContextMenu._open_waivers(
+                                main_window, player),
                             danger=True)
         return menu
 
@@ -140,36 +140,66 @@ class EntityContextMenu(QMenu):
                     pass
 
     @staticmethod
-    def _add_trade_block(game, player):
+    def _add_trade_block(main_window, game, player):
+        """Primary path: open the TradeBlockScreen so the user gets the
+        full trade-block workflow (shop, value, offers, interest).
+
+        The player is added through the screen's own _block_add helper --
+        the exact code path the screen's 'Add Players' dialog uses
+        (pid-deduped, pool-validated) -- so the screen opens with the
+        player already on the block. The verify-and-repair below covers
+        a latent bug in that helper: `block = getattr(...) or []`
+        rebinds to a throwaway list when the block starts empty, so the
+        add is silently dropped. Not our file to fix; flagged for the
+        owning team. Navigation always happens regardless.
+        """
         try:
-            if not hasattr(game, "trade_block"):
-                game.trade_block = []
-            if player not in game.trade_block:
-                game.trade_block.append(player)
+            from ..screens.trade_block import _block_add, _pid, _user_team
+            pid = _pid(player)
+            _block_add(game, [pid])
+            block = getattr(game, "trade_block", None)
+            if not isinstance(block, list):
+                try:
+                    game.trade_block = block = []
+                except Exception:
+                    block = []
+            if all(_pid(p) != pid for p in block):
+                # Repair for _block_add's empty-block rebind bug
+                # (flagged for the owning team): pool-validated,
+                # pid-deduped append so the add actually lands.
+                pool = []
+                for lst in ("roster", "ahl_roster", "prospects"):
+                    try:
+                        pool.extend(list(getattr(
+                            _user_team(game), lst, None) or []))
+                    except Exception:
+                        pass
+                target = next((p for p in pool if _pid(p) == pid), None)
+                if target is not None:
+                    block.append(target)
         except Exception as e:
-            print(f"[ctx] trade block failed: {e}")
+            print(f"[ctx] trade block add failed: {e}")
+        main_window.show_screen("trade_block")
 
     @staticmethod
-    def _place_waivers(main_window, game, player):
-        from PySide6.QtWidgets import QMessageBox
-        reply = QMessageBox.question(
-            main_window, "Waivers",
-            "Place this player on waivers? Other teams can claim him.",
-            QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            try:
-                # Add to waiver list and flag the player
-                if hasattr(game, "waiver_list"):
-                    if player not in game.waiver_list:
-                        game.waiver_list.append(player)
-                player.on_waivers = True
-                # Remove from active roster if present
-                user_team = getattr(game, "user_team", None)
-                if user_team and hasattr(user_team, "roster"):
-                    if player in user_team.roster:
-                        user_team.roster.remove(player)
-            except Exception as e:
-                print(f"[ctx] waivers failed: {e}")
+    def _open_waivers(main_window, player):
+        """Open the WaiversScreen instead of mutating the waiver list
+        directly. The screen owns the real workflow: eligibility,
+        NMC blocks, waiver-exempt demote-vs-waive, the 2-day wire, and
+        news -- a confirm dialog here would bypass all of it.
+
+        Preselect: WaiversScreen has no set_player; the player appears
+        in its 'Place on waivers' section with Waive/Demote actions.
+        """
+        main_window.show_screen("waivers")
+        screen = main_window._screens.get("waivers")
+        if screen:
+            widget = screen.widget() if hasattr(screen, "widget") else screen
+            if hasattr(widget, "set_player"):
+                try:
+                    widget.set_player(player)
+                except Exception:
+                    pass
 
     @staticmethod
     def _release_staff(main_window, staff):

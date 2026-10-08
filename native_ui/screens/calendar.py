@@ -1,21 +1,23 @@
-"""Calendar: month-grid view of the season schedule (read-only).
+"""Calendar: month-grid view of the season schedule.
 
 Port of web_ui/screens/calendar.py. Prev/next month buttons with
 year rollover; the month grid is built in code (padding cells,
 per-day game counts, event markers for the trade deadline, entry
 draft, opening night, and season end). A deadline countdown banner
-sits above the grid.
+sits above the grid. Clicking a day opens a details dialog listing
+that day's games with teams, scores, and status.
 """
 import calendar as _cal
 from datetime import date, datetime
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QFrame,
-    QPushButton, QScrollArea,
+    QPushButton, QScrollArea, QDialog, QMessageBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 from .base import BaseScreen
+from .schedule import _game_played_state, _results_by_date
 
 
 def _safe(fn, default=None):
@@ -56,8 +58,159 @@ _MONTHS = ["January", "February", "March", "April", "May", "June",
 _WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 
+def _game_status(g, iso, today_iso):
+    """Human status line for one game: Final (+OT/SO), Today, Scheduled."""
+    if g.get("played"):
+        s = "Final"
+        if g.get("shootout"):
+            s += " (SO)"
+        elif g.get("overtime"):
+            s += " (OT)"
+    elif iso == today_iso:
+        s = "Today"
+    else:
+        s = "Scheduled"
+    if g.get("preseason"):
+        s += " · Preseason"
+    return s
+
+
+class _DayCell(QFrame):
+    """Calendar day cell that emits ``day_clicked`` on left-click."""
+
+    day_clicked = Signal(str)
+
+    def __init__(self, iso, parent=None):
+        super().__init__(parent)
+        self._iso = iso
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        try:
+            if event is not None and event.button() == Qt.LeftButton:
+                self.day_clicked.emit(self._iso)
+        except Exception:
+            pass
+        super().mousePressEvent(event)
+
+
+class _DayDetailDialog(QDialog):
+    """Modal showing every game scheduled on one calendar day.
+
+    Mirrors the DailyResultsDialog layout (dialog-title, date header,
+    scrollable game cards, Close button). Games come from the real
+    league schedule; an empty day shows "No games scheduled".
+    """
+
+    def __init__(self, iso_date, games, events, my_name, today_iso,
+                 parent=None):
+        super().__init__(parent)
+        self._iso = str(iso_date or "")
+        self._today_iso = today_iso or ""
+        self._cards = []
+        self._event_labels = []
+        self._empty_label = None
+
+        self.setWindowTitle("Day Details")
+        self.setMinimumSize(560, 420)
+
+        layout = QVBoxLayout(self)
+
+        self._title_label = QLabel("DAY DETAILS")
+        self._title_label.setObjectName("dialog-title")
+        layout.addWidget(self._title_label)
+
+        self._date_label = QLabel(self._format_date(self._iso))
+        self._date_label.setStyleSheet("color: #8b95ab; font-size: 13px;")
+        layout.addWidget(self._date_label)
+
+        for ev in events or []:
+            kind = ev.get("kind", "") if isinstance(ev, dict) else ""
+            icon = {"deadline": "\u23F0", "draft": "\U0001F3AF",
+                    "season": "\U0001F3C1"}.get(kind, "\u2022")
+            label = ev.get("label", "") if isinstance(ev, dict) else ""
+            el = QLabel(f"{icon} {label}")
+            el.setStyleSheet(
+                "font-size: 13px; font-weight: 700; color: #e8b34b;")
+            el.setWordWrap(True)
+            layout.addWidget(el)
+            self._event_labels.append(el)
+
+        # Scrollable game list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(scroll, 1)
+
+        games_widget = QWidget()
+        games_layout = QVBoxLayout(games_widget)
+        games_layout.setSpacing(8)
+        scroll.setWidget(games_widget)
+
+        if not games:
+            self._empty_label = QLabel("No games scheduled")
+            self._empty_label.setAlignment(Qt.AlignCenter)
+            self._empty_label.setStyleSheet(
+                "color: #6b7488; font-size: 14px;")
+            games_layout.addWidget(self._empty_label)
+        else:
+            for g in games:
+                games_layout.addWidget(self._make_game_card(g))
+        games_layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("primary-btn")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    @staticmethod
+    def _format_date(iso):
+        try:
+            return date.fromisoformat(str(iso)[:10]).strftime(
+                "%A, %B %d, %Y")
+        except Exception:
+            return str(iso or "Unknown date")
+
+    def _make_game_card(self, g):
+        card = QFrame()
+        card.setObjectName("tile")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(2)
+
+        mine = bool(g.get("mine"))
+        matchup = QLabel(f"{g.get('away', '?')} @ {g.get('home', '?')}")
+        matchup.setStyleSheet(
+            "font-size: 15px; font-weight: 700; "
+            f"color: {'#3B82F6' if mine else '#ffffff'};")
+        matchup.setWordWrap(True)
+        layout.addWidget(matchup)
+
+        status = _game_status(g, self._iso, self._today_iso)
+        if g.get("played"):
+            score_txt = (f"{g.get('away_score', '?')} – "
+                         f"{g.get('home_score', '?')}  ·  {status}")
+        else:
+            score_txt = status
+        score = QLabel(score_txt)
+        score.setStyleSheet("font-size: 13px; color: #9aa4b8;")
+        layout.addWidget(score)
+
+        self._cards.append(
+            {"matchup": matchup, "score": score, "mine": mine})
+        return card
+
+
 class CalendarScreen(BaseScreen):
-    """Month calendar with per-day game counts and event markers."""
+    """Month calendar with per-day game counts and event markers.
+
+    Clicking a day opens a details panel with that day's games
+    (teams, scores, status) from the real league schedule.
+    """
 
     title = "Calendar"
 
@@ -121,6 +274,10 @@ class CalendarScreen(BaseScreen):
         pre = QLabel('<span style="color:#9aa4b8">PRE</span> Preseason')
         pre.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         legend.addWidget(pre)
+        hint = QLabel("Click a day for details")
+        hint.setStyleSheet(
+            "color: #6b7488; font-size: 12px; font-style: italic;")
+        legend.addWidget(hint)
         legend.addStretch()
         self._layout.addLayout(legend)
 
@@ -153,6 +310,7 @@ class CalendarScreen(BaseScreen):
         self._my_name = ""
         self._games_by_date = {}
         self._events_by_date = {}
+        self._selected_iso = ""
 
     # ------------------------------------------------------------------
     def _open_deadline(self):
@@ -190,6 +348,9 @@ class CalendarScreen(BaseScreen):
         league = _league(self.game)
         raw = _safe(lambda: list(getattr(league, "schedule", None)
                                  or []), []) or []
+        # Played-state index (scores/OT/SO) from the real game results,
+        # shared with the schedule screen so statuses always agree.
+        by_date = _safe(lambda: _results_by_date(self.game), {}) or {}
         for g in raw:
             try:
                 if not isinstance(g, dict):
@@ -200,12 +361,17 @@ class CalendarScreen(BaseScreen):
                 if not gd:
                     continue
                 mine = bool(self._my_name) and self._my_name in (home, away)
+                played, hs, aws, ot, so = _safe(
+                    lambda: _game_played_state(g, self.game, by_date),
+                    (False, None, None, False, False))
                 games.setdefault(gd, []).append({
                     "home": home, "away": away, "mine": mine,
                     "is_home": bool(mine) and home == self._my_name,
                     "opponent": (away if home == self._my_name
                                  else (home if mine else "")),
                     "preseason": bool(g.get("preseason", False)),
+                    "played": played, "home_score": hs, "away_score": aws,
+                    "overtime": ot, "shootout": so,
                 })
             except Exception:
                 continue
@@ -267,6 +433,8 @@ class CalendarScreen(BaseScreen):
             today = today.date() if isinstance(today, datetime) else today
         except Exception:
             today = None
+        if not isinstance(today, date):
+            today = None
         days_left = (dd - today).days if today else None
         is_today = bool(today and dd == today)
         passed = days_left is not None and days_left < 0
@@ -318,9 +486,35 @@ class CalendarScreen(BaseScreen):
                 col = 0
                 row += 1
 
+    def _show_day_detail(self, iso):
+        """Click handler: open the day-detail panel for one calendar day.
+
+        Looks the day's games up in the real league schedule (via
+        ``_load_data``) and renders them in a dialog. Days with no games
+        show "No games scheduled"; unknown dates are handled gracefully.
+        """
+        try:
+            iso = str(iso or "")
+            games = list(self._games_by_date.get(iso, []) or [])
+            events = list(self._events_by_date.get(iso, []) or [])
+            self._selected_iso = iso
+            self._render_grid()
+            dlg = _DayDetailDialog(iso, games, events, self._my_name,
+                                   self._today_iso, parent=self)
+            dlg.exec()
+        except Exception as e:
+            print(f"[calendar] day detail failed: {e}")
+            try:
+                QMessageBox.warning(
+                    self, "Day Details",
+                    f"Could not open the day details: {e}")
+            except Exception:
+                pass
+
     def _day_cell(self, day_num, iso, games, events):
-        cell = QFrame()
+        cell = _DayCell(iso)
         cell.setObjectName("tile")
+        cell.day_clicked.connect(self._show_day_detail)
         cl = QVBoxLayout(cell)
         cl.setContentsMargins(6, 6, 6, 6)
         cl.setSpacing(2)
@@ -329,6 +523,11 @@ class CalendarScreen(BaseScreen):
         if iso == self._today_iso:
             style = ("font-size: 13px; font-weight: 800; color: #111827; "
                      "background: #e8b34b; border-radius: 10px; "
+                     "padding: 1px 6px;")
+            dl.setAlignment(Qt.AlignLeft)
+        if iso == self._selected_iso:
+            style = ("font-size: 13px; font-weight: 800; color: #111827; "
+                     "background: #3B82F6; border-radius: 10px; "
                      "padding: 1px 6px;")
             dl.setAlignment(Qt.AlignLeft)
         dl.setStyleSheet(style)

@@ -543,6 +543,19 @@ class RosterScreen(BaseScreen):
 
     def _on_tab_changed(self, idx):
         key = TAB_DEFS[idx][0]
+        if key == "ahl":
+            # The full AHL experience (standings, scores, Calder race,
+            # farm-club roster, prospects) lives on the AhIScreen -- the
+            # tab is a shortcut there, not a second roster table.
+            # Reset to the NHL tab so a return visit doesn't strand the
+            # tab bar on a tab that always navigates away.
+            self._tabs.blockSignals(True)
+            try:
+                self._tabs.setCurrentIndex(0)
+            finally:
+                self._tabs.blockSignals(False)
+            self._try_navigate("ahl")
+            return
         if key in self._views:
             self._load_table(key)
         elif key == "depth":
@@ -660,18 +673,16 @@ class RosterScreen(BaseScreen):
                 pass
 
     def _add_trade_block(self, player):
+        """Right-click 'Add to Trade Block': open the TradeBlockScreen
+        with the player on the block. Delegates to the shared context-
+        menu helper so both right-click paths run the same code."""
         try:
-            pid = str(_safe(lambda: getattr(player, "id", ""), ""))
-            name = _safe(lambda: getattr(player, "full_name", "?"), "?")
-            if not hasattr(self.game, "trade_block"):
-                self.game.trade_block = []
-            if player not in self.game.trade_block:
-                self.game.trade_block.append(player)
-            QMessageBox.information(
-                self, "Trade Block", f"{name} added to the trade block.")
+            from ..widgets.context_menu import EntityContextMenu
+            EntityContextMenu._add_trade_block(
+                self.main_window, self.game, player)
         except Exception as e:
             QMessageBox.warning(self, "Trade Block",
-                                f"Could not add to trade block: {e}")
+                                f"Could not open the trade block: {e}")
 
     def _open_contracts(self, player, elc=False):
         # The contracts screen is not ported yet; hand off navigation.

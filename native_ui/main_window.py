@@ -9,7 +9,7 @@ import os
 import re
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QAction, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
     QSizePolicy, QComboBox,
 )
@@ -321,13 +321,14 @@ class HubPage(QWidget):
             ("offseason", "OFFSEASON", "\u2600", "Summer programs", "offseason_programs"),
             ("jerseys", "JERSEYS", "\U0001f455", "Jersey numbers", "jersey_numbers"),
             ("gmrels", "GM RELATIONS", "\U0001f91d", "GM relationships", "gm_relationships"),
+            ("gmopts", "GM OPTIONS", "\u2699", "Front-office tools", "gm_options"),
         ]
         for i, (key, label, icon, sub, screen) in enumerate(secondary2):
             tile = self._make_nav_tile(label, icon, screen, big=False,
                                        sub=sub)
             more_grid.addWidget(tile, 1, i)
             self._nav_tiles[key] = tile
-        # 6th column spacer to match HTML 6-col grid (5 tiles + empty)
+        # 6 tiles fill the 6-column grid (matches HTML hub layout)
         outer.addLayout(more_grid)
         outer.addSpacing(12)
 
@@ -1573,6 +1574,9 @@ class MainWindow(QMainWindow):
         self.topbar = TopBar(self)
         self.addToolBar(Qt.TopToolBarArea, self._wrap_topbar())
 
+        # Menu-bar directory: every registered screen reachable by click
+        self._setup_menu_nav()
+
         # Central stacked widget for screens
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -1611,7 +1615,6 @@ class MainWindow(QMainWindow):
         from native_ui.screens.calendar import CalendarScreen
         from native_ui.screens.camp import CampScreen
         from native_ui.screens.captains import CaptainsScreen
-        from native_ui.screens.boxscore import BoxscoreScreen
         from native_ui.screens.coach_checkin import CoachCheckinScreen
         from native_ui.screens.compare import CompareScreen
         from native_ui.screens.contract_negotiation import ContractNegotiationScreen
@@ -1626,6 +1629,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.fantasy_draft import FantasyDraftScreen
         from native_ui.screens.finances import FinancesScreen
         from native_ui.screens.free_agents import FreeAgentsScreen
+        from native_ui.screens.gm_options import GMOptionsScreen
         from native_ui.screens.gm_relationships import GmRelationshipsScreen
         from native_ui.screens.history import HistoryScreen
         from native_ui.screens.inbox import InboxScreen
@@ -1683,7 +1687,6 @@ class MainWindow(QMainWindow):
             "multiplayer": MultiplayerScreen,
             "practice_center": PracticeCenterScreen,
             "camp": CampScreen,
-            "boxscore": BoxscoreScreen,
             "captains": CaptainsScreen,
             "staff": StaffScreen,
             "staff_detail": StaffDetailScreen,
@@ -1694,6 +1697,7 @@ class MainWindow(QMainWindow):
             "season_goals": SeasonGoalsScreen,
             "offseason_programs": OffseasonProgramsScreen,
             "jersey_numbers": JerseyNumbersScreen,
+            "gm_options": GMOptionsScreen,
             "gm_relationships": GmRelationshipsScreen,
             "trades": TradesScreen,
             "free_agents": FreeAgentsScreen,
@@ -2407,6 +2411,162 @@ class MainWindow(QMainWindow):
             return False
         except Exception:
             return False
+
+    def _menu_nav_item(self, menu, label, navigate):
+        """Add one navigation entry to a menu-bar menu.
+
+        `navigate` is a zero-arg callable written at the call site with a
+        literal show_screen("<key>") call, keeping the navigation graph
+        statically greppable (every registered screen must be reachable).
+        """
+        act = QAction(label, self)
+        act.triggered.connect(navigate)
+        menu.addAction(act)
+        return act
+
+    def _setup_menu_nav(self):
+        """Build the menu-bar directory: every registered screen, one click.
+
+        Hub tiles cover the daily screens; this menu makes the full
+        feature set (draft central, waivers, offer sheets, systems...)
+        discoverable without turning the hub into a maze of tiles.
+        """
+        mb = self.menuBar()
+        mb.setObjectName("nav-menubar")
+        mb.setStyleSheet(
+            "QMenuBar { background: #0b1220; color: #dbe4f2;"
+            " border-bottom: 1px solid rgba(255,255,255,0.08); }"
+            "QMenuBar::item { padding: 6px 12px; background: transparent; }"
+            "QMenuBar::item:selected { background: rgba(59,130,246,0.25); }"
+            "QMenu { background: #0d1526; color: #dbe4f2;"
+            " border: 1px solid rgba(255,255,255,0.10); }"
+            "QMenu::item { padding: 6px 26px 6px 14px; }"
+            "QMenu::item:selected { background: rgba(59,130,246,0.30); }"
+        )
+        mi = self._menu_nav_item
+
+        club = mb.addMenu("&Club")
+        mi(club, "Roster", lambda _c=False: self.show_screen("roster"))
+        mi(club, "Lines", lambda _c=False: self.show_screen("lines"))
+        mi(club, "Team Overview", lambda _c=False: self.show_screen("team"))
+        mi(club, "Practice Center",
+           lambda _c=False: self.show_screen("practice_center"))
+        mi(club, "Training Camp", lambda _c=False: self.show_screen("camp"))
+        mi(club, "Offseason Programs",
+           lambda _c=False: self.show_screen("offseason_programs"))
+        mi(club, "Tactics", lambda _c=False: self.show_screen("tactics"))
+        mi(club, "Morale", lambda _c=False: self.show_screen("morale"))
+        mi(club, "Player Development",
+           lambda _c=False: self.show_screen("development"))
+        mi(club, "Dressing Room",
+           lambda _c=False: self.show_screen("dressing_room"))
+        mi(club, "Captains", lambda _c=False: self.show_screen("captains"))
+        mi(club, "Coach Check-In",
+           lambda _c=False: self.show_screen("coach_checkin"))
+        mi(club, "AHL Affiliate", lambda _c=False: self.show_screen("ahl"))
+        mi(club, "Staff", lambda _c=False: self.show_screen("staff"))
+        mi(club, "Jersey Numbers",
+           lambda _c=False: self.show_screen("jersey_numbers"))
+
+        league = mb.addMenu("&League")
+        mi(league, "Standings", lambda _c=False: self.show_screen("standings"))
+        mi(league, "Team Stats", lambda _c=False: self.show_screen("stats"))
+        mi(league, "Schedule", lambda _c=False: self.show_screen("schedule"))
+        mi(league, "Playoffs", lambda _c=False: self.show_screen("playoffs"))
+        mi(league, "Calendar", lambda _c=False: self.show_screen("calendar"))
+        mi(league, "League History",
+           lambda _c=False: self.show_screen("history"))
+        mi(league, "Records", lambda _c=False: self.show_screen("records"))
+        mi(league, "Season Summary",
+           lambda _c=False: self.show_screen("season_summary"))
+        mi(league, "Awards Ceremony",
+           lambda _c=False: self.show_screen("awards_ceremony"))
+        mi(league, "League News", lambda _c=False: self.show_screen("news"))
+        mi(league, "Media Center",
+           lambda _c=False: self.show_screen("media_center"))
+        mi(league, "Shot Chart Viewer",
+           lambda _c=False: self.show_screen("shot_chart_viewer"))
+
+        trans = mb.addMenu("&Transactions")
+        mi(trans, "Trade Center", lambda _c=False: self.show_screen("trades"))
+        mi(trans, "Trade Block",
+           lambda _c=False: self.show_screen("trade_block"))
+        mi(trans, "Waivers", lambda _c=False: self.show_screen("waivers"))
+        mi(trans, "Free Agents",
+           lambda _c=False: self.show_screen("free_agents"))
+        mi(trans, "Offer Sheets",
+           lambda _c=False: self.show_screen("offer_sheets"))
+        mi(trans, "FA Frenzy", lambda _c=False: self.show_screen("fa_frenzy"))
+        mi(trans, "Contracts", lambda _c=False: self.show_screen("contracts"))
+        mi(trans, "Contract Negotiation",
+           lambda _c=False: self.show_screen("contract_negotiation"))
+        mi(trans, "Scouting", lambda _c=False: self.show_screen("scouting"))
+        mi(trans, "Player Shortlist",
+           lambda _c=False: self.show_screen("shortlist"))
+        mi(trans, "Entry Draft", lambda _c=False: self.show_screen("draft"))
+        mi(trans, "Draft Central",
+           lambda _c=False: self.show_screen("draft_central"))
+        mi(trans, "Draft Recap",
+           lambda _c=False: self.show_screen("draft_recap"))
+        mi(trans, "Draft Lottery",
+           lambda _c=False: self.show_screen("lottery"))
+        mi(trans, "Trade Deadline",
+           lambda _c=False: self.show_screen("deadline"))
+        mi(trans, "Fantasy Draft",
+           lambda _c=False: self.show_screen("fantasy_draft"))
+
+        office = mb.addMenu("Front &Office")
+        mi(office, "GM Options Hub",
+           lambda _c=False: self.show_screen("gm_options"))
+        mi(office, "Manager Dashboard",
+           lambda _c=False: self.show_screen("manager"))
+        mi(office, "Analytics Hub",
+           lambda _c=False: self.show_screen("analytics"))
+        mi(office, "Team Analytics",
+           lambda _c=False: self.show_screen("team_analytics"))
+        mi(office, "GM Relationships",
+           lambda _c=False: self.show_screen("gm_relationships"))
+        mi(office, "Season Goals",
+           lambda _c=False: self.show_screen("season_goals"))
+        mi(office, "Season Meeting",
+           lambda _c=False: self.show_screen("season_meeting"))
+        mi(office, "Finances", lambda _c=False: self.show_screen("finances"))
+        mi(office, "Inbox", lambda _c=False: self.show_screen("inbox"))
+        mi(office, "Compare Players",
+           lambda _c=False: self.show_screen("compare"))
+
+        systems = mb.addMenu("S&ystems")
+        mi(systems, "Clutch Systems",
+           lambda _c=False: self.show_screen("systems_clutch"))
+        mi(systems, "Circumstance Systems",
+           lambda _c=False: self.show_screen("systems_circumstance"))
+        mi(systems, "Discipline Systems",
+           lambda _c=False: self.show_screen("systems_discipline"))
+        mi(systems, "Rivalry Systems",
+           lambda _c=False: self.show_screen("systems_rivalry"))
+        mi(systems, "Deployment Systems",
+           lambda _c=False: self.show_screen("systems_deployment"))
+        mi(systems, "Condition Systems",
+           lambda _c=False: self.show_screen("systems_condition"))
+
+        game = mb.addMenu("&Game")
+        mi(game, "Watch Live", lambda _c=False: self.show_screen("watch"))
+        mi(game, "Replay Center", lambda _c=False: self.show_screen("replay"))
+        mi(game, "Player Profile",
+           lambda _c=False: self.show_screen("player"))
+        mi(game, "Staff Detail",
+           lambda _c=False: self.show_screen("staff_detail"))
+        mi(game, "Recall Picker",
+           lambda _c=False: self.show_screen("recall_picker"))
+        mi(game, "Settings", lambda _c=False: self.show_screen("settings"))
+        mi(game, "Save / Load", lambda _c=False: self.show_screen("save"))
+        mi(game, "Setup Wizard", lambda _c=False: self.show_screen("setup"))
+        mi(game, "Multiplayer",
+           lambda _c=False: self.show_screen("multiplayer"))
+        game.addSeparator()
+        sc = QAction("Keyboard Shortcuts", self)
+        sc.triggered.connect(lambda _c=False: self.show_shortcuts_dialog())
+        game.addAction(sc)
 
     def _setup_keyboard_shortcuts(self):
         """Wire up app-wide keyboard shortcuts via QShortcut."""

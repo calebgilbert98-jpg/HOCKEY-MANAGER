@@ -310,12 +310,20 @@ class FaFrenzyScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _on_offer(self, pid):
         # Web: /free_agents?offer=<id>. Navigate to the FA market and
-        # open the real offer dialog for the player.
+        # open the real offer dialog for the player. Ports the old
+        # FrenzyDialog._go_offer deep-link: FreeAgentsScreen.set_offer_player
+        # focuses the Players tab first (setCurrentIndex(0)) and warns when
+        # the player is no longer a free agent.
         self._navigate("free_agents")
         try:
-            from .free_agents import OfferDialog
-            dlg = OfferDialog(self.game, pid, self)
-            dlg.exec()
+            scroll = getattr(self.main_window, "_screens", {}).get(
+                "free_agents")
+            inner = scroll.widget() if scroll is not None \
+                and hasattr(scroll, "widget") else None
+            if inner is not None and hasattr(inner, "set_offer_player"):
+                inner.set_offer_player(pid)
+            elif inner is not None and hasattr(inner, "open_offer"):
+                inner.open_offer(pid)
         except Exception:
             pass
 

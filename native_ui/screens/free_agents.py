@@ -1293,95 +1293,6 @@ class HireDialog(QDialog):
             self._submit_btn.setEnabled(True)
 
 
-class FrenzyDialog(QDialog):
-    """Free Agent Frenzy event-day summary: top-UFA cards, signing wire,
-    done-deals feed, cap snapshot. The banner deep-link (web ?offer=
-    equivalent) opens the offer dialog for a player."""
-
-    def __init__(self, game, offer_player, parent=None):
-        super().__init__(parent)
-        self._game = game
-        self._offer_player = offer_player
-        data = _frenzy_data(game)
-
-        self.setWindowTitle("Free Agent Frenzy")
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(520)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-
-        title = QLabel("FREE AGENT FRENZY")
-        title.setObjectName("dialog-title")
-        layout.addWidget(title)
-        tagline = QLabel("The market is open. Every contender is on the "
-                         "phone. Don't get left behind.")
-        tagline.setWordWrap(True)
-        layout.addWidget(tagline)
-
-        cap = data["cap"]
-        layout.addWidget(QLabel(
-            f"Cap: {_fmt_money(cap)} · Committed: "
-            f"{_fmt_money(data['committed'])} · Space: "
-            f"{_fmt_money(data['space'])} · "
-            f"{data['count']} free agents on the market."))
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        bl = QVBoxLayout(body)
-        bl.setSpacing(8)
-
-        if data["cards"]:
-            bl.addWidget(self._section("Top UFAs"))
-            for c in data["cards"]:
-                row = QHBoxLayout()
-                tier = f" · {c['tier']}" if c.get("tier") else ""
-                info = QLabel(
-                    f"#{c['rank']}  {c['name']} ({c['position']}, "
-                    f"age {c['age']}){tier}\n"
-                    f"{c['season_line']} · Asking "
-                    f"{_fmt_money(c['ask'])}/yr · {c['fa_type']}")
-                info.setWordWrap(True)
-                row.addWidget(info, 1)
-                b = QPushButton("Offer")
-                b.setObjectName("primary-btn")
-                b.clicked.connect(
-                    lambda _c, pid=c["id"]: self._go_offer(pid))
-                row.addWidget(b)
-                box = QWidget()
-                box.setLayout(row)
-                bl.addWidget(box)
-        else:
-            bl.addWidget(self._section("The market hasn't opened yet."))
-
-        bl.addWidget(self._section("Done deals"))
-        for story in data["deals"]:
-            lab = QLabel(str(story))
-            lab.setWordWrap(True)
-            bl.addWidget(lab)
-
-        bl.addStretch()
-        scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        close = QPushButton("Close")
-        close.clicked.connect(self.accept)
-        btn_row.addWidget(close)
-        layout.addLayout(btn_row)
-
-    def _section(self, text):
-        lab = QLabel(text)
-        lab.setObjectName("section-header")
-        return lab
-
-    def _go_offer(self, pid):
-        self.accept()
-        self._offer_player(pid)
-
-
 # ---------------------------------------------------------------------------
 # main screen
 # ---------------------------------------------------------------------------
@@ -1817,8 +1728,10 @@ class FreeAgentsScreen(BaseScreen):
         dlg.exec()
 
     def _open_frenzy(self):
-        dlg = FrenzyDialog(self.game, self.set_offer_player, self)
-        dlg.exec()
+        # Single path: the registered FA Frenzy screen (fa_frenzy).
+        # The old banner dialog was removed; its Offer deep-link is
+        # ported into FaFrenzyScreen._on_offer.
+        self.navigate_to("fa_frenzy")
 
     # -- refresh --------------------------------------------------------
 
