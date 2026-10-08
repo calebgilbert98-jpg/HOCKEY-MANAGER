@@ -70,6 +70,9 @@ a = Analysis(
         'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
         'native_ui', 'native_ui.main_window', 'native_ui.theme',
         'native_ui.screens', 'native_ui.screens.base',
+        # Explicit: these two were silently dropped by PyInstaller in v0.26.38
+        # despite being in _screen_mods. Force them.
+        'native_ui.screens.draft', 'native_ui.screens.morale',
         'native_ui.widgets', 'native_ui.widgets.player_table',
         'native_ui.widgets.attribute_bar',
     ] + _screen_mods \
