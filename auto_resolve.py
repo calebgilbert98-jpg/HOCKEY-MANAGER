@@ -345,12 +345,17 @@ def auto_run_practice(team, app=None):
         return 0, "No practice sessions could be run"
     return sessions, None
 def auto_fix_salary_cap(team, over_amount):
-    """Shed salary via LTIR (eligible injured players) and safe demotions.
+    """Shed salary via releases (unsigned players), LTIR (eligible injured
+    players) and safe demotions.
 
     Uses the game's real cap accounting (salary_cap_system), so the
     predicted relief matches what cap_breakdown() shows after the moves
     are applied:
 
+    - Release relief = full hit (no contract = no burial rule). Unsigned
+      players (years_remaining == 0) count against the cap until the GM
+      acts; releasing them is zero-risk (no buyout, no waivers, no NMC)
+      and clears "phantom" overages LTIR/demotions cannot touch.
     - LTIR relief = max(0, hit - cap_space_at_placement), predicted exactly
       the way ir_system.place_on_ltir() computes it at apply time. The
       club is over the cap here, so space is normally $0 and relief is the
@@ -370,7 +375,7 @@ def auto_fix_salary_cap(team, over_amount):
     excluded from the compliance check, so demoting them frees nothing).
     Valuable waiver-eligible players are never risked on waivers.
 
-    Returns (moves, err): moves is [('ltir'|'demote', player,
+    Returns (moves, err): moves is [('release'|'ltir'|'demote', player,
     predicted_relief_dollars), ...] for apply_cap_fix_moves(); err is None
     when the moves cover over_amount, otherwise a plain-language reason
     naming the actual constraint (locked dollars, NMCs, ineligible
@@ -447,10 +452,89 @@ def auto_fix_salary_cap(team, over_amount):
     covered = 0.0
     ltir_ineligible = []
 
+    # -- Step 0: release unsigned players (expired contracts).
+    # A player with years_remaining == 0 is not under contract -- they
+    # count against the cap only until the GM acts (re-sign or move on).
+    # Releasing them is zero-risk: no buyout penalty, no waiver exposure,
+    # no NMC issue. This clears "phantom" overages that LTIR/demotions
+    # cannot touch. (2026-10-08: 5-year sim froze $0.90M over because a
+    # single unsigned player counted against the cap and no safe move
+    # existed to shed it.)
+    #
+    # Scan BOTH roster and ahl_roster: an unsigned player on a one-way AHL
+    # deal still counts (hit - burial exemption) via minor_league_cap_charge,
+    # which also ignores years_remaining. Same phantom-overage freeze, one
+    # list over.
+    #
+    # Sort cheapest-first: shed minimum talent. If a $1M unsigned player
+    # covers the overage, don't release the $8M star.
+    def _is_unsigned(p):
+        # Match the blocker's definition (game_manager.py): years_remaining
+        # == 0. A missing contract (None) has $0 AAV and is skipped by the
+        # relief gate below anyway.
+        try:
+            c = getattr(p, "contract", None)
+            if c is None:
+                return False
+            return int(getattr(c, "years_remaining", 1) or 0) == 0
+        except Exception:
+            return False
+
+    def _release_relief(p, on_ahl):
+        # NHL roster: full hit clears. AHL: the minor-league charge clears
+        # (burial rule -- one-way deals keep hit minus exemption).
+        try:
+            if on_ahl:
+                return int(minor_league_cap_charge(p) or 0)
+            return _hit(p)
+        except Exception:
+            return 0
+
+    _unsigned = []
+    try:
+        _ros = list(getattr(team, 'roster', None) or [])
+    except Exception:
+        _ros = []
+    try:
+        _ahl_list = list(getattr(team, 'ahl_roster', None) or [])
+    except Exception:
+        _ahl_list = []
+    for p in _ros:
+        if _is_unsigned(p) and not _is_filler(p):
+            _unsigned.append((p, False))
+    for p in _ahl_list:
+        if _is_unsigned(p) and not _is_filler(p):
+            _unsigned.append((p, True))
+    # Cheapest first -- minimum talent shed. Emergency fillers excluded:
+    # their charge is already excluded from the compliance check, so
+    # releasing one frees $0 in reality.
+    _unsigned.sort(key=lambda t: _release_relief(t[0], t[1]))
+    for p, _on_ahl in _unsigned:
+        if covered >= over_amount:
+            break
+        # Dressed-minimum guard (NHL roster only; unsigned players are never
+        # in the dressed pool anyway since has_active_contract is False,
+        # but keep the guard for safety).
+        if not _on_ahl:
+            try:
+                if (would_break_dress_minimum is not None
+                        and would_break_dress_minimum(team, [p])):
+                    continue
+            except Exception:
+                pass
+        _relief = _release_relief(p, _on_ahl)
+        if _relief <= 0:
+            continue
+        moves.append(('release', p, _relief))
+        covered += _relief
+    _chosen = {id(p) for _, p, _ in moves}
+
     # -- Step 1: LTIR for eligible injured players (no risk, real relief).
-    # place_on_ltir() snapshots cap space at placement; predict it exactly
-    # the same way so planned relief == applied relief. LTIRs must be
-    # applied before any demotion for the snapshot to match.
+    # place_on_ltir() snapshots cap space at placement; releases run first
+    # (Step 0) so the phantom overage clears before the snapshot. In the
+    # over-cap regime space is 0 either way, so predicted relief (full hit)
+    # matches applied relief. LTIRs must be applied before any demotion
+    # for the snapshot to match.
     if _irs is not None:
         try:
             _cap = int(getattr(team, 'salary_cap', DEFAULT_CAP)
@@ -464,6 +548,8 @@ def auto_fix_salary_cap(team, over_amount):
         for p in roster:
             if covered >= over_amount:
                 break
+            if id(p) in _chosen:
+                continue
             try:
                 _ok, _why = _irs.eligible_for_ltir(p)
             except Exception:
@@ -545,7 +631,7 @@ def auto_fix_salary_cap(team, over_amount):
 
 
 def apply_cap_fix_moves(team, moves, current_date=None):
-    """Apply ('ltir'|'demote', player, predicted_relief) moves from
+    """Apply ('ltir'|'demote'|'release', player, predicted_relief) moves from
     auto_fix_salary_cap().
 
     LTIRs go through ir_system.place_on_ltir (eligibility + relief-pool
@@ -553,7 +639,9 @@ def apply_cap_fix_moves(team, moves, current_date=None):
     from team.roster to team.ahl_roster, the list the cap accounting
     actually reads. (team.farm_team does not exist anywhere in the
     codebase; the old apply code dropped demoted players out of the
-    organization entirely.)
+    organization entirely.) Releases remove unsigned (expired-contract)
+    players from the roster entirely -- they have no contract, so there
+    is no buyout, no waiver, no penalty; they become free agents.
 
     Returns (applied, skipped): applied = [(player, kind, relief)],
     skipped = [(player, reason)]. Never raises.
@@ -563,8 +651,40 @@ def apply_cap_fix_moves(team, moves, current_date=None):
         import ir_system as _irs
     except Exception:
         _irs = None
-    # LTIR first: place_on_ltir snapshots cap space at placement, so the
-    # relief pool matches the planner's prediction (computed pre-move).
+    # Releases first: unsigned players are the "phantom" overage -- clear
+    # them before LTIR snapshots cap space.
+    for kind, p, ch in (moves or []):
+        if kind != 'release':
+            continue
+        try:
+            # Use the game's canonical remove_player: sets team_name to
+            # "Free Agent" (so they appear in the FA pool), records
+            # last_team_name (loyalty model), and closes the stint history.
+            # Raw roster.remove() would orphan them -- invisible to free
+            # agency, corrupting downstream systems.
+            _remover = getattr(team, "remove_player", None)
+            if callable(_remover):
+                _remover(p)
+            else:
+                # Fallback for duck-typed team objects without remove_player
+                _ros = getattr(team, 'roster', None)
+                if _ros is not None and p in _ros:
+                    _ros.remove(p)
+                _ahl = getattr(team, 'ahl_roster', None)
+                if _ahl is not None and p in _ahl:
+                    _ahl.remove(p)
+                try:
+                    p.team_name = "Free Agent"
+                except Exception:
+                    pass
+            applied.append((p, kind, ch))
+        except Exception as e:
+            skipped.append((p, f"release failed: {e}"))
+    # LTIR placement: place_on_ltir snapshots cap space at placement.
+    # Releases (Step 0) run first so the phantom overage clears before the
+    # snapshot; in the over-cap regime space is 0 either way, so the
+    # planner's prediction (full hit) matches. LTIRs run before demotions
+    # for the same snapshot reason.
     for kind, p, ch in (moves or []):
         if kind != 'ltir':
             continue
