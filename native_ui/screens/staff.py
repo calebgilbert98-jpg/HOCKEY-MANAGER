@@ -10,9 +10,10 @@ Calls the game object directly -- no HTTP, no serialization.
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
     QFrame, QScrollArea, QDialog, QComboBox, QMessageBox, QGridLayout,
-    QProgressBar,
+    QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
 from .base import BaseScreen
 
@@ -127,13 +128,14 @@ class StaffScreen(BaseScreen):
     def _build_body(self):
         self._staff = []          # raw staff objects
         self._team_name = ""
-        self._loaded = {0: False, 1: False, 2: False}
+        self._loaded = {0: False, 1: False, 2: False, 3: False}
 
         self._tabs = QTabWidget()
         self._tabs.setObjectName("staff-tabs")
         self._tabs.addTab(self._make_list_page(), "Staff")
         self._tabs.addTab(self._make_org_page(), "Org Chart")
         self._tabs.addTab(self._make_report_page(), "Staff Report")
+        self._tabs.addTab(self._make_assistant_page(), "Assistants")
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._layout.addWidget(self._tabs)
 
@@ -167,6 +169,11 @@ class StaffScreen(BaseScreen):
         self._report_lay.addStretch()
         return self._report_scroll
 
+    def _make_assistant_page(self):
+        self._asst_scroll, self._asst_lay = self._page_scroll()
+        self._asst_lay.addStretch()
+        return self._asst_scroll
+
     # --- data ---------------------------------------------------------------
     def _load_data(self):
         self._staff = []
@@ -190,7 +197,7 @@ class StaffScreen(BaseScreen):
 
     def refresh(self):
         self._load_data()
-        self._loaded = {0: False, 1: False, 2: False}
+        self._loaded = {0: False, 1: False, 2: False, 3: False}
         self._on_tab_changed(self._tabs.currentIndex())
 
     def _on_tab_changed(self, idx):
@@ -202,6 +209,8 @@ class StaffScreen(BaseScreen):
             self._render_org()
         elif idx == 2:
             self._render_report()
+        elif idx == 3:
+            self._render_assistants()
         self._loaded[idx] = True
 
     def _clear(self, layout):
@@ -659,6 +668,251 @@ class StaffScreen(BaseScreen):
             return True, ""
         except Exception as e:
             return False, str(e)
+
+    # --- Assistant coaches tab (TRACK C #6 port: assistant_coaches.py) ----
+    # Engine reads -- everything below comes from the engine, nothing
+    # invented. prowess: resume (attributes + pedigree). effect: right now
+    # (results, mesh, shelf life move it via assistants_monthly_tick).
+    # deltas: the real per-player development terms assistant_development_
+    # deltas computes for U27 players, grouped by coach.
+
+    def _assistant_engine(self):
+        """Import the engine module (repo-root, same as free_agents.py)."""
+        import assistant_coaches as aco
+        return aco
+
+    def _assistants_of(self):
+        """Raw assistant staff objects on the user's team."""
+        try:
+            game = self.game
+            gm = getattr(game, "game_manager", None) or game
+            team = getattr(gm, "user_team", None) or \
+                getattr(game, "user_team", None)
+            if team is None:
+                return None, []
+            aco = self._assistant_engine()
+            assistants = aco._assistants_of(team) or []
+            return team, assistants
+        except Exception:
+            return None, []
+
+    def _render_assistants(self):
+        lay = self._asst_lay
+        self._clear(lay)
+        team, assistants = self._assistants_of()
+        if team is None:
+            lay.addWidget(self._asst_empty("No team loaded."))
+            lay.addStretch()
+            return
+        try:
+            aco = self._assistant_engine()
+        except Exception:
+            lay.addWidget(self._asst_empty(
+                "Assistant-coach engine unavailable."))
+            lay.addStretch()
+            return
+        if not assistants:
+            lay.addWidget(self._asst_empty(
+                "No assistant coaches on staff. Hire some in Staff "
+                "Management — this tab will show what each one does."))
+            lay.addStretch()
+            return
+
+        # Per-coach numbers, all from engine reads.
+        rows = []
+        for ac in assistants:
+            try:
+                spec = aco.assistant_specialty(ac)
+                prow = float(aco.assistant_prowess(ac))
+                eff = float(aco.assistant_effect(ac))
+                icon = aco.is_franchise_icon(ac, team)
+                rows.append({"staff": ac,
+                             "name": _staff_name(ac),
+                             "role": _staff_role_value(ac),
+                             "specialty": spec,
+                             "prowess": prow,
+                             "effect": eff,
+                             "icon": icon})
+            except Exception:
+                continue
+        rows.sort(key=lambda r: r["effect"], reverse=True)
+
+        # Development deltas, grouped per coach (real engine terms).
+        deltas = self._assistant_deltas(team, assistants, aco)
+
+        lay.addWidget(self._asst_overview_table(rows))
+        for r in rows:
+            lay.addWidget(self._asst_coach_card(r, deltas.get(
+                r["name"], []), aco))
+        lay.addStretch()
+
+    def _asst_empty(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: #6b7488; font-size: 14px;")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _assistant_deltas(self, team, assistants, aco):
+        """{(coach name): [(player name, pts)]} from real engine deltas."""
+        names = {_staff_name(ac) for ac in assistants}
+        grouped = {}
+        try:
+            roster = list(getattr(team, "roster", None) or [])
+        except Exception:
+            roster = []
+        for p in roster:
+            try:
+                if (getattr(p, "age", 99) or 99) > 26:
+                    continue
+            except Exception:
+                continue
+            try:
+                terms = aco.assistant_development_deltas(p, team) or []
+            except Exception:
+                continue
+            pname = _safe(
+                lambda: getattr(p, "full_name", None), None) or \
+                f"{_safe(lambda: getattr(p, 'first_name', ''), '')} " \
+                f"{_safe(lambda: getattr(p, 'last_name', ''), '')}".strip() \
+                or "?"
+            for label, pts in terms:
+                # Labels are "<Spec> assistant: <Name>" or
+                # "Learning from <Name> (franchise icon)" -- match by name.
+                for cname in names:
+                    if cname and cname in label:
+                        grouped.setdefault(cname, []).append(
+                            (pname, float(pts), label))
+                        break
+        return grouped
+
+    def _asst_form_text(self, drift):
+        if abs(drift) >= 0.5:
+            return f"{drift:+.0f}"
+        return "on resume"
+
+    def _asst_overview_table(self, rows):
+        """Ranked comparison: coach / specialty / prowess / effectiveness /
+        form. Ordered by current effectiveness."""
+        card = QFrame()
+        card.setObjectName("tile")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+        head = QLabel("THE BENCH — RANKED BY EFFECTIVENESS")
+        head.setObjectName("section-header")
+        v.addWidget(head)
+        note = QLabel("Assistants grow players at their position group "
+                      "(defense / offense / goalie). Prowess is the resume; "
+                      "effectiveness is right now — results, mesh and shelf "
+                      "life move it month to month.")
+        note.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        note.setWordWrap(True)
+        v.addWidget(note)
+
+        table = QTableWidget(len(rows), 5)
+        table.setHorizontalHeaderLabels(
+            ["Coach", "Specialty", "Prowess", "Effectiveness", "Form"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch)
+        for i, r in enumerate(rows):
+            drift = r["effect"] - r["prowess"]
+            vals = [r["name"], r["specialty"].title(),
+                    f"{r['prowess']:.0f}", f"{r['effect']:.0f}",
+                    self._asst_form_text(drift)]
+            for j, t in enumerate(vals):
+                item = QTableWidgetItem(t)
+                if j >= 2:
+                    item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(i, j, item)
+            # Effectiveness cell tinted by the same thresholds as ratings.
+            eff_item = table.item(i, 3)
+            if eff_item is not None:
+                eff_item.setForeground(QColor(_rating_color(r["effect"])))
+        table.setMaximumHeight(34 * len(rows) + 36)
+        v.addWidget(table)
+        return card
+
+    def _asst_coach_card(self, r, terms, aco):
+        """One coach: effectiveness story + the actual dev deltas on the
+        user's roster."""
+        card = QFrame()
+        card.setObjectName("tile")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
+
+        drift = r["effect"] - r["prowess"]
+        head = QHBoxLayout()
+        badge = QLabel(f"{r['effect']:.0f}")
+        badge.setStyleSheet(
+            f"font-size: 26px; font-weight: 900; "
+            f"color: {_rating_color(r['effect'])}; min-width: 40px;")
+        head.addWidget(badge)
+        ncol = QVBoxLayout()
+        ncol.setSpacing(0)
+        title = f"{r['name']}  —  {r['specialty'].title()} assistant"
+        if r["icon"]:
+            title += "  ★ franchise icon"
+        name_lbl = QLabel(title)
+        name_lbl.setStyleSheet(
+            "font-size: 15px; font-weight: 700; color: #ffffff;")
+        ncol.addWidget(name_lbl)
+        sub = (f"Prowess {r['prowess']:.0f} · Effectiveness "
+               f"{r['effect']:.0f} · Form {self._asst_form_text(drift)} "
+               f"· {r['role']}")
+        sub_lbl = QLabel(sub)
+        sub_lbl.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        ncol.addWidget(sub_lbl)
+        head.addLayout(ncol)
+        head.addStretch()
+        v.addLayout(head)
+
+        if not terms:
+            none = QLabel("No development terms on the current roster — "
+                          "assistants move the needle only for U27 players "
+                          "at their position group.")
+            none.setStyleSheet("color: #6b7488; font-size: 12px;")
+            none.setWordWrap(True)
+            v.addWidget(none)
+            return card
+
+        total = sum(pts for _, pts, _ in terms)
+        dhead = QLabel(
+            f"DEVELOPMENT IMPACT — {len(terms)} player"
+            f"{'s' if len(terms) != 1 else ''}, "
+            f"{total:+.1f} total development points")
+        dhead.setStyleSheet(
+            "color: #8b95ab; font-size: 12px; font-weight: 700;")
+        v.addWidget(dhead)
+        table = QTableWidget(len(terms), 3)
+        table.setHorizontalHeaderLabels(
+            ["Player", "Development Δ", "Why"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i, (pname, pts, label) in enumerate(
+                sorted(terms, key=lambda t: -abs(t[1]))):
+            name_item = QTableWidgetItem(pname)
+            delta_item = QTableWidgetItem(f"{pts:+.1f}")
+            delta_item.setTextAlignment(Qt.AlignCenter)
+            delta_item.setForeground(
+                QColor("#4CAF50") if pts >= 0 else QColor("#F44336"))
+            why = label.replace(r["name"], "").strip(" :()-") or label
+            why_item = QTableWidgetItem(why or label)
+            why_item.setToolTip(label)
+            table.setItem(i, 0, name_item)
+            table.setItem(i, 1, delta_item)
+            table.setItem(i, 2, why_item)
+        table.setMaximumHeight(30 * len(terms) + 36)
+        v.addWidget(table)
+        return card
 
     def _open_staff_detail(self, staff):
         """Open the staff detail screen for one staffer."""

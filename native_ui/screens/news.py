@@ -12,7 +12,10 @@ Game systems used (same as the web payloads):
   - Narratives: league.media_narratives and league.coach_media_beefs.
   - Fines: league.media_fines.
   - Fan buzz: fan_sentiment (get_fan_sentiment, sentiment_label) +
-    fan_narratives (sentiment_tier, media_tone_for_sentiment).
+    fan_narratives (sentiment_tier, media_tone_for_sentiment) for the
+    team-level section, and reputation_system.fan_favourite_score
+    (mainline's TRACK C fan buzz view) for the player-level section —
+    "Fan favourites" (70+) and "On the rise" (55-69) on the user's team.
 """
 
 import re
@@ -481,6 +484,79 @@ def _fanbuzz_payload(game):
     except Exception:
         return [], {}
 
+# ---------------------------------------------------------------------------
+# player buzz payload (ported from mainline's TRACK C in-season fan buzz view,
+# trackc_fanbuzz_view.py -- "Fan favourites" / "On the rise").
+#
+# Reads reputation_system.fan_favourite_score directly: every number comes
+# from live game state (production, tenure, reputation, leadership,
+# captaincy, controversy, the fan-hate rivalry ledger). Nothing is invented.
+# Returns None when the data isn't available; never raises.
+# ---------------------------------------------------------------------------
+
+_PLAYER_TIER_COLORS = {
+    "Beloved icon": "#fbbf24", "Fan favourite": "#4ade80",
+    "Popular": "#60a5fa", "Known quantity": "#94a3b8",
+    "Anonymous": "#64748b",
+}
+
+_FAN_FAV_THRESHOLD = 70
+_ON_RISE_THRESHOLD = 55
+
+
+def _player_full_name(p):
+    return _safe(lambda: str(getattr(p, "full_name", "") or ""), "") or (
+        f"{_safe(lambda: str(getattr(p, 'first_name', '') or ''), '')} "
+        f"{_safe(lambda: str(getattr(p, 'last_name', '') or ''), '')}"
+        .strip()) or "Unknown Player"
+
+
+def _user_team(game):
+    gm = _resolve_gm(game)
+    return (_safe(lambda: gm.user_team)
+            or _safe(lambda: getattr(game, "user_team", None)))
+
+
+def _playerbuzz_payload(game):
+    league = _league(game)
+    if league is None:
+        return None
+    try:
+        import reputation_system as rs
+    except Exception:
+        return None
+    team = _user_team(game)
+    if team is None:
+        return None
+    try:
+        rivs = list(getattr(league, "rivalries", None) or [])
+    except Exception:
+        rivs = []
+    try:
+        roster = list(getattr(team, "roster", None) or [])
+    except Exception:
+        roster = []
+    if not roster:
+        return None
+    rows = []
+    for p in roster:
+        try:
+            res = rs.fan_favourite_score(p, team, rivalries=rivs) or {}
+            rows.append({
+                "player": p,
+                "name": _player_full_name(p),
+                "score": float(res.get("score", 0) or 0),
+                "tier": str(res.get("tier", "") or ""),
+                "reasons": [str(x) for x in (res.get("reasons") or [])],
+            })
+        except Exception:
+            continue
+    if not rows:
+        return None
+    rows.sort(key=lambda r: -r["score"])
+    return {"team_name": _team_name(team), "rows": rows}
+
+
 # =====================================================================
 # NewsScreen
 # =====================================================================
@@ -706,6 +782,84 @@ class NewsScreen(BaseScreen):
                 self.navigate_to("team")
             except Exception:
                 pass
+
+    def _open_player(self, player):
+        try:
+            self.main_window.open_player(player)
+        except Exception:
+            pass
+
+    # -- player buzz (player-level fan favourites) ---------------------------
+
+    def _render_playerbuzz(self, layout, pb):
+        rows = pb["rows"]
+        favs = [r for r in rows if r["score"] >= _FAN_FAV_THRESHOLD]
+        rising = [r for r in rows
+                  if _ON_RISE_THRESHOLD <= r["score"] < _FAN_FAV_THRESHOLD]
+        title = QLabel(f"Fan Favourites — {pb['team_name'] or 'Your Team'}")
+        title.setStyleSheet("font-weight: bold; font-size: 16px;")
+        layout.addWidget(title)
+        sub = QLabel("Player-level buzz, computed from live game state — "
+                     "production, tenure, reputation, leadership, the C, "
+                     "and the fan-hate ledger. Scores move as the season "
+                     "progresses.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        layout.addWidget(sub)
+        self._render_playerbuzz_group(
+            layout, "Fan Favourites",
+            (f"{len(favs)} player{'s' if len(favs) != 1 else ''} the "
+             "building would run through a wall for.")
+            if favs else f"Nobody has cracked the fans' hearts yet "
+            f"({_FAN_FAV_THRESHOLD}+).",
+            favs)
+        self._render_playerbuzz_group(
+            layout, "On the Rise",
+            (f"One hot stretch from favourite status "
+             f"({_ON_RISE_THRESHOLD}-{_FAN_FAV_THRESHOLD - 1}).")
+            if rising else "Nobody bubbling under right now.",
+            rising)
+
+    def _render_playerbuzz_group(self, layout, heading, subtitle, rows):
+        h = QLabel(heading)
+        h.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(h)
+        d = QLabel(subtitle)
+        d.setWordWrap(True)
+        d.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        layout.addWidget(d)
+        for r in rows:
+            card = QGroupBox()
+            cl = QVBoxLayout(card)
+            cl.setSpacing(4)
+            head = QHBoxLayout()
+            head.setSpacing(8)
+            pbtn = QPushButton(r["name"])
+            pbtn.setFlat(True)
+            pbtn.setStyleSheet("font-weight: bold; font-size: 14px; "
+                               "color: #4ade80; text-align: left;")
+            pbtn.clicked.connect(
+                lambda _c, p=r["player"]: self._open_player(p))
+            head.addWidget(pbtn)
+            tcol = _PLAYER_TIER_COLORS.get(r["tier"], "#94a3b8")
+            tag = QLabel(r["tier"] or "—")
+            tag.setStyleSheet(
+                f"color: {tcol}; border: 1px solid {tcol}; "
+                "border-radius: 8px; padding: 1px 8px; font-size: 11px;")
+            head.addWidget(tag)
+            head.addStretch()
+            val = QLabel(f"{r['score']:.0f}")
+            val.setStyleSheet("font-weight: bold; font-size: 14px;")
+            head.addWidget(val)
+            cl.addLayout(head)
+            cl.addWidget(AttributeBar("Fan Buzz",
+                                      int(max(0, min(100, r["score"])))))
+            for reason in r["reasons"][:3]:
+                why = QLabel(f"• {reason}")
+                why.setWordWrap(True)
+                why.setStyleSheet("color: #9aa4b8; font-size: 12px;")
+                cl.addWidget(why)
+            layout.addWidget(card)
 
     # -- refresh (all tabs) ----------------------------------------------
 
@@ -986,6 +1140,20 @@ class NewsScreen(BaseScreen):
         teams, summary = _fanbuzz_payload(self.game)
         self._tabs.setTabText(
             4, f"Fan Buzz ({len(teams)})" if teams else "Fan Buzz")
+        # Player-level section first (mainline: TRACK C fan buzz view).
+        pb = _playerbuzz_payload(self.game)
+        if pb:
+            self._render_playerbuzz(layout, pb)
+            # divider between player-level and team-level sections
+            if teams:
+                div = QLabel("Team Buzz — League Sentiment")
+                div.setStyleSheet("font-weight: bold; font-size: 16px; "
+                                  "padding-top: 8px;")
+                layout.addWidget(div)
+                rule = QFrame()
+                rule.setFrameShape(QFrame.HLine)
+                rule.setStyleSheet("color: #2a3350;")
+                layout.addWidget(rule)
         if not teams:
             lab = QLabel("No fan data — fan sentiment per team will appear "
                          "here once the season is underway.")

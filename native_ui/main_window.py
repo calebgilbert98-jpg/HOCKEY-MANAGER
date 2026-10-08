@@ -1661,6 +1661,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.stats import StatsScreen
         from native_ui.screens.tactics import TacticsScreen
         from native_ui.screens.team import TeamScreen
+        from native_ui.screens.team_analytics import TeamAnalyticsScreen
         from native_ui.screens.trade_block import TradeBlockScreen
         from native_ui.screens.trades import TradesScreen
         from native_ui.screens.waivers import WaiversScreen
@@ -1712,6 +1713,7 @@ class MainWindow(QMainWindow):
             "ahl": AhIScreen,
             "calendar": CalendarScreen,
             "team": TeamScreen,
+            "team_analytics": TeamAnalyticsScreen,
             "inbox": InboxScreen,
             "news": NewsScreen,
             "finances": FinancesScreen,
