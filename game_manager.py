@@ -2363,6 +2363,8 @@ NHL League Office""",
         """UI notification hook. Overridden by UI subclasses.
 
         kind: "warning" | "error" | "info" | "contract_result"
+             | "ask_game_mode" (returns 'quick'/'watch')
+             | "ask_playoffs_mode" (returns bool: True = interactive)
         """
         pass
 
@@ -3495,6 +3497,28 @@ NHL League Office""",
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window. UI-agnostic: routes via _ui_notify."""
         self._ui_notify("open_fantasy_draft")
+
+    def open_trade_window(self):
+        """Open the Trade Center. UI-agnostic: routes via _ui_notify.
+
+        These methods lived on HockeyManagerGUI (Tkinter) and were never
+        ported to GameManager -- blocker dicts referenced them via
+        ``self.open_trade_window`` and raised AttributeError at dict
+        construction time, which get_continue_state's broad
+        ``except Exception: pass`` then swallowed, silently dropping the
+        salary cap/floor blockers. Native UI blockers should prefer the
+        UI-agnostic 'action_id'/'action_label' dict format; these methods
+        exist so any direct reference (legacy tuple callables, UI
+        subclasses, QA harnesses) resolves safely.
+        """
+        self._ui_notify("open_trade_window")
+
+    def open_free_agency_window(self):
+        """Open Free Agency. UI-agnostic: routes via _ui_notify.
+
+        See open_trade_window -- same never-ported Tkinter method story.
+        """
+        self._ui_notify("open_free_agency_window")
 
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""
@@ -5985,6 +6009,26 @@ NHL League Office""",
                                          parent=self)
                     except Exception:
                         pass
+                elif getattr(self, '_playoffs_mode_deferred_year',
+                             None) == season_year:
+                    # Native-UI defer (Dev 2): the user dismissed the
+                    # synchronous choice dialog. Re-ask now rather than
+                    # opening the bracket unanswered -- mirrors the Tk
+                    # _parked re-present path above.
+                    try:
+                        self._playoffs_mode_deferred_year = None
+                    except Exception:
+                        pass
+                    _interactive = self._ask_playoffs_mode_dialog()
+                    if _interactive is None:
+                        try:
+                            self._playoffs_mode_deferred_year = season_year
+                        except Exception:
+                            pass
+                    else:
+                        _playoffs_mode_answer(
+                            "playoffs_mode", "playoffs_mode_card",
+                            bool(_interactive), season_year=season_year)
                 else:
                     self.open_playoffs_window()
             return
@@ -6051,16 +6095,53 @@ NHL League Office""",
                 session_id="playoffs_mode", dialog_id="playoffs_mode_card",
                 resolver="playoffs_mode_answer",
                 resolver_args={"season_year": str(season_year)})
+
+            # SEASON SOFT-LOCK FIX (2026-10-07): ask_card fails closed when
+            # there is no PopupManager -- it writes no session and no answer
+            # can ever arrive. The native UI has no PopupManager, so the old
+            # unconditional `return` below parked the season here forever:
+            # no bracket, no champion, no offseason, and the Continue loop
+            # never advanced (total silence for the user). If the card never
+            # posted, ask the UI synchronously instead and apply the answer
+            # immediately -- the season always crowns a champion and moves
+            # on. UIs with a working card backend (Tk) keep their non-modal
+            # defer/re-present flow untouched.
+            _card_posted = False
+            try:
+                _sess = (getattr(self, "pending_sessions", None) or {}).get(
+                    "playoffs_mode") or {}
+                _card_posted = bool(
+                    (_sess.get("dialogs") or {}).get("playoffs_mode_card"))
+            except Exception:
+                _card_posted = False
+            if not _card_posted:
+                _interactive = self._ask_playoffs_mode_dialog()
+                if _interactive is None:
+                    # Dismissed: park the deferral (Dev 2). The next
+                    # Continue re-asks instead of answering for the user --
+                    # dismissing the choice must never auto quick-sim the
+                    # season away. The re-entry branch below picks this up.
+                    try:
+                        self._playoffs_mode_deferred_year = season_year
+                    except Exception:
+                        pass
+                else:
+                    _playoffs_mode_answer(
+                        "playoffs_mode", "playoffs_mode_card",
+                        bool(_interactive), season_year=season_year)
             return
 
         if result:
             self.open_playoffs_window()
         else:
-            # Declined the interactive bracket: the tournament still
-            # happens -- quick-sim it headless so the season always crowns
-            # a champion, then roll to the offseason.
-            self._quick_sim_playoffs_headless()
-            self._start_offseason()
+            # Declined the interactive bracket (headless first entry):
+            # the tournament still happens -- decide it with the
+            # hardened headless sim, then roll to the offseason only if
+            # a champion was crowned (the gate lives inside
+            # _quick_sim_playoffs_to_offseason; on failure the season
+            # parks loudly instead of starting a blank-champion
+            # offseason).
+            self._quick_sim_playoffs_to_offseason()
 
     def _ask_game_mode_dialog(self, home_team, away_team):
         """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'.
@@ -6072,6 +6153,28 @@ NHL League Office""",
         if isinstance(result, str) and result in ('quick', 'watch'):
             return result
         return 'quick'
+
+    def _ask_playoffs_mode_dialog(self):
+        """Season-end modal: interactive playoffs or quick-sim?
+
+        UI-agnostic: asks via _ui_notify("ask_playoffs_mode"); UI subclasses
+        implement it with a real modal dialog returning True (interactive),
+        False (quick-sim), or "defer" (user dismissed -- re-ask on the next
+        Continue, matching the Tk card's dismiss=defer semantics).
+
+        Returns True / False / None (deferred). Defaults to False
+        (quick-sim) when the UI has no dialog at all -- the tournament is
+        still generated and decided, so the season can never park waiting
+        on a dialog that cannot render. A real "defer" answer is honored
+        (None), never silently converted to quick-sim: dismissing must not
+        accidentally throw away the interactive choice.
+        """
+        result = self._ui_notify("ask_playoffs_mode")
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, str) and result.strip().lower() == "defer":
+            return None
+        return False
 
 
     def _cap_compliance_blocker(self):
@@ -6148,7 +6251,14 @@ NHL League Office""",
                 'id': 'salary_cap',
                 'title': 'Roster exceeds salary cap',
                 'detail': detail,
-                'action': ('Open Trade Center', self.open_trade_window),
+                # UI-agnostic action: native UI resolves 'action_id' to the
+                # trades screen; the old ('Open Trade Center',
+                # self.open_trade_window) tuple died with an AttributeError
+                # at construction (Tkinter-only method never ported), which
+                # get_continue_state's broad except swallowed -- the blocker
+                # silently vanished.
+                'action_id': 'trade',
+                'action_label': 'Open Trade Center',
                 'auto_action': ('Auto-shed salary (waiver-safe)',
                                 lambda: self._auto_fix_cap(team, over)),
             }
@@ -6747,7 +6857,13 @@ NHL League Office""",
                 'detail': (f"Payroll ${bd['total']/1e6:.2f}M is ${short/1e6:.2f}M "
                            f"under the ${bd['floor']/1e6:.2f}M salary floor. "
                            f"Sign free agents to reach the floor before advancing."),
-                'action': ('Open Free Agency', self.open_free_agency_window),
+                # UI-agnostic action: native UI resolves 'action_id' to the
+                # free-agents screen. The old ('Open Free Agency',
+                # self.open_free_agency_window) tuple raised AttributeError
+                # at construction (Tkinter-only method never ported) and was
+                # silently swallowed -- the floor blocker never appeared.
+                'action_id': 'free_agency',
+                'action_label': 'Open Free Agency',
             }
             # SIM1 (2026-10-07): headless sims have no user to sign FAs --
             # without an auto_action a sub-floor user club freezes the
@@ -9685,47 +9801,6 @@ NHL League Office""",
                         pass
         self._reputation_updated_for_season = self.league.season_year
 
-    def _quick_sim_playoffs_headless(self):
-        """Sim the entire playoff tournament without opening the window.
-
-        Used when the user declines the interactive playoffs at season's
-        end: every season still decides a Stanley Cup champion.
-        """
-        try:
-            from playoff_system import PlayoffBracket
-            league = getattr(self, 'league', None)
-            if league is None:
-                return
-            bracket = getattr(league, 'playoff_bracket', None)
-            try:
-                _has = bracket is not None and any(
-                    bracket.playoff_series.get(r)
-                    for r in PlayoffBracket.ROUND_ORDER)
-            except Exception:
-                _has = False
-            if not _has:
-                bracket = PlayoffBracket(league)
-                bracket.generate_playoff_bracket()
-                try:
-                    league.playoff_bracket = bracket
-                except Exception:
-                    pass
-            for round_name in PlayoffBracket.ROUND_ORDER:
-                try:
-                    current = bracket.playoff_series.get(round_name) or []
-                except Exception:
-                    current = []
-                for series in current:
-                    while not getattr(series, 'is_complete', True):
-                        bracket.simulate_playoff_game(series)
-                bracket.advance_to_next_round(round_name)
-            try:
-                self._maybe_send_cup_recap()
-            except Exception:
-                pass
-        except Exception:
-            pass
-
     def _playoffs_complete(self) -> bool:
         """True once a Stanley Cup champion has been decided."""
         try:
@@ -9750,6 +9825,47 @@ NHL League Office""",
             pass
         return False
 
+    def _ensure_playoff_bracket(self):
+        """Return the league's live playoff bracket, generating it if needed.
+
+        Canonical bracket generator for every UI: reuses
+        playoff_system.PlayoffBracket (the same generator Tk's
+        PlayoffView._generate_bracket wraps), attaches it to the league,
+        and points bracket.app at this manager for the date-aware sim
+        paths. Idempotent: an existing league bracket that already holds
+        real series is returned untouched (a decided champion included --
+        callers must check _playoffs_complete() themselves).
+
+        This is what the native playoffs screen lacks: it only READS
+        league.playoff_bracket, so an interactive "yes" with no bracket
+        generated re-opened an empty screen forever (Priority 1 bug #1).
+        Generating here -- before the screen opens -- fixes every UI at
+        the source instead of porting a generator per UI.
+        """
+        from playoff_system import PlayoffBracket
+        league = getattr(self, "league", None)
+        if league is None:
+            return None
+        bracket = getattr(league, "playoff_bracket", None)
+        try:
+            _has = bracket is not None and any(
+                bracket.playoff_series.get(r)
+                for r in PlayoffBracket.ROUND_ORDER)
+        except Exception:
+            _has = False
+        if not _has:
+            bracket = PlayoffBracket(league)
+            try:
+                bracket.app = self
+            except Exception:
+                pass
+            bracket.generate_playoff_bracket()
+            try:
+                league.playoff_bracket = bracket
+            except Exception:
+                pass
+        return bracket
+
     def _simulate_playoffs_headless(self):
         """Generate + simulate the playoff bracket without a GUI window.
 
@@ -9761,21 +9877,9 @@ NHL League Office""",
         champion. Additive: the windowed path is untouched.
         """
         from playoff_system import PlayoffBracket
-        league = getattr(self, "league", None)
-        if league is None:
+        bracket = self._ensure_playoff_bracket()
+        if bracket is None:
             return
-        bracket = getattr(league, "playoff_bracket", None)
-        if bracket is None or not getattr(bracket, "playoff_series", None):
-            bracket = PlayoffBracket(league)
-            try:
-                bracket.app = self
-            except Exception:
-                pass
-            bracket.generate_playoff_bracket()
-            try:
-                league.playoff_bracket = bracket
-            except Exception:
-                pass
         try:
             rounds = PlayoffBracket.ROUND_ORDER
         except Exception:
@@ -9818,6 +9922,40 @@ NHL League Office""",
             headlines.drain_bracket_headlines(self, bracket)
         except Exception:
             pass
+
+    def _quick_sim_playoffs_to_offseason(self):
+        """Declined playoffs (or no UI to ask): decide the tournament
+        headless, then roll to the offseason ONLY if a champion was
+        crowned.
+
+        Uses the hardened _simulate_playoffs_headless() (per-game
+        try/except, 14-attempt cap, force-complete fallback) -- the
+        fragile duplicate _quick_sim_playoffs_headless() is gone, so a
+        poisoned game sim can never silently abort the postseason. The
+        _start_offseason() call is gated on _playoffs_complete(): if the
+        bracket still has no champion, the offseason does NOT start with
+        a blank champion. Instead a loud news item + log line records
+        the failure and the season stays parked at season end, where the
+        end_of_season re-entry path can re-ask / re-drive the bracket
+        instead of corrupting league history.
+        """
+        try:
+            self._simulate_playoffs_headless()
+        except Exception as _e:
+            print(f"[playoffs] headless quick-sim raised: {_e}")
+        if self._playoffs_complete():
+            self._start_offseason()
+            return True
+        _msg = ("Playoff quick-sim could not crown a Stanley Cup "
+                "champion; the season stays parked at season end until "
+                "the bracket completes -- no offseason will start with "
+                "a blank champion.")
+        try:
+            self.add_news(_msg)
+        except Exception:
+            pass
+        print(f"[playoffs] QUICK-SIM FAILURE: {_msg}")
+        return False
 
     def _show_season_summary(self):
         """Display end of season summary with stats and awards.
@@ -17074,10 +17212,27 @@ def _playoffs_mode_answer(session_id, dialog_id, value, **kwargs):
         if app._playoffs_complete():
             return False  # already decided
         if value:
+            # Dev 2 (Priority 1 bug #1): generate the bracket BEFORE the
+            # screen opens. Tk's PlayoffView self-generates on open, but
+            # the native PlayoffsScreen only READS league.playoff_bracket --
+            # a "Yes" with no bracket generated reopened an empty screen
+            # forever (the soft-lock survived the ask_card fix on the
+            # interactive path). Generating in the shared resolver fixes
+            # every UI at the source; Tk's view simply reuses the league
+            # bracket it finds.
+            try:
+                app._ensure_playoff_bracket()
+            except Exception:
+                pass
             app.open_playoffs_window()
         else:
-            app._quick_sim_playoffs_headless()
-            app._start_offseason()
+            # Quick-Sim: decide the tournament with the hardened headless
+            # sim (per-game try/except + attempt caps + force-complete),
+            # then roll to the offseason only if a champion was crowned.
+            # The gate lives in _quick_sim_playoffs_to_offseason: a
+            # poisoned game sim can never silently abort the postseason
+            # into a blank-champion offseason.
+            app._quick_sim_playoffs_to_offseason()
         return True
     except Exception:
         return False

@@ -72,9 +72,13 @@ class FantasyDraftManager:
     # are the cap-relevant NHL core; the rest is AHL depth. Remaining
     # unfilled core slots are assumed to cost _DEPTH_FILL_RATE each, so the
     # AI can project its final payroll and prefer value as the cap fills.
-    # This is a soft nudge only -- the draft never enforces compliance.
+    # The fill rate is the break-even per-slot budget (cap / 23): it asks
+    # "if I fill the rest of my core at a cap-compliant pace, do I fit?"
+    # so spending is paced from mid-draft instead of only biting on the
+    # last few picks. This is a soft nudge only -- the draft never
+    # enforces compliance.
     _CAP_CORE_SIZE = 23
-    _DEPTH_FILL_RATE = 1_500_000
+    _DEPTH_FILL_RATE = 4_500_000
 
     def __init__(self, teams: List[Team], all_players: List[Player], config: Optional[DraftConfiguration] = None):
         self.teams = teams
@@ -293,115 +297,152 @@ class FantasyDraftManager:
         return needs
     
     def calculate_player_draft_value(self, player: Player, team: Team, round_num: int) -> float:
-        """Calculate a player's value for a specific team at a specific point"""
-        strategy = self.team_strategies.get(team.team_name)
-        if not strategy:
-            return player.overall_rating()  # Fallback
-            
-        base_value = player.overall_rating()
-        
-        # Age factor (-15 to +15 points)
-        age_factor = self.calculate_age_value(player.age, strategy.youth_preference)
-        
-        # Position need factor (0.5x to 2.0x multiplier)  
-        needs = self.analyze_team_needs(team)
-        pos = player.primary_position.value
-        need_multiplier = 1.0 + (needs.get(pos, 0.0) * strategy.needs_vs_bpa * 0.5)
-        
-        # Position weight from team strategy
-        pos_weight = strategy.position_weights.get(pos, 1.0)
-        
-        # Draft position factor (later picks take more risks)
-        risk_factor = 1.0
-        if round_num > 5:  # Later rounds
-            risk_factor = 1.0 + (strategy.risk_tolerance * 0.2)
-            
-        # Contract value factor - strategic element: value per dollar,
-        # term flexibility, clause restrictions
-        contract_factor = self.calculate_contract_value(player, round_num)
+        """Value of drafting `player` for `team` at this point in the draft.
 
-        # Cap-pressure factor: as the club's projected payroll approaches
-        # the cap, expensive players are softly discounted so the AI
-        # builds a balanced, affordable roster (never a hard block).
-        cap_factor = self._cap_pressure_factor(team, player)
+        Overall rating DOMINATES. Age, potential, salary, position,
+        team need, and cap pressure are additive tiebreakers whose TOTAL
+        is clamped to +/-3 points. Provable guarantee: a player rated 7+
+        OVR higher can never rank below a worse player, no matter the
+        peripherals (each side's adjustment is bounded by 3, so a 7+
+        gap can never close).
 
-        # Combine all factors
-        final_value = (base_value + age_factor) * need_multiplier * pos_weight * risk_factor * contract_factor * cap_factor
-        
-        return final_value
-        
-    def calculate_contract_value(self, player: Player, round_num: int) -> float:
-        """Calculate contract value factor for strategic drafting"""
-        if not hasattr(player, 'contract') or not player.contract:
-            return 1.0  # Neutral if no contract info
-            
-        contract = player.contract
-        salary = getattr(contract, 'salary', 750000)
-        years = getattr(contract, 'years_remaining', 1)
-        
-        # Value per dollar calculation
-        overall = player.overall_rating()
-        
-        # Expected value per million dollars
-        if salary > 0:
-            value_per_million = overall / (salary / 1000000)
+        Root-cause fix 2026-10-07: the previous formula was
+        (base + age_bonus) x need x position_weight x risk x contract x
+        cap_factor. The multiplicative youth/contract factors compounded
+        until a 65 OVR 19-year-old prospect (179.0) outranked a 78 OVR
+        27-year-old $6M star (175.2), and AI clubs drafted ELC-filled
+        $11M-payroll rosters. Every factor is now additive and the sum
+        is clamped, so OVR gaps decide picks the way a real GM's board
+        does.
+        """
+        base = player.overall_rating()
+        adjustment = 0.0
+
+        # --- Age / potential (bounded tiebreaker) ---
+        # Young players with untapped upside get a small boost; very
+        # young players get dinged for being unproven; declining
+        # veterans get a small ding. Prime-age players: no change.
+        age = getattr(player, 'age', 27) or 27
+        potential = getattr(player, 'potential', base) or base
+        if age <= 23:
+            upside = max(0.0, potential - base)
+            adjustment += min(upside * 0.12, 1.5)
+            if age <= 20:
+                adjustment -= 1.0  # very young, unproven at NHL level
+        elif age <= 30:
+            pass  # prime years, no adjustment
+        elif age <= 32:
+            adjustment -= 0.5
+        elif age <= 34:
+            adjustment -= 1.5
+        else:  # 35+
+            adjustment -= 2.5
+
+        # --- Salary vs market (bounded tiebreaker) ---
+        # Egregious overpays are a real liability at ANY star level --
+        # the previous draft of this fix exempted 80+ OVR players from
+        # the mild-overpay ding, letting $14M-for-85-OVR deals skate.
+        # Good players on value deals get a small boost; fair deals
+        # get nothing. A good player at a fair salary is never passed
+        # over for a scrub at the minimum -- the OVR gap ensures that.
+        # "Market" is the generator's empirical salary scale (2026-10-09,
+        # stable across seeds): ~$2M at 70-74, $2.65M at 75-79, $4.7M at
+        # 80-84, $6M at 85-89, $11M at 90-94, $15M+ at 95+. A linear
+        # formula overestimates the mid-tier and leaves this whole term
+        # dead (neutral for everyone).
+        contract = getattr(player, 'contract', None)
+        try:
+            salary = float(getattr(contract, 'salary', 0) or 0)
+        except Exception:
+            salary = 0.0
+        salary_m = max(salary, 750_000) / 1_000_000  # in millions
+        if base >= 95:
+            expected_m = 15.0
+        elif base >= 90:
+            expected_m = 11.0
+        elif base >= 85:
+            expected_m = 6.0
+        elif base >= 80:
+            expected_m = 4.75
+        elif base >= 75:
+            expected_m = 2.65
+        elif base >= 70:
+            expected_m = 2.0
         else:
-            value_per_million = overall  # Free contract is valuable
-        
-        # Contract length factor
-        if years >= 5:  # Long-term deals
-            length_factor = 0.9  # Slightly risky
-        elif years >= 3:
-            length_factor = 1.0  # Good length
-        elif years >= 2:
-            length_factor = 1.05  # Short-term flexibility
-        else:
-            length_factor = 1.1  # Very flexible
-            
-        # Round-based contract importance
-        if round_num <= 10:  # Early rounds - talent over contract
-            contract_weight = 0.8
-        elif round_num <= 25:  # Middle rounds - balanced consideration
-            contract_weight = 1.0
-        else:  # Late rounds - value hunting
-            contract_weight = 1.3
-            
-        # Calculate final contract factor
-        if value_per_million >= 15:  # Excellent value
-            contract_factor = 1.0 + (contract_weight * 0.15)
-        elif value_per_million >= 10:  # Good value
-            contract_factor = 1.0 + (contract_weight * 0.05)
-        elif value_per_million >= 5:  # Fair value
-            contract_factor = 1.0
-        elif value_per_million >= 3:  # Poor value
-            contract_factor = 1.0 - (contract_weight * 0.1)
-        else:  # Terrible value
-            contract_factor = 1.0 - (contract_weight * 0.2)
-            
-        # Trade clause penalties
-        if hasattr(contract, 'no_movement_clause') and contract.no_movement_clause:
-            contract_factor *= 0.9  # NMC is restrictive
-        elif hasattr(contract, 'no_trade_clause') and contract.no_trade_clause:
-            contract_factor *= 0.95  # NTC somewhat restrictive
-            
-        return max(0.5, min(1.5, contract_factor))  # Keep factor reasonable
-    
-    def calculate_age_value(self, age: int, youth_preference: float) -> float:
-        """Calculate age-based value adjustment"""
-        if age <= 21:
-            # Young players get bonus for potential
-            return youth_preference * 10
-        elif age <= 25:
-            # Prime age players
-            return 5
-        elif age <= 29:
-            # Solid veterans
-            return 0
-        else:
-            # Older players penalized more by youth-focused teams
-            penalty = (age - 29) * (youth_preference + 0.5) * 3
-            return -penalty
-    
+            expected_m = 1.0
+        if salary_m > expected_m * 1.8:
+            adjustment -= 1.5   # egregiously overpaid (80%+ above market)
+        elif salary_m > expected_m * 1.4:
+            adjustment -= 0.75  # overpaid at any star level
+        elif salary_m < expected_m * 0.5 and base >= 75:
+            adjustment += 1.5   # star production at half market or less
+        elif salary_m < expected_m * 0.6 and base >= 70:
+            adjustment += 0.75  # good player on a value deal
+
+        # --- Position scarcity (bounded tiebreaker) ---
+        # Goalies and defensemen are harder to find than wingers.
+        try:
+            pos = player.primary_position
+            if pos == PlayerPosition.GOALIE:
+                adjustment += 1.0
+            elif pos in (PlayerPosition.LEFT_DEFENSE,
+                         PlayerPosition.RIGHT_DEFENSE,
+                         PlayerPosition.DEFENSE):
+                adjustment += 0.5
+        except Exception:
+            pass
+
+        # --- Positional need, team context (bounded tiebreaker) ---
+        # Fills empty slots first; once every group has hit its target
+        # the term is ~0 for everyone (no forward bias: post-target
+        # picks are decided by OVR + scarcity, not position order).
+        try:
+            strategy = self.team_strategies.get(team.team_name)
+            needs = self.analyze_team_needs(team)
+            ppos = player.primary_position.value
+            need = needs.get(ppos, 0.0)  # 0.1 (filled) .. 2.0 (empty)
+            nb = float(getattr(strategy, 'needs_vs_bpa', 0.6)) if strategy else 0.6
+            adjustment += (need - 0.1) * 0.35 * nb
+        except Exception:
+            pass
+
+        # --- Cap pressure, team context (bounded, soft) ---
+        # Projects the club's payroll with this pick (plus a depth rate
+        # for each unfilled core slot). Under the cap: no effect. Over
+        # the cap: a steepening discount up to the full -3 clamp, so the
+        # AI genuinely prefers value once the roster gets expensive --
+        # the difference between a contender that fits under the cap
+        # and a $120M all-star team in permanent cap hell. Still inside
+        # the +/-3 clamp, so cap pressure tilts close calls but can
+        # never overturn an OVR gap of 7+. Never a hard block:
+        # make_pick always allows the pick.
+        #
+        # Inelastic need: a club with fewer than 2 goalies drafted MUST
+        # acquire goalies -- real GMs don't skip the position to save
+        # cap (they manage the cap elsewhere), and the post-draft FA
+        # backstop can't sign anyone for a club that's already over the
+        # cap. Cap pressure never discounts a needed goalie.
+        try:
+            pressure = 1.0 - self._cap_pressure_factor(team, player)
+            if pressure > 0:
+                try:
+                    if player.primary_position == PlayerPosition.GOALIE:
+                        g_have = sum(
+                            1 for p in self._team_drafted_players(team)
+                            if p.primary_position == PlayerPosition.GOALIE)
+                        if g_have < 2:
+                            pressure = 0.0
+                except Exception:
+                    pass
+            adjustment -= min(3.0, max(0.0, pressure) * 20.0)
+        except Exception:
+            pass
+
+        # Clamp: peripherals are tiebreakers only -- they decide close
+        # calls but can never overturn a real OVR gap.
+        adjustment = max(-3.0, min(3.0, adjustment))
+        return base + adjustment
+
     def make_ai_pick(self, team: Team) -> Optional[Player]:
         """Make an intelligent AI draft pick for a team"""
         available_players = self.get_available_players()

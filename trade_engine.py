@@ -2850,7 +2850,7 @@ def clause_annual_value(player, kind):
         return 0
     try:
         from salary_cap_system import league_minimum_salary as _min_fn2
-        _q = _tpo2(player.overall_rating())
+        _q = _tier_proxy_overall(player.overall_rating()) if _tier_proxy_overall else player.overall_rating()
         base = max(_min_fn2(), (_q - 60) * 250_000)
     except Exception:
         base = 1_000_000

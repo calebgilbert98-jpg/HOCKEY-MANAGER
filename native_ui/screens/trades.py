@@ -650,7 +650,6 @@ class TradesScreen(BaseScreen):
         self._deal_get_chips = QHBoxLayout()
         self._deal_give_chips = QHBoxLayout()
         # Wrap chip rows in scroll areas so blockbusters don't clip
-        from PySide6.QtWidgets import QScrollArea, QWidget
         get_scroll = QScrollArea()
         get_scroll.setWidgetResizable(True)
         get_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)

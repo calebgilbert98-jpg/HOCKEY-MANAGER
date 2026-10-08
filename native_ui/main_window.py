@@ -1534,6 +1534,38 @@ class MainWindow(QMainWindow):
     def __init__(self, game=None):
         super().__init__()
         self.game = game  # HockeyManagerGUI or game manager instance
+        # Priority 1 bug #4: route GameManager's _ui_notify hook into this
+        # window's dispatcher. Base GameManager._ui_notify is `pass`; without
+        # this bind every notification call site silently drops.
+        if game is not None:
+            try:
+                game._ui_notify = self._ui_notify
+            except Exception as e:
+                print(f"[native] _ui_notify wiring failed: {e}")
+            # Priority 1 bug #5: GameManager.show_screen bridge. Several
+            # GameManager methods call self.show_screen(...) -- a method
+            # that only exists on the Tk GUI (main.py). In native the
+            # GameManager has no such method, so blocker actions built on
+            # it (the pending-item "Go to it" _jump at
+            # game_manager.py:3499, the team-talk presenter at :15076)
+            # died on AttributeError behind try/except. Route those calls
+            # to this window's show_screen instead. Only installed when
+            # the game object has no show_screen of its own (a
+            # HockeyManagerGUI keeps its Tk version).
+            if not hasattr(game, "show_screen"):
+                try:
+                    _window = self
+
+                    def _gm_show_screen(name, *args, **kwargs):
+                        try:
+                            _window.show_screen(name)
+                        except Exception as e:
+                            print(f"[native] game->show_screen({name!r}) "
+                                  f"failed: {e}")
+
+                    game.show_screen = _gm_show_screen
+                except Exception as e:
+                    print(f"[native] show_screen bridge failed: {e}")
         self.setWindowTitle("Puck Dynasty")
         self.setMinimumSize(1280, 800)
 
@@ -1853,8 +1885,357 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[native] continue failed: {e}")
 
+    # --- GameManager._ui_notify dispatch (Priority 1 bug #4) ---
+    # GameManager routes every UI notification through _ui_notify(kind, ...).
+    # The base implementation is `pass` and MainWindow never overrode it, so
+    # all 37 call sites silently dropped their notifications (contract
+    # results, post-advance landing, blockers, info/warning/error popups,
+    # open_screen requests, ...). This override is the root-cause fix:
+    # every kind is dispatched to the native UI instead of vanishing.
+    #
+    # Kinds that expect a return value: "ask_game_mode" ('quick'/'watch'),
+    # "game_day_bundle" (bool, was-opened).
+    def _ui_notify(self, kind, *args, **kwargs):
+        """Dispatch a GameManager notification to the native UI."""
+        try:
+            handler = getattr(self, "_notify_" + str(kind), None)
+            if handler is None:
+                # Unknown kind: log, never raise (game logic must not crash
+                # because the UI doesn't know a notification type).
+                print(f"[native] unhandled _ui_notify kind: {kind!r}")
+                return None
+            return handler(*args, **kwargs)
+        except Exception as e:
+            print(f"[native] _ui_notify {kind!r} failed: {e}")
+            return None
+
+    # -- message popups --
+    def _notify_info(self, *args):
+        title, msg = self._notify_title_msg(args, "Puck Dynasty")
+        _modal.information(self, title, msg)
+
+    def _notify_warning(self, *args):
+        title, msg = self._notify_title_msg(args, "Warning")
+        _modal.warning(self, title, msg)
+
+    def _notify_error(self, *args):
+        title, msg = self._notify_title_msg(args, "Error")
+        _modal.critical(self, title, msg)
+
+    def _notify_achievement(self, *args):
+        title, msg = self._notify_title_msg(args, "Achievement")
+        _modal.information(self, "\U0001F3C6 " + title, msg)
+
+    @staticmethod
+    def _notify_title_msg(args, default_title):
+        """Call sites pass (msg,) or (title, msg)."""
+        if len(args) >= 2:
+            return str(args[0]), str(args[1])
+        if len(args) == 1:
+            return default_title, str(args[0])
+        return default_title, ""
+
+    # -- contract feedback --
+    # Call signature: (outcome, person, salary, years, asking_price,
+    #                  extension, notify, clause_kind=..., clause_list_size=...)
+    # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style inbox
+    # message; the game already created it via _inbox_contract_result),
+    # "quiet" (no notification -- bulk callers send one digest themselves).
+    def _notify_contract_result(self, outcome, person=None, salary=0,
+                                years=1, asking_price=0, extension=False,
+                                notify="popup", **kwargs):
+        try:
+            name = getattr(person, "full_name", None) or "The player"
+            term = "extension" if extension else "contract"
+            try:
+                salary_s = f"${int(salary):,}"
+            except Exception:
+                salary_s = str(salary)
+            if outcome == "accepted":
+                title = "Signed: " + name
+                msg = (f"{name} has agreed to terms: {salary_s} per year "
+                       f"over {int(years)} year(s).\n\n"
+                       f"The {term} is finalized and filed with the league "
+                       f"office.")
+            elif outcome == "rejected":
+                title = "Offer rejected: " + name
+                msg = (f"{name} has rejected your offer of {salary_s} per "
+                       f"year outright and is not countering at this "
+                       f"time.\n\nHis camp feels the number needs to be "
+                       f"significantly higher before talks resume.")
+            else:  # counter -- interactive, lives in the inbox
+                try:
+                    ask_s = f"${int(asking_price):,}"
+                except Exception:
+                    ask_s = str(asking_price)
+                title = "Counter-offer: " + name
+                msg = (f"{name}'s camp has rejected your offer of "
+                       f"{salary_s} per year, but they will sign for "
+                       f"{ask_s} per year over {int(years)} year(s).\n\n"
+                       f"Respond in the inbox -- the offer waits for you.")
+            # Make sure the inbox UI reflects the new message the game
+            # just created (badge, recent panel, inbox screen refresh).
+            try:
+                self._refresh_inbox_ui()
+            except Exception:
+                pass
+            if notify == "quiet":
+                return
+            if notify == "inbox":
+                _modal.information(
+                    self, "\U0001F4E9 " + title,
+                    msg + "\n\nA full message is waiting in your inbox.")
+            else:  # "popup" (legacy) and anything else
+                if outcome == "rejected":
+                    _modal.warning(self, title, msg)
+                else:
+                    _modal.information(self, title, msg)
+        except Exception as e:
+            print(f"[native] contract_result notify failed: {e}")
+
+    def _refresh_inbox_ui(self):
+        """Refresh the hub inbox badge/panel and the inbox screen if open."""
+        try:
+            if hasattr(self, "hub") and self.hub:
+                self.hub.refresh(self.game)
+        except Exception:
+            pass
+        try:
+            scroll = self._screens.get("inbox")
+            inner = scroll.widget() if scroll and hasattr(scroll, "widget") \
+                else None
+            if inner is not None and hasattr(inner, "refresh"):
+                inner.refresh()
+        except Exception:
+            pass
+
+    # -- day advancement --
+    def _notify_blockers(self, blockers):
+        self.show_blockers(blockers or [])
+
+    def _notify_post_advance(self):
+        """Post-advance landing: show the daily results dialog."""
+        try:
+            from .dialogs.daily_results import DailyResultsDialog
+            dlg = DailyResultsDialog(self.game, self)
+            _modal.exec_dialog(dlg, "daily_results")
+        except Exception as e:
+            print(f"[native] daily results failed: {e}")
+
+    def _notify_continue_feedback(self, busy, status=""):
+        """Update continue-button state: wait cursor + status on the hub."""
+        try:
+            from PySide6.QtWidgets import QApplication
+            if busy:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+            else:
+                QApplication.restoreOverrideCursor()
+            if status:
+                print(f"[native] continue: {status}")
+        except Exception:
+            pass
+
+    # -- navigation --
+    def _notify_open_screen(self, *args, **kwargs):
+        screen = kwargs.get("screen") or (args[0] if args else None)
+        if screen:
+            self.show_screen(str(screen))
+
+    def _notify_open_fantasy_draft(self, *args, **kwargs):
+        self.show_screen("fantasy_draft")
+
+    def _notify_open_trade_window(self, *args, **kwargs):
+        self.show_screen("trades")
+
+    def _notify_open_free_agency_window(self, *args, **kwargs):
+        self.show_screen("free_agents")
+
+    # -- view refresh --
+    def _notify_update_views(self, *args, **kwargs):
+        try:
+            self.refresh()
+        except Exception as e:
+            print(f"[native] update_views failed: {e}")
+
+    def _notify_news_updated(self, *args, **kwargs):
+        self._refresh_inbox_ui()
+
+    def _notify_inbox_notification_updated(self, *args, **kwargs):
+        self._refresh_inbox_ui()
+
+    def _notify_scouting_reports_updated(self, *args, **kwargs):
+        try:
+            cur = self.stack.currentWidget() if hasattr(self, "stack") else None
+            inner = cur.widget() if cur is not None and hasattr(cur, "widget") \
+                else cur
+            name = type(inner).__name__ if inner is not None else ""
+            if "Scout" in name and hasattr(inner, "refresh"):
+                inner.refresh()
+        except Exception:
+            pass
+
+    # -- synchronous dialogs --
+    def _notify_ask_game_mode(self, home_team=None, away_team=None):
+        """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+        try:
+            home = getattr(home_team, "team_name", None) or str(home_team or "")
+            away = getattr(away_team, "team_name", None) or str(away_team or "")
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Game options")
+            dlg.setMinimumWidth(360)
+            layout = QVBoxLayout(dlg)
+            title = QLabel(f"{away} @ {home}" if home or away else "Game")
+            title.setObjectName("dialog-title")
+            title.setWordWrap(True)
+            layout.addWidget(title)
+            result = {"mode": "quick"}
+
+            def _pick(mode):
+                result["mode"] = mode
+                dlg.accept()
+
+            quick_btn = QPushButton("Quick Sim")
+            quick_btn.setObjectName("primary-btn")
+            quick_btn.clicked.connect(lambda: _pick("quick"))
+            watch_btn = QPushButton("Watch Live")
+            watch_btn.setObjectName("primary-btn")
+            watch_btn.clicked.connect(lambda: _pick("watch"))
+            layout.addWidget(quick_btn)
+            layout.addWidget(watch_btn)
+            _modal.exec_dialog(dlg, "ask_game_mode")
+            return result["mode"]
+        except Exception as e:
+            print(f"[native] ask_game_mode failed: {e}")
+            return "quick"
+
+    def _notify_ask_playoffs_mode(self, *args, **kwargs):
+        """Ask user: play through playoffs interactively or quick-sim?
+
+        Returns True (interactive), False (quick-sim), or "defer" when a
+        real user dismisses the dialog (X/Escape) without choosing --
+        dismissing must never silently quick-sim the season away; the
+        season-end flow re-asks on the next Continue. Under automation
+        bypass (PUCK_DYNASTY_NO_MODAL=1) returns False so scripted UI
+        drivers / headless bots can never defer-loop."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+        try:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Playoff options")
+            dlg.setMinimumWidth(360)
+            layout = QVBoxLayout(dlg)
+            title = QLabel("The playoffs are here!\n\nDo you want to play through the playoff games or quick-sim the whole bracket?")
+            title.setObjectName("dialog-title")
+            title.setWordWrap(True)
+            layout.addWidget(title)
+            # None = no choice made yet. The old code defaulted this to
+            # False, which made an X/Escape dismissal indistinguishable
+            # from an explicit "Quick Sim" pick -- the defer/re-ask path
+            # could never trigger.
+            result = {"interactive": None}
+
+            def _pick(interactive):
+                result["interactive"] = interactive
+                dlg.accept()
+
+            play_btn = QPushButton("Play Through")
+            play_btn.setObjectName("primary-btn")
+            play_btn.clicked.connect(lambda: _pick(True))
+            quick_btn = QPushButton("Quick Sim")
+            quick_btn.setObjectName("primary-btn")
+            quick_btn.clicked.connect(lambda: _pick(False))
+            layout.addWidget(play_btn)
+            layout.addWidget(quick_btn)
+            _modal.exec_dialog(dlg, "ask_playoffs_mode")
+            # Automation bypass treats the dialog as dismissed without
+            # blocking -- a scripted driver has no user to re-ask, so it
+            # quick-sims instead of deferring (no defer-loop).
+            if _modal.automation_bypass():
+                return False
+            if result["interactive"] is not None:
+                return result["interactive"]
+            # Real user dismissed the dialog without choosing: defer the
+            # choice; end_of_season re-asks on the next Continue.
+            return "defer"
+        except Exception as e:
+            print(f"[native] ask_playoffs_mode failed: {e}")
+            return False
+
+    # -- multiplayer / misc (single-player safe defaults) --
+    def _notify_mp_refresh(self, *args, **kwargs):
+        self._notify_update_views()
+
+    def _notify_mp_host_ready_toggle(self, *args, **kwargs):
+        self._notify_update_views()
+
+    def _notify_mp_state_synced(self, *args, **kwargs):
+        self._notify_update_views()
+
+    def _notify_mp_draft_clock(self, *args, **kwargs):
+        # Draft clock is owned by the MP draft screens; single-player no-op.
+        pass
+
+    def _notify_mp_promote_to_host(self, *args, **kwargs):
+        self._notify_info("Multiplayer", "You have been promoted to host.")
+
+    def _notify_mp_disconnected(self, *args, **kwargs):
+        reason = str(args[0]) if args else ""
+        self._notify_warning("Multiplayer disconnected", reason)
+
+    def _notify_mp_trade_offer(self, *args, **kwargs):
+        self._refresh_inbox_ui()
+        self._notify_info("Trade offer", "A new trade offer is waiting.")
+
+    def _notify_mp_ntc_request(self, *args, **kwargs):
+        self._notify_info("No-trade request",
+                          "A player has requested a trade decision.")
+
+    def _notify_mp_snapshot_failed(self, *args, **kwargs):
+        msg = str(args[0]) if args else "Could not save the MP snapshot."
+        self._notify_error("Could not join", msg)
+
+    def _notify_game_day_bundle(self, *args, **kwargs):
+        # Headless default: not opened. Native opens game-day via the
+        # schedule screen; the bundle dialog is MP-only.
+        return False
+
+    def _notify_team_talk(self, *args, **kwargs):
+        # Fallback hook for the Tk team-talk path; Qt returns neutral 1.0
+        # game-side, nothing to show.
+        pass
+
+    def _notify_prompts_enabled(self, *args, **kwargs):
+        # Generic shim; UI just keeps responding to prompts.
+        pass
+
+    # Priority 1 bug #5: unified blocker-action -> native-screen map.
+    # Covers both the new action_id format and the old tuple format
+    # (keyed by blocker id). Previously only 5-6 ids were mapped and
+    # roster_limit_23 / dress_minimum rendered dead buttons.
+    _BLOCKER_SCREEN_MAP = {
+        "fantasy_draft": "fantasy_draft",
+        "entry_draft": "draft",
+        "trade": "trades",
+        "salary_cap": "trades",
+        "free_agency": "free_agents",
+        "salary_floor": "free_agents",
+        "captaincy": "captains",
+        "captaincy_choice": "captains",
+        "season_meeting": "season_meeting",
+        "roster_limit_23": "roster",
+        "dress_minimum": "recall_picker",
+    }
+
     def show_blockers(self, blockers):
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame
+
+        def _fire_action(cb):
+            """Run a blocker callback guarded -- never let a Tk-era
+            closure take down the dialog."""
+            try:
+                cb()
+            except Exception as e:
+                print(f"[native] blocker action failed: {e}")
         dlg = QDialog(self)
         dlg.setWindowTitle("Can't advance yet")
         dlg.setMinimumWidth(600)
@@ -1880,20 +2261,22 @@ class MainWindow(QMainWindow):
             action_label = b.get("action_label", "Open")
             if action_id:
                 try:
-                    btn = QPushButton(action_label)
-                    btn.setObjectName("primary-btn")
                     # Map action IDs to native screens
-                    native_target = {
-                        "fantasy_draft": "fantasy_draft",
-                        "entry_draft": "draft",
-                        "captaincy": "captains",
-                        "season_meeting": "season_meeting",
-                    }.get(action_id)
+                    native_target = self._BLOCKER_SCREEN_MAP.get(action_id)
                     if native_target:
+                        btn = QPushButton(action_label)
+                        btn.setObjectName("primary-btn")
                         btn.clicked.connect(
                             lambda _=False, n=native_target: (
                                 dlg.accept(), self.show_screen(n)))
-                    cl.addWidget(btn)
+                        cl.addWidget(btn)
+                    else:
+                        # Unknown action_id: LOUD, never a dead button.
+                        # Rendering a button with zero `clicked` receivers
+                        # is the exact failure mode that burned trust.
+                        print(f"[native] show_blockers: unknown "
+                              f"action_id {action_id!r} -- no button "
+                              f"rendered")
                 except Exception:
                     pass
             else:
@@ -1905,50 +2288,69 @@ class MainWindow(QMainWindow):
                         btn = QPushButton(label)
                         btn.setObjectName("primary-btn")
                         blocker_id = b.get("id", "")
-                        native_target = {
-                            "fantasy_draft": "fantasy_draft",
-                            "entry_draft": "draft",
-                            "captaincy_choice": "captains",
-                            "captaincy": "captains",
-                            "season_meeting": "season_meeting",
-                        }.get(blocker_id)
+                        native_target = self._BLOCKER_SCREEN_MAP.get(
+                            blocker_id)
                         if native_target:
+                            # Known blocker id: navigate to the native
+                            # screen (roster_limit_23 -> roster,
+                            # dress_minimum -> recall_picker). The raw
+                            # tuple callback is a Tk-era closure and is
+                            # deliberately NOT used.
                             btn.clicked.connect(
                                 lambda _=False, n=native_target: (
                                     dlg.accept(), self.show_screen(n)))
+                        else:
+                            # Unknown blocker id (e.g. pending popup
+                            # items' "Go to it"): fire the tuple callback
+                            # guarded. The GameManager.show_screen bridge
+                            # installed in __init__ lets Tk-era closures
+                            # like the pending-item _jump resolve.
+                            btn.clicked.connect(
+                                lambda _=False, cb=callback: (
+                                    dlg.accept(), _fire_action(cb)))
                         cl.addWidget(btn)
                     except Exception:
                         pass
-                # Render auto_action button if present (e.g. Auto-pick Captains)
-                auto_action = b.get("auto_action")
-                if auto_action:
+                # Render secondary_action button if present (e.g. the IR
+                # quick-fix on the roster-limit blocker)
+                secondary_action = b.get("secondary_action")
+                if secondary_action:
                     try:
-                        auto_label, auto_cb = auto_action
-                        # For captaincy auto-pick, we can't call the Tk closure.
-                        # Instead, trigger the native captains screen which has
-                        # its own auto-pick, or run the logic directly.
-                        auto_btn = QPushButton(auto_label)
-                        auto_btn.setObjectName("primary-btn")
-                        bidder = b.get("id", "")
-                        if bidder == "captaincy_choice":
-                            # Navigate to captains screen; user can auto-pick there
-                            auto_btn.clicked.connect(
-                                lambda _=False: (
-                                    dlg.accept(),
-                                    self.show_screen("captains")))
-                        else:
-                            # Generic: close dialog and try the callback
-                            # (may be Tk-bound; guarded)
-                            def _run_auto(cb=auto_cb):
-                                dlg.accept()
-                                try:
-                                    cb()
-                                except Exception:
-                                    pass
-                            auto_btn.clicked.connect(_run_auto)
-                        cl.addWidget(auto_btn)
+                        sec_label, sec_cb = secondary_action
+                        sec_btn = QPushButton(sec_label)
+                        sec_btn.setObjectName("secondary-btn")
+                        sec_btn.clicked.connect(
+                            lambda _=False, cb=sec_cb: (
+                                dlg.accept(), _fire_action(cb)))
+                        cl.addWidget(sec_btn)
                     except Exception:
                         pass
+            # Render auto_action button if present (e.g. Auto-pick Captains,
+            # Auto-shed salary). These callbacks are UI-agnostic game logic
+            # (roster_limits._auto_demote / _auto_recall, game_manager
+            # _auto_captains / _auto_fix_cap, coach_season_meeting._auto) --
+            # fire them directly via _fire_action so the button actually
+            # does what its label promises. The old captaincy special-case
+            # that only navigated to the captains screen is gone: the
+            # captaincy callback IS the real auto-pick (same code path the
+            # headless auto-resolve uses), so "Auto-pick Captains" picks.
+            auto_action = b.get("auto_action")
+            if auto_action:
+                try:
+                    auto_label, auto_cb = auto_action
+                    auto_btn = QPushButton(auto_label)
+                    auto_btn.setObjectName("primary-btn")
+                    # NOTE: clicked(bool) passes a `checked` positional, so
+                    # the slot must swallow it first. Connecting
+                    # `def f(cb=auto_cb)` directly made `cb` receive False,
+                    # and False() raised TypeError inside a swallowed
+                    # except -- dead buttons that only closed the dialog.
+                    auto_btn.clicked.connect(
+                        lambda _=False, cb=auto_cb: (
+                            dlg.accept(), _fire_action(cb)))
+                    cl.addWidget(auto_btn)
+                except Exception:
+                    pass
             layout.addWidget(card)
         close = QPushButton("Close")
         close.clicked.connect(dlg.accept)
