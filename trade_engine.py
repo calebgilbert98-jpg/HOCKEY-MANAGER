@@ -1882,13 +1882,14 @@ class AIResponse:
 # ---------------------------------------------------------------------------
 
 def tier_label(player) -> str:
-    """Talent-tier label for a player ("Generational"/"Elite"/"Very good"/
-    "Good"/"Decent").
+    """Talent-tier label for a player ("Generational"/"Superstar"/"Elite"/
+    "Very good"/"Good"/"Decent").
 
     Cross-stream shim for the talent-tiers branch: prefers
     attribute_composites.talent_tier_for_player() when available; until that
     branch merges, mirrors its TALENT_TIERS thresholds exactly
-    (Generational 92+, Elite 88-91, Very good 84-87, Good 80-83, Decent <80).
+    (Generational 95+, Superstar 92-94, Elite 88-91, Very good 84-87,
+    Good 80-83, Decent <80).
     Never raises.
     """
     try:
@@ -1900,8 +1901,10 @@ def tier_label(player) -> str:
         ovr = int(player.overall_rating())
     except Exception:
         return "Decent"
-    if ovr >= 92:
+    if ovr >= 95:
         return "Generational"
+    if ovr >= 92:
+        return "Superstar"
     if ovr >= 88:
         return "Elite"
     if ovr >= 84:
@@ -1912,7 +1915,7 @@ def tier_label(player) -> str:
 
 
 def tier_index_of(player) -> int:
-    """Ordinal of the player's talent tier (0 = Generational .. 4 = Decent).
+    """Ordinal of the player's talent tier (0 = Generational .. 5 = Decent).
 
     Prefers attribute_composites.tier_index() once the talent-tiers branch
     merges; mirrors its ordering until then. Never raises.
@@ -1923,8 +1926,8 @@ def tier_index_of(player) -> int:
         return int(_ti(_ttfp(player)))
     except Exception:
         pass
-    return {"Generational": 0, "Elite": 1, "Very good": 2,
-            "Good": 3}.get(tier_label(player), 4)
+    return {"Generational": 0, "Superstar": 1, "Elite": 2, "Very good": 3,
+            "Good": 4}.get(tier_label(player), 5)
 
 
 #: franchise_score at/above this: the franchise tier -- untouchable

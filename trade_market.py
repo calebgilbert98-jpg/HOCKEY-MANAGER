@@ -919,7 +919,7 @@ def _is_headliner(player):
         from attribute_composites import talent_tier_for_player as _ttf_h
         tl = _ttf_h(player)
         age = getattr(player, "age", 99)
-        return tl in ("Generational", "Elite") or \
+        return tl in ("Generational", "Superstar", "Elite") or \
             (tl == "Very good" and age <= HEADLINER_YOUNG_AGE)
     except Exception:
         return False

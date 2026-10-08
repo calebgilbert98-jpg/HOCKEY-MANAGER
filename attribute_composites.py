@@ -550,11 +550,12 @@ COMPOSITE_KEYS = tuple(_COMPOSITES.keys())
 # ---------------------------------------------------------------------------
 # TALENT TIERS (Muck's directive 2026-10-01): the numeric overall rating is
 # NEVER shown to the user. talent_tier() maps a player's numeric overall to
-# one of five talent bands for ALL user-facing display. Boundaries are
+# one of six talent bands for ALL user-facing display. Boundaries are
 # Muck-adjustable; the table lives HERE AND ONLY HERE -- do not copy these
 # ranges anywhere else, import and call talent_tier() instead.
 #
-#   92+        -> Generational
+#   95+        -> Generational (McDavid/Crosby level, ~1-2 per generation)
+#   92-94      -> Superstar (franchise cornerstones)
 #   88-91      -> Elite
 #   84-87      -> Very good
 #   80-83      -> Good
@@ -571,7 +572,8 @@ COMPOSITE_KEYS = tuple(_COMPOSITES.keys())
 
 #: (tier label, min overall inclusive, max overall inclusive), top to bottom.
 TALENT_TIERS = (
-    ("Generational", 92, 99),
+    ("Generational", 95, 99),
+    ("Superstar",    92, 94),
     ("Elite",        88, 91),
     ("Very good",    84, 87),
     ("Good",         80, 83),
@@ -585,6 +587,7 @@ _TIER_INDEX = {name: i for i, (name, _, _) in enumerate(TALENT_TIERS)}
 #: gold matches ctk_theme.GOLD; the rest step down in prominence.
 TALENT_TIER_COLORS = {
     "Generational": "#e8b93c",  # gold
+    "Superstar":    "#d4a574",  # bronze/copper - distinct from gold, above platinum
     "Elite":        "#c3ccd6",  # platinum
     "Very good":    "#7aa3c7",  # muted steel blue
     "Good":         "#9aa3ad",  # neutral gray
@@ -658,7 +661,8 @@ def tier_change_arrow(old_overall, new_overall) -> str:
 #: compresses to 70 by design (the human's gauge can't split 79 from 62
 #: either -- both read "Decent").
 TIER_REPRESENTATIVE_OVR = {
-    "Generational": 95,
+    "Generational": 97,
+    "Superstar":    93,
     "Elite": 90,
     "Very good": 86,
     "Good": 82,

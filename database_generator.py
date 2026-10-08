@@ -570,6 +570,42 @@ class DatabaseGenerator:
         # filter in the name generators) -- see the note in
         # main.setup_new_game for why there is no post-hoc scrub.
 
+        # Generational rarity normalization (Oct 2026):
+        # True 95+ players should be <10 league-wide (McDavid-level rarity).
+        # If generation produced too many, scale the excess down to 92-94
+        # (Superstar range). Keep the top 8 by overall; scale the rest.
+        try:
+            _all_nhl = []
+            for _t in main_league.teams:
+                for _p in (_t.roster or []):
+                    try:
+                        _all_nhl.append((_p.overall_rating(), _p))
+                    except Exception:
+                        pass
+            _all_nhl.sort(key=lambda x: -x[0])
+            _gen = [(ovr, p) for ovr, p in _all_nhl if ovr >= 95]
+            if len(_gen) > 8:
+                # Keep top 8, scale down the rest to 92-94
+                for _ovr, _p in _gen[8:]:
+                    try:
+                        _target = 93  # Middle of Superstar range
+                        _scale = _target / max(_ovr, 1)
+                        for _attr in ['skating', 'shooting', 'passing', 'checking',
+                                      'determination', 'teamwork', 'offensive_awareness',
+                                      'defensive_awareness', 'deking', 'strength',
+                                      'vision', 'puck_control', 'stamina',
+                                      'shooting_accuracy', 'shooting_power',
+                                      'passing_accuracy', 'stickhandling']:
+                            try:
+                                _v = getattr(_p, _attr, 50)
+                                setattr(_p, _attr, max(1, min(100, int(_v * _scale))))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         return main_league
     
     # Two roster salary-share curves for a 23-man NHL roster, largest to
@@ -709,15 +745,20 @@ class DatabaseGenerator:
             elif target_sal < 12_000_000:
                 tier_cap = 94
             else:
-                tier_cap = 100
+                # 95+ (Generational) is extremely rare even for top slots.
+                # Only 5% of $12M+ slots can even roll generational; the rest
+                # cap at 94 (Superstar). This keeps league-wide Generational
+                # count in the single digits (McDavid-level rarity).
+                tier_cap = 100 if random.random() < 0.05 else 94
             # Franchise premium: a capped-out club's #1 pick is where the
             # $15M+ deals live in real life (Makar $20.4M, Celebrini
             # $18.8M). The fatter slot plus an open superstar tier lets
             # the dice land a true franchise player; the loop's
             # self-correction keeps the payroll on target either way.
+            # (Generational rarity still applies: 95+ only 5% of the time.)
             if i == 0 and _t >= 0.85:
                 target_sal *= 1.15
-                tier_cap = 100
+                tier_cap = 100 if random.random() < 0.05 else 94
             best, best_miss = None, None
             qm = self._quality_for_salary(target_sal)
             for attempt in range(12):
@@ -746,9 +787,34 @@ class DatabaseGenerator:
                     elif sal < target_sal * 0.90:
                         qm *= 1.05
             if best is None:
-                best = self._create_enhanced_player(
-                    random.randint(age_lo, age_hi), pos,
-                    max(0.50, min(1.70, qm * 0.90)))
+                # Fallback: respect tier_cap even here. Generate with reduced
+                # quality until under cap (max 20 attempts).
+                for _fb in range(20):
+                    _c = self._create_enhanced_player(
+                        random.randint(age_lo, age_hi), pos,
+                        max(0.50, min(1.70, qm * 0.90)))
+                    if _c.overall_rating() <= tier_cap:
+                        best = _c
+                        break
+                if best is None:
+                    # Last resort: take the last candidate and force-scale down
+                    best = _c
+                    try:
+                        _ovr = best.overall_rating()
+                        if _ovr > tier_cap:
+                            _scale = tier_cap / max(_ovr, 1)
+                            for _attr in ['skating', 'shooting', 'passing', 'checking',
+                                          'determination', 'teamwork', 'offensive_awareness',
+                                          'defensive_awareness', 'deking', 'strength',
+                                          'vision', 'puck_control', 'stamina',
+                                          'shooting_accuracy', 'passing_accuracy']:
+                                try:
+                                    _v = getattr(best, _attr, 50)
+                                    setattr(best, _attr, max(1, min(100, int(_v * _scale))))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
             players.append(best)
             committed += int(getattr(getattr(best, "contract", None),
                                      "salary", 0) or 0)
@@ -1541,7 +1607,7 @@ class DatabaseGenerator:
         
         # Generate enhanced attributes based on age and quality
         self._set_enhanced_attributes(player, age, quality_modifier)
-        
+
         # Generate contract information for professional players
         if age >= 18:
             player.contract = self._generate_contract(player, age)

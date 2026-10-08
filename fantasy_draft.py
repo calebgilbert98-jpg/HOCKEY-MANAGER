@@ -3958,11 +3958,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 # Store player reference
                 self.app.tree_maps[item] = player
-                
-                # Tier marker for the top band (numeric overall hidden)
-                if _tier_label(player) == "Generational":
+
+                # Tier marker for the top bands (numeric overall hidden)
+                _tl = _tier_label(player)
+                if _tl == "Generational":
                     self.players_tree.set(item, 'overall', "Generational ⭐")
-                    
+                elif _tl == "Superstar":
+                    self.players_tree.set(item, 'overall', "Superstar ✦")
+
             except Exception as e:
                 debug_print(f"DEBUG: Error adding player {i}: {e}")
                 continue
