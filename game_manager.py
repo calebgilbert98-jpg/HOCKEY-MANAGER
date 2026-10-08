@@ -8840,10 +8840,14 @@ NHL League Office""",
                 pass
             # League Memory: record the completed season (champion, awards,
             # standings) before league.end_of_season() wipes the stats.
+            # A failed archive must be LOUD, not silent: without it the
+            # season-end recap reads post-wipe zeros (BOT-005).
             try:
                 self._record_season_to_history()
             except Exception:
-                pass
+                debug_print("SEASON ARCHIVE FAILED (non-fatal):")
+                import traceback
+                traceback.print_exc()
             # Board season review (manager_career.BoardSystem.season_review):
             # the year-end reckoning -- expectation vs reality, confidence
             # delta, and the season rollover (honeymoon decay, patience
