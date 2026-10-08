@@ -466,68 +466,213 @@ class GameManager:
     
     
     def conduct_fantasy_draft(self):
-        """Conduct a serpentine fantasy draft to redistribute all NHL players among teams"""
+        """Conduct a serpentine fantasy draft (headless).
+
+        Drives the LIVE FantasyDraftManager path headlessly: every club
+        (including the user's) drafts via make_ai_pick -- the same smart
+        value / age / needs / cap-pressure scoring the interactive draft
+        uses -- with make_pick committing and assign_drafted_player placing
+        each pick (23-man NHL cap, overflow to AHL / prospects). Finishes
+        with normalize_post_draft_rosters (2-3 goalies, position floors)
+        and clears pending_fantasy_draft, mirroring complete_draft.
+
+        Undrafted players become free agents, exactly like the live path's
+        leftover pool.
+
+        Why not the old inline serpentine loop: it sorted purely by
+        overall with no cap awareness, no roster cap and no round limit,
+        producing 51-man NHL rosters at $160M+ payrolls -- breaking the
+        23-man roster limit, the 50-contract SPC limit (blocking all
+        signings), and the salary-floor auto-resolve.
+        """
         print("Starting Fantasy Draft...")
-        
+
         # Collect all NHL players from all teams
         all_nhl_players = []
-        nhl_teams = [team for team in self.league.teams if team.league_name == "National Hockey League"]
-        
+        nhl_teams = [team for team in self.league.teams
+                     if team.league_name == "National Hockey League"]
+
         for team in nhl_teams:
             all_nhl_players.extend(team.roster)
             all_nhl_players.extend(team.ahl_roster)
             all_nhl_players.extend(team.prospects)
-            
+
             # Clear team rosters
             team.roster.clear()
             team.ahl_roster.clear()
             team.prospects.clear()
-        
+
         print(f"Collected {len(all_nhl_players)} players for fantasy draft")
-        
-        # Sort players by overall rating (best first for fair distribution)
-        all_nhl_players.sort(key=lambda p: p.overall_rating(), reverse=True)
-        
-        # Set up serpentine draft order (reverse every round)
-        draft_rounds = len(all_nhl_players) // len(nhl_teams) + 1
-        current_player_index = 0
-        
-        for round_num in range(draft_rounds):
-            if current_player_index >= len(all_nhl_players):
+
+        from fantasy_draft import FantasyDraftManager
+        mgr = FantasyDraftManager(nhl_teams, all_nhl_players)
+        # League-owned, like the live path (get_fantasy_draft_manager
+        # reads it back).
+        try:
+            self.league.fantasy_draft_manager = mgr
+        except Exception:
+            pass
+
+        # --- Cap guard (headless draft only) ---
+        # make_ai_pick's cap pressure is intentionally soft (max -3
+        # adjustment -- OVR dominance by design). Headless, that produces
+        # $160M+ payrolls no auto-resolve can fix. A real cap-league GM
+        # does not draft $57M over the cap, so neither do we: when the AI's
+        # pick would blow the cap, take the best affordable alternative.
+        # Goalies are exempt while the club still needs its first two
+        # (mirrors the inelastic-need rule in calculate_player_draft_value).
+        try:
+            _cap_limit = int(getattr(self.league, "salary_cap", 0) or 0)
+        except Exception:
+            _cap_limit = 0
+        if not _cap_limit:
+            _cap_limit = 104_000_000
+        _CAP_TOLERANCE = 2_000_000
+
+        def _committed(team):
+            # AAV-based, not mgr._committed_cap (which sums salary only
+            # and misses signing bonuses -- the real cap charge).
+            try:
+                return sum(_salary(p) for p in mgr._team_drafted_players(team))
+            except Exception:
+                return 0.0
+
+        def _salary(p):
+            # AAV: salary + signing bonus, matching
+            # salary_cap_system._contract_aav (the real cap charge).
+            # Using salary alone blinded the guard to ~50% of the hit.
+            try:
+                c = getattr(p, "contract", None)
+                if c is None:
+                    return 0.0
+                hit = float(getattr(c, "salary", 0) or 0)
+                hit += float(getattr(c, "signing_bonus", 0) or 0)
+                hit -= float(getattr(p, "retained_amount", 0) or 0)
+                return max(0.0, hit)
+            except Exception:
+                return 0.0
+
+        def _is_goalie(p):
+            try:
+                from game_classes import PlayerPosition
+                return p.primary_position == PlayerPosition.GOALIE
+            except Exception:
+                return False
+
+        def _goalies_drafted(team):
+            try:
+                return sum(1 for p in mgr._team_drafted_players(team)
+                           if _is_goalie(p))
+            except Exception:
+                return 2
+
+        def _cap_guard(team, player, round_num):
+            # Return player if affordable, else the best affordable
+            # alternative. Never raises; falls back to the original pick.
+            try:
+                if _is_goalie(player) and _goalies_drafted(team) < 2:
+                    return player
+                if _committed(team) + _salary(player) <= _cap_limit + _CAP_TOLERANCE:
+                    return player
+                try:
+                    avail = mgr.get_available_players()
+                except Exception:
+                    return player
+                best, best_score = None, None
+                cheapest, cheapest_sal = None, None
+                for cand in avail:
+                    try:
+                        sal = _salary(cand)
+                    except Exception:
+                        continue
+                    if cheapest is None or sal < cheapest_sal:
+                        cheapest, cheapest_sal = cand, sal
+                    if _committed(team) + sal > _cap_limit + _CAP_TOLERANCE:
+                        continue
+                    if _is_goalie(cand) and _goalies_drafted(team) < 2:
+                        return cand
+                    try:
+                        score = mgr.calculate_player_draft_value(
+                            cand, team, round_num)
+                    except Exception:
+                        continue
+                    if best_score is None or score > best_score:
+                        best, best_score = cand, score
+                if best is not None:
+                    return best
+                return cheapest if cheapest is not None else player
+            except Exception:
+                return player
+
+        _picks = 0
+        while not mgr.is_draft_complete():
+            pick = mgr.get_current_pick()
+            if pick is None:
                 break
-                
-            # Determine team order for this round (serpentine)
-            if round_num % 2 == 0:
-                # Even rounds: normal order
-                team_order = nhl_teams
-            else:
-                # Odd rounds: reverse order
-                team_order = list(reversed(nhl_teams))
-            
-            for team in team_order:
-                if current_player_index >= len(all_nhl_players):
-                    break
-                    
-                player = all_nhl_players[current_player_index]
-                
-                # Assign to appropriate roster based on rating
-                if player.overall_rating() >= 38:
-                    team.roster.append(player)
-                elif player.overall_rating() >= 33:
-                    team.ahl_roster.append(player)
-                else:
-                    team.prospects.append(player)
-                
-                # Update player's team
-                player.team_name = team.team_name
-                current_player_index += 1
-        
-        print(f"Fantasy draft complete! Redistributed {current_player_index} players")
-        
-        # News story about fantasy draft (simplified)
+            try:
+                player = mgr.make_ai_pick(pick.team)
+            except Exception:
+                player = None
+            if player is None:
+                break
+            try:
+                _rn = getattr(pick, "round_num", 1)
+            except Exception:
+                _rn = 1
+            player = _cap_guard(pick.team, player, _rn)
+            try:
+                ok = mgr.make_pick(player)
+            except Exception:
+                ok = False
+            if not ok:
+                break
+            try:
+                mgr.assign_drafted_player(pick.team, player)
+            except Exception:
+                pass
+            _picks += 1
+            if _picks % 320 == 0:
+                print(f"  ... {_picks} picks made")
+
+        # Undrafted players become free agents -- not everyone gets picked.
+        try:
+            _drafted_ids = {pk.player.id for pk in (mgr.draft_picks or [])
+                            if getattr(pk, "player", None) is not None}
+        except Exception:
+            _drafted_ids = set()
+        _fa = 0
+        for player in all_nhl_players:
+            try:
+                if getattr(player, "id", None) not in _drafted_ids:
+                    player.team_name = "Free Agent"
+                    _fa += 1
+            except Exception:
+                pass
+
+        print(f"Fantasy draft complete! {_picks} picks made, "
+              f"{_fa} players become free agents")
+
+        # Post-draft soundness pass: the same normalizer the live path runs
+        # in complete_draft -- 2-3 goalies, position floors (4C/6W/7D),
+        # best 23 on the NHL roster, leftovers to AHL / prospects.
+        try:
+            mgr.normalize_post_draft_rosters()
+        except Exception as e:
+            print(f"Roster normalization unavailable (non-fatal): {e}")
+
+        # The draft is complete: clear the pending flag so the calendar can
+        # advance, and release the league-owned session so a later draft
+        # starts clean (mirrors complete_draft's cleanup).
+        self.pending_fantasy_draft = False
+        self._fantasy_draft_deferred = False
+        try:
+            self.league.fantasy_draft_manager = None
+        except Exception:
+            pass
+
         print("Fantasy draft news: A historic fantasy draft has been completed!")
-        print(f"All {current_player_index} NHL players have been redistributed among the 32 teams using a serpentine draft format.")
-    
+        print(f"All {_picks} drafted players have been redistributed "
+              f"among the {len(nhl_teams)} teams using a serpentine draft format.")
     def start_interactive_fantasy_draft(self):
         """Start the interactive fantasy draft system"""
         print("Initializing interactive fantasy draft system...")

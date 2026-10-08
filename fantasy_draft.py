@@ -734,7 +734,14 @@ class FantasyDraftManager:
                     for p in (getattr(t, attr, None) or []):
                         try:
                             con = getattr(p, "contract", None)
-                            if con is not None and getattr(con, "cap_hit", 0):
+                            # Root-cause fix 2026-10-08: the old check read
+                            # contract.cap_hit, but Contract has no cap_hit
+                            # field (only _assign_post_draft_contracts ever
+                            # sets it) -- so EVERY drafted player looked
+                            # contract-less and got a new, bigger deal,
+                            # inflating payrolls ~50%. Check salary, the
+                            # real contract field, instead.
+                            if con is not None and getattr(con, "salary", 0):
                                 continue
                             try: o = p.overall_rating()
                             except: o = 70.0
