@@ -6,7 +6,13 @@ Complete Stanley Cup playoff bracket generation and management
 
 import tkinter as tk
 from tkinter import ttk
-import customtkinter as ctk
+try:
+    import customtkinter as ctk
+except ImportError:
+    # Headless environments (sim bots, servers) don't have customtkinter.
+    # The bracket game logic (PlayoffSeries/PlayoffBracket) doesn't need it;
+    # only the PlayoffView UI does. Import must not fail headless.
+    ctk = None
 from popup_system import messagebox, InGamePopup
 from datetime import date, timedelta
 import random
@@ -1477,7 +1483,14 @@ class PlayoffBracket:
         }
 
 
-class PlayoffView(ctk.CTkFrame):
+# PlayoffView base: needs ctk.CTkFrame when the UI is available; falls back
+# to object headless (the view is never instantiated without a GUI -- the
+# bracket sim logic above doesn't touch it). Without this, importing
+# playoff_system headless fails and the season soft-locks at the playoffs.
+_PlayoffViewBase = ctk.CTkFrame if ctk is not None else object
+
+
+class PlayoffView(_PlayoffViewBase):
     """NHL Playoff bracket viewer and management window"""
     
     def __init__(self, parent, app=None):
