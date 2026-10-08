@@ -18,13 +18,31 @@ a bad move. The user can always resolve manually.
 from waiver_logic import is_waiver_eligible
 
 
+def _player_overall(p):
+    """Real overall for value judgments.
+
+    Player has no ``overall`` attribute (overall_rating() is the method);
+    the old getattr defaulted every generated player to 50, which made
+    90-overall stars look like replacement-level depth and classified
+    them as safe waiver demotions -- exactly what the safety rules
+    forbid.
+    """
+    try:
+        _or = getattr(p, 'overall_rating', None)
+        if callable(_or):
+            return float(_or() or 50)
+    except Exception:
+        pass
+    try:
+        return float(getattr(p, 'overall', 50) or 50)
+    except Exception:
+        return 50.0
+
+
 def _player_value(p):
     """Rough trade/waiver-claim value: higher = more likely to be claimed.
     Considers overall, age (young = valuable), and role."""
-    try:
-        overall = float(getattr(p, 'overall', 50) or 50)
-    except Exception:
-        overall = 50.0
+    overall = _player_overall(p)
     try:
         age = int(getattr(p, 'age', 30) or 30)
     except Exception:
@@ -326,90 +344,253 @@ def auto_run_practice(team, app=None):
     if sessions == 0:
         return 0, "No practice sessions could be run"
     return sessions, None
-    """Shed salary via safe demotions (waiver-exempt high-salary first)
-    and LTIR for injured players. Never exposes valuable players."""
-    moves = []
-    try:
-        roster = list(getattr(team, 'roster', []) or [])
-    except Exception:
-        return [], "Could not read roster"
-    # Step 1: LTIR injured players (no risk, immediate relief)
-    for p in roster:
-        if getattr(p, 'is_injured', False) and not getattr(p, 'on_ir', False):
-            try:
-                cap_hit = float(getattr(p, 'cap_hit', 0) or 0)
-            except Exception:
-                cap_hit = 0
-            if cap_hit > 0:
-                moves.append(('ltir', p, cap_hit))
-    # Step 2: Demote high-salary waiver-exempt players (safest cap relief)
-    candidates = [p for p in roster
-                  if not getattr(p, 'is_injured', False)
-                  and not getattr(p, 'on_ir', False)]
-    safe, _risky = rank_demotion_candidates(candidates)
-    # Sort safe by cap hit descending (most relief first)
-    def _cap(p):
-        try:
-            return float(getattr(p, 'cap_hit', 0) or 0)
-        except Exception:
-            return 0.0
-    safe.sort(key=_cap, reverse=True)
-    total_relief = sum(m[2] for m in moves)
-    for p in safe:
-        if total_relief >= over_amount:
-            break
-        ch = _cap(p)
-        if ch > 0:
-            moves.append(('demote', p, ch))
-            total_relief += ch
-    if total_relief < over_amount:
-        return moves, (
-            f"Safe moves free ${total_relief:,.0f}, need ${over_amount:,.0f}. "
-            f"Remaining savings would require risking valuable players on "
-            f"waivers. Resolve manually (trade or buyout)."
-        )
-    return moves, None
 def auto_fix_salary_cap(team, over_amount):
-    """Shed salary via safe demotions (waiver-exempt high-salary first)
-    and LTIR for injured players. Never exposes valuable players."""
-    moves = []
+    """Shed salary via LTIR (eligible injured players) and safe demotions.
+
+    Uses the game's real cap accounting (salary_cap_system), so the
+    predicted relief matches what cap_breakdown() shows after the moves
+    are applied:
+
+    - LTIR relief = max(0, hit - cap_space_at_placement), predicted exactly
+      the way ir_system.place_on_ltir() computes it at apply time. The
+      club is over the cap here, so space is normally $0 and relief is the
+      full hit.
+    - Demote relief = active-roster hit MINUS the player's minor-league
+      charge (burial rule: a one-way deal in the AHL only sheds the
+      $1.225M burial exemption; a two-way deal sheds everything). The old
+      code used a ``cap_hit`` attribute that does not exist on Player, so
+      every move computed $0 of relief and the auto-fix silently did
+      nothing -- the day-advance blocker it was supposed to clear could
+      never clear.
+
+    Safety rules (unchanged): waiver-exempt players first, then low-value
+    waiver-eligible; NMC players are never demoted; injured players are
+    never demoted; demotions stop before breaking the dressed 18+2
+    minimum; emergency fillers are skipped (their charge is already
+    excluded from the compliance check, so demoting them frees nothing).
+    Valuable waiver-eligible players are never risked on waivers.
+
+    Returns (moves, err): moves is [('ltir'|'demote', player,
+    predicted_relief_dollars), ...] for apply_cap_fix_moves(); err is None
+    when the moves cover over_amount, otherwise a plain-language reason
+    naming the actual constraint (locked dollars, NMCs, ineligible
+    injuries). Partial moves are still returned so the caller can make
+    real progress and re-check.
+    """
+    try:
+        over_amount = float(over_amount or 0)
+    except Exception:
+        over_amount = 0.0
+    if over_amount <= 0:
+        return [], None
     try:
         roster = list(getattr(team, 'roster', []) or [])
     except Exception:
         return [], "Could not read roster"
-    # Step 1: LTIR injured players (no risk, immediate relief)
-    for p in roster:
-        if getattr(p, 'is_injured', False) and not getattr(p, 'on_ir', False):
-            try:
-                cap_hit = float(getattr(p, 'cap_hit', 0) or 0)
-            except Exception:
-                cap_hit = 0
-            if cap_hit > 0:
-                moves.append(('ltir', p, cap_hit))
-    # Step 2: Demote high-salary waiver-exempt players (safest cap relief)
-    candidates = [p for p in roster
-                  if not getattr(p, 'is_injured', False)
-                  and not getattr(p, 'on_ir', False)]
-    safe, _risky = rank_demotion_candidates(candidates)
-    # Sort safe by cap hit descending (most relief first)
-    def _cap(p):
+    # Deferred imports: roster_limits imports this module lazily, so keep
+    # the module import light and cycle-free.
+    try:
+        from salary_cap_system import (
+            _active_roster_hit, minor_league_cap_charge, DEFAULT_CAP)
+    except Exception:
+        return [], "Cap accounting unavailable (salary_cap_system)"
+    try:
+        import ir_system as _irs
+    except Exception:
+        _irs = None
+    try:
+        from roster_limits import (would_break_dress_minimum,
+                                   is_emergency_filler)
+    except Exception:
+        would_break_dress_minimum = None
+        is_emergency_filler = None
+
+    def _hit(p):
         try:
-            return float(getattr(p, 'cap_hit', 0) or 0)
+            return int(_active_roster_hit(p) or 0)
         except Exception:
-            return 0.0
-    safe.sort(key=_cap, reverse=True)
-    total_relief = sum(m[2] for m in moves)
+            return 0
+
+    def _shed_of(p):
+        """Real dollars freed by demoting p to the AHL (burial rule)."""
+        try:
+            return max(0,
+                       int(_active_roster_hit(p) or 0)
+                       - int(minor_league_cap_charge(p) or 0))
+        except Exception:
+            return 0
+
+    def _is_nmc(p):
+        try:
+            return bool(getattr(getattr(p, 'contract', None),
+                                'no_movement_clause', False))
+        except Exception:
+            return False
+
+    def _is_filler(p):
+        if is_emergency_filler is None:
+            return False
+        try:
+            return bool(is_emergency_filler(p))
+        except Exception:
+            return False
+
+    def _on_any_ir(p):
+        if _irs is None:
+            return False
+        try:
+            return bool(_irs.is_on_any_ir(p))
+        except Exception:
+            return False
+
+    moves = []
+    covered = 0.0
+    ltir_ineligible = []
+
+    # -- Step 1: LTIR for eligible injured players (no risk, real relief).
+    # place_on_ltir() snapshots cap space at placement; predict it exactly
+    # the same way so planned relief == applied relief. LTIRs must be
+    # applied before any demotion for the snapshot to match.
+    if _irs is not None:
+        try:
+            _cap = int(getattr(team, 'salary_cap', DEFAULT_CAP)
+                       or DEFAULT_CAP)
+        except Exception:
+            _cap = int(DEFAULT_CAP)
+        try:
+            _space = max(0, _cap - sum(_hit(p) for p in roster))
+        except Exception:
+            _space = 0
+        for p in roster:
+            if covered >= over_amount:
+                break
+            try:
+                _ok, _why = _irs.eligible_for_ltir(p)
+            except Exception:
+                _ok, _why = False, ""
+            if not _ok:
+                if bool(getattr(p, 'is_injured', False)):
+                    ltir_ineligible.append((p, _why))
+                continue
+            _relief = max(0, _hit(p) - _space)
+            if _relief <= 0:
+                continue
+            moves.append(('ltir', p, _relief))
+            covered += _relief
+    _chosen = {id(p) for _, p, _ in moves}
+
+    # -- Step 2: safe demotions, biggest REAL shed first.
+    candidates = [p for p in roster
+                  if id(p) not in _chosen
+                  and not bool(getattr(p, 'is_injured', False))
+                  and not _on_any_ir(p)
+                  and not _is_nmc(p)
+                  and not _is_filler(p)]
+    safe, risky = rank_demotion_candidates(candidates)
+    safe.sort(key=_shed_of, reverse=True)
+    demoted = []
+    dress_skipped = 0
     for p in safe:
-        if total_relief >= over_amount:
+        if covered >= over_amount:
             break
-        ch = _cap(p)
-        if ch > 0:
-            moves.append(('demote', p, ch))
-            total_relief += ch
-    if total_relief < over_amount:
-        return moves, (
-            f"Safe moves free ${total_relief:,.0f}, need ${over_amount:,.0f}. "
-            f"Remaining savings would require risking valuable players on "
-            f"waivers. Resolve manually (trade or buyout)."
-        )
+        _shed = _shed_of(p)
+        if _shed <= 0:
+            continue
+        try:
+            if (would_break_dress_minimum is not None
+                    and would_break_dress_minimum(team, demoted + [p])):
+                dress_skipped += 1
+                continue
+        except Exception:
+            pass
+        moves.append(('demote', p, _shed))
+        demoted.append(p)
+        covered += _shed
+
+    if covered < over_amount:
+        # Name the actual constraint so the report is actionable.
+        try:
+            _locked = sum(_hit(p) for p in risky)
+        except Exception:
+            _locked = 0
+        try:
+            _nmc_n = sum(1 for p in roster if _is_nmc(p))
+        except Exception:
+            _nmc_n = 0
+        _inj = list(ltir_ineligible)
+        parts = [f"Safe moves free ${covered:,.0f}, need "
+                 f"${over_amount:,.0f}."]
+        if _locked > 0:
+            parts.append(
+                f"${_locked:,.0f} is locked in valuable waiver-eligible "
+                f"contracts the auto-fix will not risk on waivers.")
+        if _nmc_n:
+            parts.append(
+                f"{_nmc_n} no-movement clause(s) can't be demoted "
+                f"without consent.")
+        if _inj:
+            _reasons = "; ".join(
+                f"{getattr(p, 'full_name', '?')}: {why or 'not eligible'}"
+                for p, why in _inj[:3])
+            parts.append(
+                f"{len(_inj)} injured player(s) aren't LTIR-eligible "
+                f"({_reasons}).")
+        if dress_skipped:
+            parts.append(
+                f"{dress_skipped} otherwise-safe demotion(s) would break "
+                f"the dressed 18+2 minimum.")
+        parts.append("Resolve manually (trade or buyout).")
+        return moves, " ".join(parts)
     return moves, None
+
+
+def apply_cap_fix_moves(team, moves, current_date=None):
+    """Apply ('ltir'|'demote', player, predicted_relief) moves from
+    auto_fix_salary_cap().
+
+    LTIRs go through ir_system.place_on_ltir (eligibility + relief-pool
+    bookkeeping -- never just flag-flipping); demotions move the player
+    from team.roster to team.ahl_roster, the list the cap accounting
+    actually reads. (team.farm_team does not exist anywhere in the
+    codebase; the old apply code dropped demoted players out of the
+    organization entirely.)
+
+    Returns (applied, skipped): applied = [(player, kind, relief)],
+    skipped = [(player, reason)]. Never raises.
+    """
+    applied, skipped = [], []
+    try:
+        import ir_system as _irs
+    except Exception:
+        _irs = None
+    # LTIR first: place_on_ltir snapshots cap space at placement, so the
+    # relief pool matches the planner's prediction (computed pre-move).
+    for kind, p, ch in (moves or []):
+        if kind != 'ltir':
+            continue
+        try:
+            if _irs is None:
+                raise RuntimeError("ir_system unavailable")
+            ok, why = _irs.place_on_ltir(team, p, current_date)
+        except Exception as e:
+            ok, why = False, str(e) or "LTIR placement failed"
+        if ok:
+            applied.append((p, kind, ch))
+        else:
+            skipped.append((p, f"LTIR refused: {why}"))
+    for kind, p, ch in (moves or []):
+        if kind != 'demote':
+            continue
+        try:
+            _ros = getattr(team, 'roster', None)
+            _ahl = getattr(team, 'ahl_roster', None)
+            if _ahl is None:
+                raise RuntimeError("no ahl_roster to receive demotion")
+            if _ros is not None and p in _ros:
+                _ros.remove(p)
+            if p not in _ahl:
+                _ahl.append(p)
+            applied.append((p, kind, ch))
+        except Exception as e:
+            skipped.append((p, f"demote failed: {e}"))
+    return applied, skipped

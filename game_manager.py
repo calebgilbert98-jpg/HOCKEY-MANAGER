@@ -2559,8 +2559,14 @@ NHL League Office""",
                     if auto:
                         try:
                             _label, _cb = auto
-                            _cb()
-                            progressed = True
+                            # An auto_action may explicitly report False =
+                            # "no safe move exists" (e.g. the cap auto-fix
+                            # when every dollar is locked in untouchable
+                            # contracts). That is not progress: don't burn
+                            # further rounds re-running a fix that cannot
+                            # help. Other actions return None (unchanged).
+                            if _cb() is not False:
+                                progressed = True
                         except Exception:
                             still.append(b)
                     else:
@@ -15797,39 +15803,89 @@ NHL League Office""",
 
 
     def _auto_fix_cap(self, team, over_amount):
-        """Auto-resolve salary cap: LTIR injured, demote waiver-safe
-        high-salary players. Never risks valuable players on waivers."""
+        """Auto-resolve salary cap: LTIR eligible injured players, demote
+        waiver-safe high-salary players to the AHL.
+
+        Never risks valuable players on waivers, never demotes NMC
+        players, never breaks the dressed 18+2 minimum. Applies LTIRs
+        before demotions (place_on_ltir snapshots cap space at placement)
+        and re-checks the REAL blocker afterwards -- a planning/applying
+        mismatch is reported loudly, never silently.
+
+        Returns True when progress was made (or nothing needed doing) and
+        False when no safe move exists; the headless blocker loop uses
+        this to stop re-running a fix that cannot help instead of burning
+        rounds on it.
+        """
         try:
-            from auto_resolve import auto_fix_salary_cap
+            from auto_resolve import (auto_fix_salary_cap,
+                                      apply_cap_fix_moves)
             moves, err = auto_fix_salary_cap(team, over_amount)
-            for kind, p, ch in moves:
-                try:
-                    if kind == 'ltir':
-                        p.ir_status = 'LTIR'
-                    else:  # demote: move to farm team
-                        if p in team.roster:
-                            team.roster.remove(p)
-                        _ft = getattr(team, 'farm_team', None)
-                        if _ft is not None:
-                            _fr = getattr(_ft, 'roster', None)
-                            if _fr is not None and p not in _fr:
-                                _fr.append(p)
-                except Exception:
-                    pass
+            applied, skipped = apply_cap_fix_moves(
+                team, moves, getattr(self, 'current_date', None))
+            _applied_relief = sum(float(ch) for _p, _k, ch in applied)
             _names = ", ".join(
                 f"{getattr(p, 'full_name', '?')} ({kind})"
-                for kind, p, ch in moves)
-            if err:
-                self.add_news(f"Auto cap fix partial: {_names}. {err}")
-            else:
+                for p, kind, _ch in applied)
+            if not applied:
+                if skipped:
+                    _sk = "; ".join(
+                        f"{getattr(p, 'full_name', '?')}: {why}"
+                        for p, why in skipped)
+                    self.add_news(f"Auto cap fix: moves refused ({_sk}). "
+                                  f"{err or ''}".rstrip())
+                elif err:
+                    self.add_news(f"Auto cap fix: no safe moves. {err}")
+                else:
+                    self.add_news("Auto cap fix: already compliant.")
+                return False if (err or skipped) else True
+            if skipped:
+                _sk = "; ".join(
+                    f"{getattr(p, 'full_name', '?')}: {why}"
+                    for p, why in skipped)
+                self.add_news(f"Auto cap fix: skipped {_sk}.")
+            # Verify against the REAL blocker, not our own math.
+            try:
+                _still_blocked = self._cap_compliance_blocker() is not None
+            except Exception:
+                _still_blocked = True
+            if not _still_blocked:
                 self.add_news(
-                    f"Auto-shed ${sum(c for _, _, c in moves)/1e6:.2f}M: "
-                    f"{_names}. All moves waiver-safe.")
+                    f"Auto-shed ${_applied_relief/1e6:.2f}M: {_names}. "
+                    f"All moves waiver-safe.")
+                return True
+            if err is None and not skipped:
+                # Claimed full coverage and applied everything, yet the
+                # blocker stands: planning and applying disagree. Loud
+                # tripwire -- and the surviving blocker (not silence) is
+                # what stops the day, so this can never soft-lock unnoticed.
+                try:
+                    from salary_cap_system import cap_breakdown as _bd
+                    _b2 = _bd(team)
+                    _acct = (f"cap charge ${_b2['total']/1e6:.2f}M vs "
+                             f"${_b2['cap']/1e6:.2f}M cap")
+                except Exception:
+                    _acct = "cap accounting unreadable"
+                self.add_news(
+                    f"Auto cap fix MISMATCH: applied {_names} "
+                    f"(${_applied_relief/1e6:.2f}M) but the cap blocker "
+                    f"still stands ({_acct}). Needs manual review.")
+                debug_print(
+                    f"[cap-autofix] MISMATCH: moves={_names} "
+                    f"relief=${_applied_relief:,.0f} team="
+                    f"{getattr(team, 'team_name', '?')} {_acct}")
+                return True
+            # Partial progress: the blocker stands, the reason is explicit,
+            # and the next headless round recomputes from the new state.
+            self.add_news(
+                f"Auto cap fix partial: {_names}. {err or ''}".rstrip())
+            return True
         except Exception as e:
             try:
                 self.add_news(f"Auto cap fix failed: {e}")
             except Exception:
                 pass
+            return False
 
 
     def _ai_offseason_captaincy_changes(self):
