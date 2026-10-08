@@ -51,7 +51,8 @@ class LeagueHistory:
                       presidents_trophy: Optional[str],
                       conn_smythe: Optional[str],
                       awards: Dict[str, str],
-                      standings_snapshot: List[Dict[str, Any]]) -> Dict[str, Any]:
+                      standings_snapshot: List[Dict[str, Any]],
+                      leaders: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Record a completed season. Returns the season record."""
         if self.first_season_year is None:
             self.first_season_year = year
@@ -67,6 +68,7 @@ class LeagueHistory:
             "conn_smythe": conn_smythe,
             "awards": dict(awards),
             "standings": standings_snapshot,
+            "leaders": dict(leaders) if leaders else {},
         }
         self.seasons.append(record)
         return record

@@ -15327,6 +15327,66 @@ NHL League Office""",
         # Conn Smythe: from awards if present, else None
         conn_smythe = awards.get("Conn Smythe")
 
+        # League leaders: archive from live stats BEFORE league.end_of_season()
+        # wipes them. Without this, season-end reports read zeros (BOT-005).
+        leaders = {}
+        try:
+            _skaters, _goalies = [], []
+            for _team in (getattr(getattr(self, "league", None), "teams", None) or []):
+                for _p in (getattr(_team, "roster", None) or []):
+                    _pos = str(getattr(getattr(_p, "primary_position", None), "name", ""))
+                    _st = getattr(_p, "stats", None)
+                    if _st is None:
+                        continue
+                    if "GOALIE" in _pos.upper():
+                        _goalies.append((_p, _st, getattr(_team, "team_name", "?")))
+                    else:
+                        _skaters.append((_p, _st, getattr(_team, "team_name", "?")))
+            # Top 10 scorers
+            _by_pts = sorted(_skaters,
+                             key=lambda ps: getattr(ps[1], "points", 0) or 0,
+                             reverse=True)[:10]
+            leaders["top_scorers"] = [
+                {"name": getattr(_p, "full_name", "?"), "team": _tm,
+                 "GP": getattr(_s, "games_played", 0) or 0,
+                 "G": getattr(_s, "goals", 0) or 0,
+                 "A": getattr(_s, "assists", 0) or 0,
+                 "PTS": getattr(_s, "points", 0) or 0}
+                for _p, _s, _tm in _by_pts]
+            # Top 10 goal scorers
+            _by_g = sorted(_skaters,
+                           key=lambda ps: getattr(ps[1], "goals", 0) or 0,
+                           reverse=True)[:10]
+            leaders["top_goal_scorers"] = [
+                {"name": getattr(_p, "full_name", "?"), "team": _tm,
+                 "G": getattr(_s, "goals", 0) or 0}
+                for _p, _s, _tm in _by_g]
+            # Top 5 goalies (min 10 GP)
+            _q_goalies = [_g for _g in _goalies
+                          if (getattr(_g[1], "games_played", 0) or 0) >= 10]
+            _by_sv = sorted(_q_goalies,
+                            key=lambda ps: getattr(ps[1], "save_percentage", 0) or 0,
+                            reverse=True)[:5]
+            leaders["top_goalies"] = [
+                {"name": getattr(_p, "full_name", "?"), "team": _tm,
+                 "GP": getattr(_s, "games_played", 0) or 0,
+                 "SV%": round(getattr(_s, "save_percentage", 0) or 0, 3),
+                 "GAA": round(getattr(_s, "goals_against_average", 0) or 0, 2),
+                 "W": getattr(_s, "wins", 0) or 0,
+                 "SO": getattr(_s, "shutouts", 0) or 0}
+                for _p, _s, _tm in _by_sv]
+            # Benchmarks
+            _total_g = sum(getattr(_s, "goals", 0) or 0 for _, _s, _ in _skaters)
+            _total_gp = sum(getattr(_s, "games_played", 0) or 0 for _, _s, _ in _skaters)
+            if _total_gp:
+                leaders["goals_per_game"] = round(_total_g / (_total_gp / 18), 2)
+            _svs = [getattr(_s, "save_percentage", 0) or 0
+                    for _, _s, _ in _q_goalies]
+            if _svs:
+                leaders["avg_save_pct"] = round(sum(_svs) / len(_svs), 3)
+        except Exception:
+            pass
+
         hist.record_season(
             year=year,
             champion=champion,
@@ -15336,6 +15396,7 @@ NHL League Office""",
             conn_smythe=conn_smythe,
             awards=awards,
             standings_snapshot=standings_snapshot,
+            leaders=leaders,
         )
 
         # Franchise records: fold each team's season into the record book.
