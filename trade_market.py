@@ -61,9 +61,10 @@ RUMOR_CAP_PER_DAY = 3
 ESCALATION_BASE = 0.55             # x boldness x desperation
 ASK_DECAY_PER_DAY = 0.02           # final 5 days of ramp only
 RELIST_COOLDOWN_DAYS = 14
+ACQUIRED_COOLDOWN_DAYS = 60        # recently-traded player can't be relisted
 SHORTLIST_NUDGE_COOLDOWN_DAYS = 14
 SHORTLIST_MAX = 25
-MAX_AI_BLOCK_SIZE = 5
+MAX_AI_BLOCK_SIZE = 3  # Oct 2026: was 5; 92 trades/season vs NHL ~60
 MAX_BID_ASSETS = 3                 # sanity cap on offer size
 TRADE_REQUEST_MONTHLY_CAP = 2      # mirrors headlines.py cap for agitators
 
@@ -593,13 +594,45 @@ def _seller_eligible(app, team, stance, ramp):
 
 
 def _pick_pieces(team, count):
-    """Expiring contracts first, then 29+ vets, by value desc. Never raises."""
+    """Expiring contracts first, then 29+ vets, by value desc. Never raises.
+
+    Franchise protection (Oct 2026): Generational/Superstar talent-tier
+    players and UNTOUCHABLE franchise-tier pieces are never auto-listed
+    by sellers. Mirrors the buyer's untouchable check. A star on an
+    expiring deal stays unless he requested a trade (trade requests are
+    shopped separately in _auto_list and bypass this filter).
+    """
     try:
         import trade_engine as te
         roster = list(getattr(team, "roster", None) or [])
+        # Franchise-tier map for the untouchable check (GM-relative).
+        try:
+            _ident = te.partner_gm_identity(team)
+            _tiers = te.asset_franchise_tiers(team, roster, _ident)
+        except Exception:
+            _tiers = {}
+        def _is_protected(p):
+            # Talent-tier protection: Generational (95+) and Superstar
+            # (92-94) are franchise cornerstones -- never auto-listed.
+            try:
+                if te.tier_label(p) in ("Generational", "Superstar"):
+                    return True
+            except Exception:
+                pass
+            # Franchise-tier protection: mirrors the buyer's UNTOUCHABLE
+            # check (franchise_score 80+).
+            try:
+                _bl = _tiers.get(getattr(p, "id", None), ("GETTABLE", 0.0))[0]
+                if _bl == "UNTOUCHABLE":
+                    return True
+            except Exception:
+                pass
+            return False
         expiring, vets, rest = [], [], []
         for p in roster:
             try:
+                if _is_protected(p):
+                    continue
                 yrs = getattr(getattr(p, "contract", None), "years_remaining", 99)
                 age = getattr(p, "age", 0)
                 if yrs == 1:
@@ -2373,6 +2406,23 @@ def _execute_market_deal(app, league, listing, player, seller, bidder, assets, t
             until = _iso(today + timedelta(days=cd))
             market["deal_cooldown"][sname] = until
             market["deal_cooldown"][bname] = until
+        except Exception:
+            pass
+        # Recently-acquired protection (Oct 2026): a player who just changed
+        # teams can't be relisted for 60 days. Stops the hot-potato effect
+        # where a player bounces 4-6x in a season. Reuses the relist_cooldown
+        # mechanism already checked in list_piece().
+        try:
+            _acq_until = _iso(today + timedelta(days=ACQUIRED_COOLDOWN_DAYS))
+            _rc = market.setdefault("relist_cooldown", {})
+            for _asset in list(seller_assets) + list(assets or []):
+                try:
+                    _pid = getattr(_asset, "id", None)
+                    # Only players get the cooldown, not picks.
+                    if _pid is not None and hasattr(_asset, "overall_rating"):
+                        _rc[_pid] = _acq_until
+                except Exception:
+                    continue
         except Exception:
             pass
         # News: winner + price.
