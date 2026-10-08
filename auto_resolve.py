@@ -11,6 +11,12 @@ Safety hierarchy for demotions:
   3. Waiver-eligible but LOW value (old, low-rated, replaceable)
   4. NEVER: waiver-eligible + high value (young star, top-6 F, top-4 D)
 
+Paper transactions (cap fix step 3): when the club sits at the dressed
+18+2 minimum, no standalone demotion is legal -- the real NHL move is
+demote-a-waiver-safe-player + recall-a-cheaper-AHL-body in one breath.
+The recall fills the exact slot the demotion opens, so the dressed
+minimum never breaks mid-move.
+
 If no safe move exists, the auto option reports why instead of making
 a bad move. The user can always resolve manually.
 """
@@ -375,12 +381,26 @@ def auto_fix_salary_cap(team, over_amount):
     excluded from the compliance check, so demoting them frees nothing).
     Valuable waiver-eligible players are never risked on waivers.
 
+    Step 3 (demote+recall paper transactions): when the club sits at the
+    dressed 18+2 minimum, EVERY standalone demotion breaks the lineup
+    floor, so Step 2 finds nothing even for a $1 overage -- and the day
+    gate deadlocks forever (2026-10-08: the 5-year sim froze 200 days
+    $170k over with five safe demotion candidates on the roster). The
+    real NHL move is the paper transaction: send a waiver-safe player
+    down and recall a cheaper AHL body in the same breath. Net shed =
+    demoted shed - recalled net add; the dressed minimum never breaks
+    because the recall fills the exact slot the demotion opens (verified
+    via would_break_dress_minimum with incoming=[q]). Biggest net first
+    (fewest moves -- the Step 2 "biggest shed first" philosophy extended
+    to pairs; ties break by safety rank, then cheapest recall).
+
     Returns (moves, err): moves is [('release'|'ltir'|'demote', player,
-    predicted_relief_dollars), ...] for apply_cap_fix_moves(); err is None
+    predicted_relief_dollars), ...] plus [('demote_recall', (p, q),
+    predicted_net_relief)] for apply_cap_fix_moves(); err is None
     when the moves cover over_amount, otherwise a plain-language reason
     naming the actual constraint (locked dollars, NMCs, ineligible
-    injuries). Partial moves are still returned so the caller can make
-    real progress and re-check.
+    injuries, no covering demote+recall pair). Partial moves are still
+    returned so the caller can make real progress and re-check.
     """
     try:
         over_amount = float(over_amount or 0)
@@ -593,6 +613,106 @@ def auto_fix_salary_cap(team, over_amount):
         demoted.append(p)
         covered += _shed
 
+    _pair_exhausted = False
+    _demote_pair_cands = []
+    _recall_pool = []
+    if covered < over_amount:
+        # -- Step 3: demote+recall paper transactions (see docstring).
+        # Refresh _chosen: Step 2 appended demotions to moves without
+        # refreshing the id set. demote_recall moves carry a (p, q) pair.
+        _chosen = set()
+        for _k, _pl, _ch in moves:
+            if isinstance(_pl, (tuple, list)):
+                _chosen.update(id(_x) for _x in _pl)
+            else:
+                _chosen.add(id(_pl))
+        try:
+            from roster_limits import recall_candidates as _recall_cands
+        except Exception:
+            _recall_cands = None
+
+        def _is_goalie_pos(p):
+            try:
+                _pos = getattr(p, 'primary_position', None)
+                return str(getattr(_pos, 'value', _pos)) == "G"
+            except Exception:
+                return False
+
+        def _recall_net_add(q):
+            """Cap dollars a recall ADDS: NHL hit minus the minor-league
+            charge it already carried (exact compliance delta)."""
+            try:
+                return (int(_active_roster_hit(q) or 0)
+                        - int(minor_league_cap_charge(q) or 0))
+            except Exception:
+                return None
+
+        _recall_pool = []
+        if _recall_cands is not None:
+            try:
+                # recall_candidates already enforces: healthy, under
+                # contract, not a filler, no ahl recall block. Take the
+                # eligible SET (we re-sort by cost ourselves).
+                _recall_pool = [q for q in _recall_cands(team)
+                                if id(q) not in _chosen]
+            except Exception:
+                _recall_pool = []
+        _pair_demoted, _pair_recalled = [], []
+        _demote_pair_cands = [p for p in safe
+                              if id(p) not in _chosen and _shed_of(p) > 0]
+        # Safety-rank order for tie-breaks: rank_demotion_candidates put
+        # waiver-exempt first, lowest overall first.
+        _safe_idx = {id(p): i for i, p in enumerate(safe)}
+        while covered < over_amount:
+            # Biggest net first: fewest moves to cover (the Step 2
+            # "biggest shed first" philosophy). Every valid pair has
+            # positive net and consumes one demote candidate + one
+            # recall, so the loop always terminates.
+            _best = None  # ((-net, safe_rank, recall_add), p, q)
+            for p in _demote_pair_cands:
+                if id(p) in _chosen:
+                    continue
+                _shed = _shed_of(p)
+                if _shed <= 0:
+                    continue
+                _p_goalie = _is_goalie_pos(p)
+                for q in _recall_pool:
+                    if id(q) in _chosen:
+                        continue
+                    # Same slot type: a skater out + goalie in (or vice
+                    # versa) breaks the 18+2 split the dress check guards.
+                    if _is_goalie_pos(q) != _p_goalie:
+                        continue
+                    _add = _recall_net_add(q)
+                    if _add is None or _add < 0:
+                        continue
+                    _net = _shed - _add
+                    if _net <= 0:
+                        continue
+                    try:
+                        if (would_break_dress_minimum is not None
+                                and would_break_dress_minimum(
+                                    team,
+                                    demoted + _pair_demoted + [p],
+                                    incoming=_pair_recalled + [q])):
+                            continue
+                    except Exception:
+                        pass
+                    _key = (-_net, _safe_idx.get(id(p), 999), _add)
+                    if _best is None or _key < _best[0]:
+                        _best = (_key, p, q)
+            if _best is None:
+                _pair_exhausted = True
+                break
+            _, _p, _q = _best
+            _net = _shed_of(_p) - _recall_net_add(_q)
+            moves.append(('demote_recall', (_p, _q), _net))
+            _chosen.add(id(_p))
+            _chosen.add(id(_q))
+            _pair_demoted.append(_p)
+            _pair_recalled.append(_q)
+            covered += _net
+
     if covered < over_amount:
         # Name the actual constraint so the report is actionable.
         try:
@@ -625,6 +745,22 @@ def auto_fix_salary_cap(team, over_amount):
             parts.append(
                 f"{dress_skipped} otherwise-safe demotion(s) would break "
                 f"the dressed 18+2 minimum.")
+        if _pair_exhausted and (_demote_pair_cands or _recall_pool):
+            # Step 3 ran but no (further) demote+recall paper transaction
+            # covers the remainder -- say exactly why so the GM knows the
+            # real gap.
+            if not _demote_pair_cands:
+                _pair_why = ("no waiver-safe demotion candidate with a "
+                             "positive cap shed is available")
+            elif not _recall_pool:
+                _pair_why = ("no healthy, recall-eligible AHL player is "
+                             "available to backfill the roster")
+            else:
+                _pair_why = ("no demote-and-recall pair covers the "
+                             "remainder -- the cheapest healthy AHL callup "
+                             "costs more than the safest demotion sheds, "
+                             "or none plays the needed position")
+            parts.append(f"Paper-transaction fix unavailable: {_pair_why}.")
         parts.append("Resolve manually (trade or buyout).")
         return moves, " ".join(parts)
     return moves, None
@@ -642,6 +778,9 @@ def apply_cap_fix_moves(team, moves, current_date=None):
     organization entirely.) Releases remove unsigned (expired-contract)
     players from the roster entirely -- they have no contract, so there
     is no buyout, no waiver, no penalty; they become free agents.
+    Demote+recall pairs apply the recall FIRST (the roster never dips
+    below the dressed 18+2 minimum mid-apply) and roll the recall back
+    if the demote half fails, so no half-applied pair survives.
 
     Returns (applied, skipped): applied = [(player, kind, relief)],
     skipped = [(player, reason)]. Never raises.
@@ -651,6 +790,11 @@ def apply_cap_fix_moves(team, moves, current_date=None):
         import ir_system as _irs
     except Exception:
         _irs = None
+    try:
+        from salary_cap_system import (_active_roster_hit as _arh,
+                                       minor_league_cap_charge as _mlcc)
+    except Exception:
+        _arh = _mlcc = None
     # Releases first: unsigned players are the "phantom" overage -- clear
     # them before LTIR snapshots cap space.
     for kind, p, ch in (moves or []):
@@ -698,6 +842,57 @@ def apply_cap_fix_moves(team, moves, current_date=None):
             applied.append((p, kind, ch))
         else:
             skipped.append((p, f"LTIR refused: {why}"))
+    # Demote+recall paper transactions: recall FIRST so the roster never
+    # dips below the dressed 18+2 minimum mid-apply (demote-first would
+    # momentarily break it). Applied as two entries -- (q, 'recall',
+    # -net_add) then (p, 'demote', shed) -- so their relief sums to the
+    # predicted net and every caller formatting (player, kind, relief)
+    # tuples keeps working unchanged. If the demote half fails, the
+    # recall is rolled back: a half-applied pair would make the cap
+    # WORSE, never better.
+    for kind, p, ch in (moves or []):
+        if kind != 'demote_recall':
+            continue
+        try:
+            _p, _q = p
+        except Exception:
+            skipped.append((p, "demote_recall malformed (not a pair)"))
+            continue
+        try:
+            _ros = getattr(team, 'roster', None)
+            _ahl = getattr(team, 'ahl_roster', None)
+            if _ahl is None or _ros is None or _arh is None:
+                raise RuntimeError("no ahl_roster/roster/cap accounting "
+                                   "for paper transaction")
+            if _q in _ahl:
+                _ahl.remove(_q)
+            if _q not in _ros:
+                _ros.append(_q)
+            _add = (int(_arh(_q) or 0) - int(_mlcc(_q) or 0))
+            applied.append((_q, 'recall', -_add))
+        except Exception as e:
+            skipped.append((_q, f"recall failed: {e}"))
+            continue
+        try:
+            _shed = max(0, int(_arh(_p) or 0) - int(_mlcc(_p) or 0))
+            if _p in _ros:
+                _ros.remove(_p)
+            if _p not in _ahl:
+                _ahl.append(_p)
+            applied.append((_p, 'demote', _shed))
+        except Exception as e:
+            # Roll back the recall: leave no half-applied pair behind.
+            try:
+                if _q in _ros:
+                    _ros.remove(_q)
+                if _q not in _ahl:
+                    _ahl.append(_q)
+            except Exception:
+                pass
+            _rb = [a for a in applied if a[0] is _q and a[1] == 'recall']
+            for _r in _rb:
+                applied.remove(_r)
+            skipped.append((_p, f"demote failed: {e} (recall rolled back)"))
     for kind, p, ch in (moves or []):
         if kind != 'demote':
             continue

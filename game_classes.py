@@ -4566,6 +4566,13 @@ class League:
     # Draft grades by year ({str(year): [(team, grade, ratio)]}), persisted
     # so the war room's review modal and future seasons can look back.
     draft_grades_history: Dict[str, list] = field(default_factory=dict)
+    # Draft recaps by draft ({'fantasy': recap, str(year): recap}),
+    # persisted so the draft recap screen can look back at any draft.
+    # Each recap is plain data (see draft_recap.py).
+    draft_recap_history: Dict[str, dict] = field(default_factory=dict)
+    # Most recently completed draft's recap key ('fantasy' or str(year));
+    # the recap screen pre-selects this.
+    draft_recap_latest: str = ""
     # Live draft sessions (BUG-2 fix, 2026-09-30): draft state lives on the
     # LEAGUE, never on a view. A destroyed/rebuilt view re-attaches to the
     # live session instead of starting a fresh draft (which silently

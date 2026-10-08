@@ -372,6 +372,14 @@ def _complete_draft(game, mgr):
             inbox.add_message(email)
     except Exception as e:
         print(f"Error adding completion message: {e}")
+    # Draft recap (additive only): persist the full round-by-round recap
+    # for the draft recap screen + inbox. Idempotent + guarded.
+    try:
+        from draft_recap import build_fantasy_draft_recap
+        if league is not None:
+            build_fantasy_draft_recap(league, mgr)
+    except Exception as _e:
+        print(f"Draft recap unavailable (non-fatal): {_e}")
     # Keep a completion record, then release the league-owned session.
     try:
         if gm is not None:

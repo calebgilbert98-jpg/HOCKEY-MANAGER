@@ -501,6 +501,15 @@ class GameSaveManager:
                 str(k): [[t, g, float(r)] for t, g, r in (v or [])]
                 for k, v in (getattr(league, 'draft_grades_history', None)
                              or {}).items()},
+            # Draft recap history {'fantasy': recap, str(year): recap}.
+            # Recaps are plain data (draft_recap.py); missing key = old
+            # save -> empty dict.
+            'draft_recap_history': {
+                str(k): v
+                for k, v in (getattr(league, 'draft_recap_history', None)
+                             or {}).items()},
+            'draft_recap_latest': str(
+                getattr(league, 'draft_recap_latest', '') or ''),
             # Prospect awards news + prospect-class year stamp (his draft
             # wave). Missing keys = old save -> graceful defaults.
             'prospect_awards_news': list(getattr(league, 'prospect_awards_news', []) or []),
@@ -1893,6 +1902,19 @@ class GameSaveManager:
                     for k, v in _dgh.items()}
             except Exception:
                 league.draft_grades_history = {}
+            # Draft recap history {'fantasy': recap, str(year): recap}.
+            # Old saves lack the key -> empty dict.
+            try:
+                _drh = league_data.get('draft_recap_history', None) or {}
+                league.draft_recap_history = {
+                    str(k): v for k, v in _drh.items() if isinstance(v, dict)}
+            except Exception:
+                league.draft_recap_history = {}
+            try:
+                league.draft_recap_latest = str(
+                    league_data.get('draft_recap_latest', '') or '')
+            except Exception:
+                league.draft_recap_latest = ''
             # Prospect awards news + prospect-class year stamp (his draft
             # wave). Old saves lack the keys -> empty news, None year (his
             # draft flow regenerates the class when the stamp mismatches).

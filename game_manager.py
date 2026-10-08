@@ -15855,8 +15855,11 @@ NHL League Office""",
 
 
     def _auto_fix_cap(self, team, over_amount):
-        """Auto-resolve salary cap: LTIR eligible injured players, demote
-        waiver-safe high-salary players to the AHL.
+        """Auto-resolve salary cap: release unsigned players, LTIR eligible
+        injured players, demote waiver-safe players to the AHL -- and, when
+        the club sits at the dressed 18+2 minimum (where no standalone
+        demotion is legal), demote+recall paper transactions that swap a
+        waiver-safe player for a cheaper AHL body in one breath.
 
         Never risks valuable players on waivers, never demotes NMC
         players, never breaks the dressed 18+2 minimum. Applies LTIRs
