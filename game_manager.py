@@ -7700,7 +7700,11 @@ NHL League Office""",
 
             # Detect if game went to overtime/shootout (for OTL point)
             # NHL rule: loser in OT/SO gets 1 point (OTL)
-            went_to_ot = len([e for e in notable_events if e.get('period', 0) > 3]) > 0
+            # Use sim_engine.period (notable_events dicts don't have 'period' key)
+            try:
+                went_to_ot = sim_engine is not None and int(getattr(sim_engine, 'period', 3) or 3) > 3
+            except Exception:
+                went_to_ot = False
 
             # Grudge-week report card: marketed hard and fizzled gets called out.
             try:
