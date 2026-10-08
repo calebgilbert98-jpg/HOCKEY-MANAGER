@@ -102,7 +102,7 @@ class MediaStoryline:
             
         return random.random() < mention_probability
 
-@dataclass  
+@dataclass
 class MediaEvent:
     """Represents a media event requiring GM response"""
     id: str
@@ -113,6 +113,8 @@ class MediaEvent:
     importance: int = 5  # 1-10 scale
     auto_handled: bool = False
     completed: bool = False
+    response: str = ""  # GM's response choice ('professional', 'dismissive', etc.)
+    journalist: object = None  # Journalist object involved, if any
 
 class MediaSystem:
     """Main media system controller - completely optional"""
@@ -404,26 +406,36 @@ class MediaSystem:
         """Process player's response to media event"""
         if self.engagement_level == MediaEngagementLevel.DISABLED:
             return
-        
-        # Mark event as completed
-        event['status'] = 'completed'
-        event['response'] = response_choice
-        
+
+        # Mark event as completed (attribute access — MediaEvent is a dataclass)
+        event.completed = True
+        event.response = response_choice
+
         # Apply consequences based on response
         self._apply_media_consequences(event, response_choice)
 
         # Dressing-room cascade (module 03): the room hears the presser.
+        # cascade_on_press normalizes both dict and MediaEvent shapes.
         try:
             import dressing_room as _dr
             _team = getattr(self.game_manager, "user_team", None)
-            if _team is not None and isinstance(event, dict):
+            if _team is not None:
                 _dr.cascade_on_press(_team, event, response_choice)
         except Exception:
             pass
-    
+
+    def _impact_level(self, event):
+        """Derive low/medium/high impact from the 1-10 importance scale."""
+        importance = getattr(event, "importance", 5) or 5
+        if importance >= 7:
+            return "high"
+        if importance >= 4:
+            return "medium"
+        return "low"
+
     def _apply_media_consequences(self, event, response_choice):
         """Apply consequences of media interactions"""
-        impact_level = event.get('impact_level', 'low')
+        impact_level = self._impact_level(event)
         
         # Adjust GM reputation
         reputation_change = 0
@@ -435,7 +447,7 @@ class MediaSystem:
         self.gm_reputation = max(0, min(100, self.gm_reputation + reputation_change))
         
         # Update journalist relationship
-        journalist = event.get('journalist')
+        journalist = getattr(event, "journalist", None)
         if journalist and response_choice in ['professional', 'thoughtful']:
             journalist.relationship = min(10, journalist.relationship + 1)
         elif journalist and response_choice in ['dismissive', 'hostile']:

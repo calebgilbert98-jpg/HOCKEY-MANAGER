@@ -13,7 +13,8 @@ web_ui/screens/trade_block.py + web_ui/static/js/trade_block.js. Calls
 the game object DIRECTLY -- no Flask/HTTP, no command queue, no JSON.
 
 Game methods used (all real, same as the web bridge called):
-  - game.trade_block (list; add/remove by id)
+  - team.trade_block (list; add/remove by id) — canonical location read by
+    trade_market.refresh_trade_blocks
   - game.calculate_player_value(p)
   - game.process_trade_block_offers()
   - trade_market: get_market, add_target, _sync_user_block,
@@ -105,8 +106,8 @@ def _user_league(game):
 
 def _user_block(game):
     """User's trade block players (dedupe by id). Never raises."""
-    block = _safe(lambda: list(getattr(game, "trade_block", None) or []),
-                  []) or []
+    block = _team_block_list(game)
+    block = list(block) if block else []
     seen, out = set(), []
     for p in block:
         try:
@@ -219,16 +220,32 @@ def _others_blocks(game):
     return out
 
 
-def _block_add(game, pids):
+def _team_block_list(game):
+    """Return the canonical trade-block list object for the user's team.
+
+    The trade engine (trade_market.refresh_trade_blocks) reads the block
+    from ``team.trade_block`` — that is the canonical location. This helper
+    returns the LIVE list (creating it if missing), never a copy, so
+    mutations persist.
+    """
     team = _user_team(game)
     if team is None:
-        return
-    if not hasattr(game, "trade_block"):
+        return None
+    block = getattr(team, "trade_block", None)
+    if not isinstance(block, list):
+        block = []
         try:
-            game.trade_block = []
+            team.trade_block = block
         except Exception:
-            return
-    block = getattr(game, "trade_block", None) or []
+            return None
+    return block
+
+
+def _block_add(game, pids):
+    block = _team_block_list(game)
+    if block is None:
+        return
+    team = _user_team(game)
     pool = []
     for lst in ("roster", "ahl_roster", "prospects"):
         pool.extend(_safe(lambda: list(getattr(team, lst, None) or []),
@@ -245,8 +262,9 @@ def _block_add(game, pids):
 
 
 def _block_remove(game, pids):
-    block = _safe(lambda: list(getattr(game, "trade_block", None) or []),
-                  []) or []
+    block = _team_block_list(game)
+    if block is None:
+        return
     for pid in pids:
         pid = str(pid)
         for p in list(block):
