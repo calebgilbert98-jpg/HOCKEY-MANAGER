@@ -9,12 +9,12 @@ import os
 import re
 
 from PySide6.QtWidgets import (
-    QAction, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
     QSizePolicy, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QShortcut, QKeySequence
+from PySide6.QtGui import QAction, QFont, QShortcut, QKeySequence
 
 from .theme import THEME_QSS
 from native_ui.dialogs import modal as _modal
