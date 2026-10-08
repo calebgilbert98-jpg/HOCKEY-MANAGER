@@ -9906,6 +9906,20 @@ NHL League Office""",
             return
         # Map award display names -> reputation_system award keys
         awards = self._calculate_season_awards(all_players)
+        # Store awards centrally so they can be verified later (after stats wipe).
+        # Keyed by season year for the recap system.
+        try:
+            if not hasattr(self.league, 'season_awards_history'):
+                self.league.season_awards_history = {}
+            season_key = str(getattr(self.league, "season_year", 0))
+            # Only store if we got actual winners (not empty)
+            if awards and any((v or {}).get("name") for v in awards.values() if isinstance(v, dict)):
+                self.league.season_awards_history[season_key] = {
+                    k: {"name": (v or {}).get("name"), "team": (v or {}).get("team")}
+                    for k, v in awards.items() if isinstance(v, dict)
+                }
+        except Exception:
+            pass
         award_key_map = {
             'Hart Trophy (MVP)': 'hart',
             'Ted Lindsay Award (Most Outstanding Player)': 'ted_lindsay',
