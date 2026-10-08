@@ -746,19 +746,20 @@ class DatabaseGenerator:
                 tier_cap = 94
             else:
                 # 95+ (Generational) is extremely rare even for top slots.
-                # Only 5% of $12M+ slots can even roll generational; the rest
+                # Only 2% of $12M+ slots can even roll generational; the rest
                 # cap at 94 (Superstar). This keeps league-wide Generational
-                # count in the single digits (McDavid-level rarity).
-                tier_cap = 100 if random.random() < 0.05 else 94
+                # count low (McDavid-level rarity) -- typically a handful,
+                # never more than the 8-player normalization cap.
+                tier_cap = 100 if random.random() < 0.02 else 94
             # Franchise premium: a capped-out club's #1 pick is where the
             # $15M+ deals live in real life (Makar $20.4M, Celebrini
             # $18.8M). The fatter slot plus an open superstar tier lets
             # the dice land a true franchise player; the loop's
             # self-correction keeps the payroll on target either way.
-            # (Generational rarity still applies: 95+ only 5% of the time.)
+            # (Generational rarity still applies: 95+ only 2% of the time.)
             if i == 0 and _t >= 0.85:
                 target_sal *= 1.15
-                tier_cap = 100 if random.random() < 0.05 else 94
+                tier_cap = 100 if random.random() < 0.02 else 94
             best, best_miss = None, None
             qm = self._quality_for_salary(target_sal)
             for attempt in range(12):
@@ -1429,10 +1430,38 @@ class DatabaseGenerator:
                     age = random.randint(18, 24)  # Young players
                 
                 player = self._create_enhanced_player(age, position, quality_modifier)
+                # Generational rarity gate (Oct 2026): 95+ (Generational) is
+                # extremely rare -- only 2% of rolls stay generational, the
+                # rest scale down to 94 (Superstar). Mirrors the cap-targeted
+                # path's gate so fantasy draft mode doesn't bypass it.
+                # Young players (22 and under) are exempt -- they can be
+                # high-potential prospects. Final normalization caps the
+                # league at the top 8.
+                try:
+                    if age > 22 and player.overall_rating() >= 95:
+                        if random.random() >= 0.02:
+                            _ovr = player.overall_rating()
+                            _scale = 94 / max(_ovr, 1)
+                            for _attr in ['skating', 'shooting', 'passing',
+                                          'checking', 'determination',
+                                          'teamwork', 'offensive_awareness',
+                                          'defensive_awareness', 'deking',
+                                          'strength', 'vision', 'puck_control',
+                                          'stamina', 'shooting_accuracy',
+                                          'shooting_power', 'passing_accuracy',
+                                          'stickhandling']:
+                                try:
+                                    _v = getattr(player, _attr, 50)
+                                    setattr(player, _attr,
+                                            max(1, min(100, int(_v * _scale))))
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
                 players.append(player)
-        
+
         return players
-    
+
     def _generate_free_agents(self, count: int) -> List[Player]:
         """Generate free agent players"""
         free_agents = []
