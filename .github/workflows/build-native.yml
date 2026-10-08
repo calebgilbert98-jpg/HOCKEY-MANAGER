@@ -57,7 +57,7 @@ jobs:
           version = "${{ steps.version.outputs.APP_VERSION }}"
           zip_path = f"dist/PuckDynasty-Native-v{version}-Windows.zip"
           tmp_dir = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "bundle_check")
-          MIN_SCREENS = 60
+          MIN_SCREENS = 70
 
           print(f"Validating {zip_path}...")
 
