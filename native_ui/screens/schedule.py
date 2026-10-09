@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QComboBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QWidget,
+    QTableWidgetItem, QHeaderView, QMessageBox, QWidget, QLineEdit,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -35,7 +35,8 @@ def _resolve_gm(game):
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?",
+                       context="schedule/team_name") or "?"
 
 
 def _abbr(name):
@@ -85,7 +86,8 @@ def _results_by_date(game):
     except Exception:
         pass
     by_date = {}
-    results = safe_call(lambda: list(getattr(game, "game_results", None) or []), []) or []
+    results = safe_call(lambda: list(getattr(game, "game_results", None) or []),
+                        [], context="schedule/results_by_date") or []
     for r in results:
         try:
             k = _date_key(r.get("date"))
@@ -110,9 +112,12 @@ def _match_result(results, home_name, away_name):
 def _schedule_entries(game):
     """Normalized schedule entries (tuple or dict formats)."""
     gm = _resolve_gm(game)
-    league = safe_call(lambda: getattr(gm, "league", None)) or \
-        safe_call(lambda: getattr(game, "league", None))
-    sched = safe_call(lambda: list(getattr(league, "schedule", None) or []), []) or []
+    league = safe_call(lambda: getattr(gm, "league", None),
+                       context="schedule/schedule_entries") or \
+        safe_call(lambda: getattr(game, "league", None),
+                  context="schedule/schedule_entries")
+    sched = safe_call(lambda: list(getattr(league, "schedule", None) or []), [],
+                      context="schedule/schedule_entries") or []
     for item in sched:
         try:
             if isinstance(item, tuple) and len(item) >= 3:
@@ -159,11 +164,16 @@ def _game_played_state(entry, game, by_date):
 def _load_games(game):
     """Full season schedule: past + future, with scores. Never raises."""
     gm = _resolve_gm(game)
-    user_team = safe_call(lambda: getattr(gm, "user_team", None)) or \
-        safe_call(lambda: getattr(game, "user_team", None))
-    my_name = safe_call(lambda: getattr(user_team, "team_name", ""), "") or ""
-    today = safe_call(lambda: getattr(gm, "current_date", None)) or \
-        safe_call(lambda: getattr(game, "current_date", None))
+    user_team = safe_call(lambda: getattr(gm, "user_team", None),
+                          context="schedule/load_games") or \
+        safe_call(lambda: getattr(game, "user_team", None),
+                  context="schedule/load_games")
+    my_name = safe_call(lambda: getattr(user_team, "team_name", ""), "",
+                        context="schedule/load_games") or ""
+    today = safe_call(lambda: getattr(gm, "current_date", None),
+                      context="schedule/load_games") or \
+        safe_call(lambda: getattr(game, "current_date", None),
+                  context="schedule/load_games")
     today_key = _date_key(today)
     by_date = _results_by_date(game)
 
@@ -223,16 +233,20 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
     """
     try:
         gm = _resolve_gm(game)
-        league = safe_call(lambda: getattr(gm, "league", None)) or \
-            safe_call(lambda: getattr(game, "league", None))
+        league = safe_call(lambda: getattr(gm, "league", None),
+                           context="schedule/sim_missed_game") or \
+            safe_call(lambda: getattr(game, "league", None),
+                      context="schedule/sim_missed_game")
         if league is None or not date_iso or not home_name or not away_name:
             return
         try:
             gdate = date.fromisoformat(str(date_iso)[:10])
         except Exception:
             return
-        today = safe_call(lambda: getattr(gm, "current_date", None)) or \
-            safe_call(lambda: getattr(game, "current_date", None))
+        today = safe_call(lambda: getattr(gm, "current_date", None),
+                          context="schedule/sim_missed_game") or \
+            safe_call(lambda: getattr(game, "current_date", None),
+                      context="schedule/sim_missed_game")
         try:
             today_key = today.date() if hasattr(today, "date") else today
         except Exception:
@@ -244,7 +258,7 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
             return
         # Find the scheduled entry and make sure it was never played.
         sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
-                      []) or []
+                      [], context="schedule/sim_missed_game") or []
         entry = None
         for item in sched:
             try:
@@ -279,7 +293,8 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
                     return
         except Exception:
             pass
-        teams = safe_call(lambda: list(getattr(league, "teams", None) or []), []) or []
+        teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
+                          [], context="schedule/sim_missed_game") or []
         home_team = next((t for t in teams
                           if _team_name(t) == home_name), None)
         away_team = next((t for t in teams
@@ -293,11 +308,23 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
         away_score = int(getattr(sim, "away_score", 0) or 0)
         winner = home_team if home_score > away_score else away_team
         notable = safe_call(lambda: list(getattr(sim, "notable_events", None) or []),
-                        []) or []
+                        [], context="schedule/sim_missed_game") or []
         went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
                       for e in notable)
         went_so = any(isinstance(e, dict) and e.get("period", 0) == 5
                       for e in notable)
+        # Game lines dressed for the box-score Lines tab -- canonical
+        # day-sim path stamps these via gm._snapshot_game_lines().
+        try:
+            _snap_lines = gm._snapshot_game_lines(home_team, away_team)
+        except Exception:
+            _snap_lines = None
+        # NEW-A6 TOI/fatigue snapshots, same as the day-sim batch path
+        # keeps for full-engine games.
+        try:
+            _toi, _fat = gm._snapshot_game_toi_fatigue(sim, home_team, away_team)
+        except Exception:
+            _toi, _fat = None, None
         game_result = {
             "date": gdate,
             "home_team": home_team,
@@ -306,24 +333,49 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
             "away_score": away_score,
             "winner": winner,
             "events": safe_call(lambda: list(getattr(sim, "game_log", None) or []),
-                            []) or [],
+                            [], context="schedule/sim_missed_game") or [],
             "notable_events": notable,
             "player_ratings": {},
             "event_log": safe_call(lambda: list(getattr(sim, "event_log", None) or []),
-                               []) or [],
+                               [], context="schedule/sim_missed_game") or [],
             "game_stats": safe_call(lambda: dict(getattr(sim, "game_stats", None) or {}),
-                                {}) or {},
+                                {}, context="schedule/sim_missed_game") or {},
             "team_stats": safe_call(lambda: dict(getattr(sim, "team_stats", None) or {}),
-                                {}) or {},
+                                {}, context="schedule/sim_missed_game") or {},
             "overtime": went_ot,
             "shootout": went_so,
+            # Post-game Lines tab: the combos actually dressed.
+            "lines": _snap_lines,
         }
+        if _toi is not None:
+            game_result["player_toi"] = _toi
+        if _fat is not None:
+            game_result["player_fatigue"] = _fat
+        # Career NHL GP credit -- the day-sim batch path credits every
+        # rostered player on both clubs for each completed game (waiver
+        # exemption input). GameSim.run() already flushed player season
+        # stats (goals/assists/shots/saves/...) so nothing else is derived.
+        try:
+            _credit = getattr(gm, "_credit_nhl_games_played", None)
+            if callable(_credit):
+                _credit(home_team, away_team, preseason=False)
+        except Exception:
+            pass
         # Record (keeps the derived indexes in sync when available).
         rec = getattr(game, "_record_game_result", None)
         if callable(rec):
             rec(game_result)
         else:
-            safe_call(lambda: getattr(game, "game_results", None).append(game_result))
+            safe_call(lambda: getattr(game, "game_results", None).append(game_result),
+                      context="schedule/sim_missed_game")
+        # Three stars -- canonical day-sim path records these right after
+        # _record_game_result for every regular-season game.
+        try:
+            import stars as _stars_mod
+            _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                        preseason=False, game_date=gdate)
+        except Exception:
+            pass
         # Stamp the schedule entry so the page shows Final.
         try:
             if isinstance(entry, dict):
@@ -378,6 +430,7 @@ class ScheduleScreen(BaseScreen):
     def _build_body(self):
         self._tab = "mine"   # 'mine' | 'league'
         self._month = "all"
+        self._team_query = ""  # lowercase substring matched vs home/away
         self._data = {"user_team": "", "months": [], "games": []}
 
         # Controls row
@@ -401,6 +454,14 @@ class ScheduleScreen(BaseScreen):
         self._month_combo.addItem("All", "all")
         self._month_combo.currentIndexChanged.connect(self._on_month_changed)
         controls.addWidget(self._month_combo)
+        controls.addSpacing(16)
+
+        controls.addWidget(QLabel("Team:"))
+        self._team_search = QLineEdit()
+        self._team_search.setPlaceholderText("Search team…")
+        self._team_search.setClearButtonEnabled(True)
+        self._team_search.textChanged.connect(self._on_team_search)
+        controls.addWidget(self._team_search)
 
         controls.addStretch()
         self._count_label = QLabel("")
@@ -454,7 +515,15 @@ class ScheduleScreen(BaseScreen):
             rows = [g for g in rows if g["is_user"]]
         if self._month != "all":
             rows = [g for g in rows if g["month"] == self._month]
+        q = (self._team_query or "").strip().lower()
+        if q:
+            rows = [g for g in rows
+                    if q in g["home"].lower() or q in g["away"].lower()]
         return rows
+
+    def _on_team_search(self, text):
+        self._team_query = text or ""
+        self._render()
 
     # -- render --------------------------------------------------------
 
