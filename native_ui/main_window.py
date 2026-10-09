@@ -51,18 +51,6 @@ def _team_abbr(team_name):
     return _TEAM_ABBR.get(team_name, team_name[:3].upper())
 
 
-def _standings_sort_key(t):
-    """Canonical standings sort key for Team objects.
-    
-    Matches the standings screen's tiebreak order: points desc, wins desc,
-    name asc (standings.py). Points = wins*2 + otl.
-    """
-    pts = (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
-    wins = getattr(t, "wins", 0) or 0
-    name = getattr(t, "team_name", "") or ""
-    return (-pts, -wins, name)
-
-
 class TopBar(QWidget):
     """Application header: brand + nav + inbox/save."""
 
@@ -798,27 +786,93 @@ class HubPage(QWidget):
             return False
         return True
 
-    def _sched_played(self, g):
-        """Check if a schedule entry is completed.
-        
-        A game is completed if it was normally played OR if it was watched
-        (watched games are skipped by day-sim, so they're complete for
-        schedule purposes).
-        """
-        played = bool(self._game_val(g, "played", default=False))
-        watched = bool(self._game_val(g, "watched", default=False))
-        return played or watched
-
-    def _sched_scores(self, g):
-        """Return (home_score, away_score) or (None, None) if not played."""
-        hs = self._game_val(g, "home_score", default=None)
-        aws = self._game_val(g, "away_score", default=None)
-        if hs is None or aws is None:
-            return None, None
+    @staticmethod
+    def _norm_date(d):
+        """Normalize a date/datetime to a plain date for comparisons."""
         try:
-            return int(hs), int(aws)
+            return d.date() if hasattr(d, "date") else d
         except Exception:
-            return None, None
+            return d
+
+    def _match_result(self, g, game=None, gm=None):
+        """Authoritative result record for a schedule entry.
+
+        Canonical join: the sim engine never sets a 'played' flag (or
+        scores) on raw league.schedule entries, so completion and scores
+        come from joining gm.game_results by date + matchup -- the same
+        join _game_played_state uses in native_ui/screens/schedule.py.
+        Returns the result dict, or None when the game is unplayed.
+        """
+        try:
+            results = (getattr(game, "game_results", None)
+                       or getattr(gm, "game_results", None)) or []
+            if not results:
+                return None
+            key = self._norm_date(self._sched_date(g))
+            home, away = self._sched_teams(g)
+            for r in results:
+                try:
+                    if not isinstance(r, dict):
+                        continue
+                    if self._norm_date(r.get("date")) != key:
+                        continue
+                    if self._team_name_of(r.get("home_team")) != home:
+                        continue
+                    if self._team_name_of(r.get("away_team")) != away:
+                        continue
+                    return r
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _sched_played(self, g, game=None, gm=None):
+        """Check if a schedule entry is completed.
+
+        Canonical check: join against the result record by date + matchup
+        (_match_result). The raw entry's 'played' flag is never set by the
+        sim engine, so reading the flag alone leaves completed games in
+        "upcoming". Watched games count as complete too: watch.py marks
+        the entry 'watched' and records its result in game_results.
+        """
+        if bool(self._game_val(g, "played", default=False)):
+            return True
+        if bool(self._game_val(g, "watched", default=False)):
+            return True
+        return self._match_result(g, game, gm) is not None
+
+    def _sched_scores(self, g, game=None, gm=None):
+        """Return (home_score, away_score, overtime, shootout).
+
+        Canonical: join against the authoritative result record so
+        day-simmed games appear in hub Results with the scores and OT
+        metadata the engine recorded. Falls back to scores stamped on the
+        entry itself (watched_home_score/watched_away_score from the watch
+        screen; entry 'overtime'/'went_to_ot'/'shootout' flags) when no
+        result record exists. (None, None, False, False) if unplayed.
+        """
+        def _to_int(v):
+            try:
+                return int(v)
+            except Exception:
+                return None
+        r = self._match_result(g, game, gm)
+        if r is not None:
+            hs = _to_int(r.get("home_score"))
+            aws = _to_int(r.get("away_score"))
+            if hs is not None and aws is not None:
+                return (hs, aws, bool(r.get("overtime")),
+                        bool(r.get("shootout")))
+        hs = _to_int(self._game_val(g, "home_score", "watched_home_score",
+                                    default=None))
+        aws = _to_int(self._game_val(g, "away_score", "watched_away_score",
+                                     default=None))
+        if hs is None or aws is None:
+            return None, None, False, False
+        ot = bool(self._game_val(g, "overtime", "went_to_ot", default=False))
+        so = bool(self._game_val(g, "shootout", default=False))
+        return hs, aws, ot, so
 
     def _pstat(self, p, field, default=0):
         """Authoritative season stat for a player.
@@ -887,6 +941,29 @@ class HubPage(QWidget):
             team_name = getattr(team, "team_name", "") or ""
             primary, deep, soft, wash, glow = self._team_colors(team_name)
 
+            # Canonical standings data for the hub: the engine's
+            # league.standings table (Points = 2*W + 1*OTL), built and
+            # sorted exactly like the standings screen (_rich_team_rows +
+            # _apply_standings_sort). Team attributes are only a fallback:
+            # Team.update_record tracks OT losses in `ot_losses` (there is
+            # no Team.otl), so the old `wins*2 + otl` math silently dropped
+            # every OTL point from the hub record/rank/points.
+            div_rows = []
+            my_row = None
+            try:
+                from native_ui.screens.standings import (
+                    _apply_standings_sort, _rich_team_rows)
+                _all_rows, _ = _rich_team_rows(game)
+                my_row = next((r for r in _all_rows
+                               if r["name"] == team_name), None)
+                _division = getattr(team, "division", "") or ""
+                div_rows = _apply_standings_sort(
+                    [r for r in _all_rows
+                     if _division and r["division"] == _division],
+                    "Points")
+            except Exception:
+                div_rows = []
+
             # ---- team theming ----
             self.eyebrow.setStyleSheet(
                 "font-size: 12px; font-weight: 800; letter-spacing: 3px; "
@@ -910,9 +987,13 @@ class HubPage(QWidget):
 
             # ---- header ----
             self.team_label.setText(team_name.upper())
-            wins = getattr(team, "wins", 0) or 0
-            losses = getattr(team, "losses", 0) or 0
-            otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
+            if my_row is not None:
+                # Canonical record from the engine's standings table.
+                wins, losses, otl = my_row["w"], my_row["l"], my_row["otl"]
+            else:
+                wins = getattr(team, "wins", 0) or 0
+                losses = getattr(team, "losses", 0) or 0
+                otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
             self.record_label.setText("%d-%d-%d" % (wins, losses, otl))
 
             try:
@@ -948,17 +1029,14 @@ class HubPage(QWidget):
             self._strip["record"]._sub.setText("%d GP" % gp)
 
             division = getattr(team, "division", "") or ""
-            div_teams = []
             try:
-                league = getattr(game, "league", None) or getattr(gm, "league", None)
-                if league and division:
-                    div_teams = [t for t in (getattr(league, "teams", []) or [])
-                                 if getattr(t, "division", "") == division]
-
-                    # Use canonical standings sort (points desc, wins desc, name asc).
-                    div_teams.sort(key=_standings_sort_key)
-                rank = next((i + 1 for i, t in enumerate(div_teams) if t is team), None)
-                pts = wins * 2 + otl
+                # Canonical division rank: div_rows are built and sorted by
+                # the standings screen's own machinery (points desc, wins
+                # desc, name asc). Points come straight from the engine's
+                # standings table (2*W + 1*OTL) -- no local formula.
+                rank = next((i + 1 for i, r in enumerate(div_rows)
+                             if r["name"] == team_name), None)
+                pts = my_row["pts"] if my_row is not None else wins * 2 + otl
                 self._strip["points"]._val.setText(str(pts))
                 if rank:
                     suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
@@ -1077,7 +1155,7 @@ class HubPage(QWidget):
                         if today is not None and gd < today:
                             continue
                         if (today is not None and gd == today
-                                and self._sched_played(g)):
+                                and self._sched_played(g, game, gm)):
                             continue
                         home, away = self._sched_teams(g)
                         if team_name and team_name in (home, away):
@@ -1117,7 +1195,7 @@ class HubPage(QWidget):
                 pass
 
             # ---- panels ----
-            self._fill_standings(div_teams, team, division, primary, wash)
+            self._fill_standings(div_rows, team_name, division, primary, wash)
             self._fill_leaders(team)
             self._fill_form(team, gm)
             # Batch D: the 7 HTML panels the native hub was missing
@@ -1198,7 +1276,14 @@ class HubPage(QWidget):
             " background: transparent;")
         panel._body.addWidget(venue)
 
-    def _fill_standings(self, div_teams, team, division, primary, wash):
+    def _fill_standings(self, div_rows, team_name, division, primary, wash):
+        """Division standings mini-panel from canonical standings rows.
+
+        div_rows are the canonical row dicts from _rich_team_rows
+        (native_ui/screens/standings.py), already sorted by the canonical
+        sorter: points desc, wins desc, name asc. PTS/W/L/OTL come from the
+        engine's standings table (Points = 2*W + 1*OTL).
+        """
         panel = self.panel_stand
         panel._head.setText(
             ("%s DIVISION" % division.upper()) if division else "DIVISION STANDINGS")
@@ -1207,7 +1292,7 @@ class HubPage(QWidget):
             " color: #ffffff; background: #0e1626; padding: 8px 12px;"
             " border-bottom: 2px solid %s;" % primary)
         self._clear_panel(panel)
-        if not div_teams:
+        if not div_rows:
             e = QLabel("No standings data")
             e.setStyleSheet("color: #6b7280; font-size: 12px; background: transparent;")
             panel._body.addWidget(e)
@@ -1222,14 +1307,14 @@ class HubPage(QWidget):
                 " background: transparent;")
             l.setAlignment(Qt.AlignLeft if j == 1 else Qt.AlignRight)
             grid.addWidget(l, 0, j)
-        for i, t in enumerate(div_teams[:8]):
-            w = getattr(t, "wins", 0) or 0
-            lv = getattr(t, "losses", 0) or 0
-            o = getattr(t, "otl", 0) or 0
-            pts = w * 2 + o
-            tn = getattr(t, "team_name", "?") or "?"
+        for i, r in enumerate(div_rows[:8]):
+            w = r["w"]
+            lv = r["l"]
+            o = r["otl"]
+            pts = r["pts"]
+            tn = r["name"] or "?"
             abbr = _team_abbr(tn)
-            me = (t is team)
+            me = (tn == team_name)
             vals = [str(i + 1), "%s  %s" % (abbr, tn),
                     str(w), str(lv), str(o), str(pts)]
             for j, v in enumerate(vals):
@@ -1381,7 +1466,7 @@ class HubPage(QWidget):
                     opp = away if home == team_name else home
                     opp_abbr = self._team_abbr(opp)
                     where = "vs" if home == team_name else "at"
-                    hs, aws = self._sched_scores(g)
+                    hs, aws, _ot, _so = self._sched_scores(g, game, gm)
                     if hs is None:
                         upcoming.append((gd, ds, where, opp_abbr))
                     else:
@@ -1389,10 +1474,10 @@ class HubPage(QWidget):
                         theirs = aws if home == team_name else hs
                         # OTL is determined by the game going to overtime/
                         # shootout, not by score margin (a 1-goal regulation
-                        # loss is a regulation loss).
-                        went_ot = bool(
-                            self._game_val(g, "overtime", "went_to_ot",
-                                           "shootout", default=False))
+                        # loss is a regulation loss). OT metadata comes from
+                        # the authoritative result record, not the schedule
+                        # entry.
+                        went_ot = bool(_ot or _so)
                         if mine > theirs:
                             wl = "W"
                         elif went_ot:
@@ -1726,11 +1811,14 @@ class HubPage(QWidget):
                         gd = self._sched_date(g)
                         if gd is None:
                             continue
-                        # date-driven: a game is played once its date has passed
-                        if self._game_val(g, "played", default=None) is not None:
-                            if not self._sched_played(g):
-                                continue
-                        elif today is not None and gd > today:
+                        # date-driven: a game dated after today isn't played; a
+                        # game on/before today is played iff it has a recorded
+                        # result. The raw entry's 'played' flag is dead (the
+                        # sim never sets it), so the canonical results join
+                        # decides -- unplayed past games show no fake FINAL.
+                        if today is not None and gd > today:
+                            continue
+                        if not self._sched_played(g, game, gm):
                             continue
                         played.append((gd, g))
                     except Exception:
@@ -1738,8 +1826,9 @@ class HubPage(QWidget):
                 played.sort(key=lambda x: x[0])
                 for _, g in played[-15:]:
                     home, away = self._sched_teams(g)
-                    hs = self._game_val(g, "home_score", "home_goals", default=0)
-                    aws = self._game_val(g, "away_score", "away_goals", default=0)
+                    hs, aws, _ot, _so = self._sched_scores(g, game, gm)
+                    hs = 0 if hs is None else hs
+                    aws = 0 if aws is None else aws
                     items.append("FINAL: %s %s - %s %s" % (away, aws, home, hs))
             except Exception:
                 pass
@@ -2048,10 +2137,13 @@ class MainWindow(QMainWindow):
     def show_screen(self, name):
         """Navigate to a registered screen, instantiating on first use."""
         # Keep the topbar selection in sync with direct navigation.
+        # Always call set_active: _section_for_screen returns None for
+        # section-less screens (hub, roster, inbox, lines), and
+        # set_active(None) unchecks every button, so a section-less
+        # screen never leaves a stale topbar selection behind.
         try:
-            section = self._section_for_screen(name)
-            if section is not None and hasattr(self, "topbar"):
-                self.topbar.set_active(section)
+            if hasattr(self, "topbar"):
+                self.topbar.set_active(self._section_for_screen(name))
         except Exception:
             pass
         if name in self._screens:
