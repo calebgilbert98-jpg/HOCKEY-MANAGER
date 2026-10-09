@@ -18,7 +18,7 @@ Fix `native_ui/screens/watch.py` per Copilot audit.
 ```python
 if isinstance(entry, dict):
     entry["watched"] = True
-# Result recording and standings update follow.
+# Tuple entries are skipped by the watched-marker loop.
 rec = getattr(game, "_record_game_result", None)
 if callable(rec):
     rec(result)
@@ -45,7 +45,8 @@ Fix `native_ui/screens/waivers.py` per Copilot audit.
 **Current code:**
 ```python
 player.user_claim_pending = True
-return True, f"Waiver claim submitted for {pname}..."
+return True, (f"Waiver claim submitted for {pname}. It will be "
+              f"processed at the next waiver run in priority order.")
 ```
 
 **Root cause:** The UI writes only host claim state instead of using the engine's canonical host/multiplayer submission API.
@@ -130,12 +131,16 @@ Fix `native_ui/screens/schedule.py` per Copilot audit.
 
 **Current code:**
 ```python
-"player_ratings": {},
-...
-rec = getattr(game, "_record_game_result", None)
-if callable(rec):
-    rec(game_result)
-# standings update is applied separately
+game_result = {
+    "date": gdate,
+    "home_team": home_team,
+    "away_team": away_team,
+    "home_score": home_score,
+    "away_score": away_score,
+    "player_ratings": {},
+    "overtime": went_ot,
+    "shootout": went_so,
+}
 ```
 
 **Root cause:** Schedule UI maintains a partial postgame path and the League tab exposes only month/team-user filters.
@@ -212,8 +217,12 @@ Fix `.github/workflows/build-native.yml` per Copilot audit.
 
 **Current code:**
 ```python
-if missing_source_modules:
-    # inspect TOC here; packaged-module check is conditional
+if found != expected_set:
+    bundled = set(pkg_archive_contents(exe_path, recursive=True))
+    for entry in bundled:
+        if entry.startswith("native_ui.screens."):
+            pyz_screens.add(entry.rsplit(".", 1)[-1])
+# unexpected = sorted(pyz_screens - expected_set)
 ```
 
 **Root cause:** Source and packaged manifest checks are not independent.
@@ -236,8 +245,11 @@ Fix `native_ui/screens/contract_negotiation.py` per Copilot audit.
 
 **Current code:**
 ```python
-# ELC clause control remains visible
-# offer seeding still contains hardcoded term/AAV caps
+self._clause_combo.addItems(
+    ["None", "No-Trade Clause (NTC)", "No-Movement Clause (NMC)"])
+form.addRow("Clause:", self._clause_combo)
+self._aav_spin.setValue(min(15.0, aav))
+self._years_slider.setValue(max(1, min(7, years)))
 ```
 
 **Root cause:** UI options and seed values are not fully aligned with canonical offer validation.
@@ -250,6 +262,8 @@ Fix `native_ui/screens/contract_negotiation.py` per Copilot audit.
 
 ### `native_ui/main_window.py` — Minor
 
+**DO THIS AFTER:** Agree on the canonical schedule/result metadata contract with `native_ui/screens/schedule.py` and `native_ui/screens/watch.py`.
+
 Fix `native_ui/main_window.py` per Copilot audit.
 
 **File:** `native_ui/main_window.py` (YOU OWN THIS FILE - no other agent is editing it)
@@ -260,9 +274,14 @@ Fix `native_ui/main_window.py` per Copilot audit.
 
 **Current code:**
 ```python
-# _sched_played checks entry["played"] only
-# hub locally recreates standings ordering and reads schedule metadata directly
-# show_screen leaves prior selection for unmapped screens
+def _sched_played(self, g):
+    return bool(self._game_val(g, "played", default=False))
+
+def _section_for_screen(cls, screen_name):
+    for section, screen in cls._SECTION_MAP.items():
+        if screen == screen_name:
+            return section
+    return None
 ```
 
 **Root cause:** Hub, schedule, and navigation independently derive state and duplicate policy.
@@ -286,8 +305,11 @@ Fix `native_ui/screens/trade_block.py` per Copilot audit.
 **Current code:**
 ```python
 def _on_negotiate(self):
-    row = self._interest_row()
-    ...
+    r = self._interest_row()
+    if r is None:
+        QMessageBox.information(self, "Negotiate",
+                                "Select an interest row first.")
+        return
 ```
 
 **Root cause:** One handler assumes all callers originate in the Interest tab.
@@ -311,7 +333,14 @@ Fix `native_ui/widgets/context_menu.py` per Copilot audit.
 **Current code:**
 ```python
 main_window.show_screen("trades")
-screen.set_teams(..., selected_player=player)
+screen = main_window._screens.get("trades")
+widget = (screen.widget() if screen and hasattr(screen, "widget")
+          else screen)
+setter = getattr(widget, "set_teams", None) if widget else None
+if not callable(setter):
+    raise RuntimeError("trade screen has no set_teams deep-link")
+pid = str(getattr(player, "id", "") or "") if player is not None else None
+setter(team_name or "", pid or "")
 ```
 
 **Root cause:** Context preselection does not distinguish user-side assets from eligible opponent partners.
@@ -323,6 +352,8 @@ screen.set_teams(..., selected_player=player)
 **Follow dev process:** 3 reviewers, integration check, commit and push to `native-ui` when done.
 
 ### `puck_dynasty_native.py` — Minor
+
+**DO THIS AFTER:** `requirements.txt` dependency-file choice is confirmed.
 
 Fix `puck_dynasty_native.py` per Copilot audit.
 
@@ -339,7 +370,7 @@ Fix `puck_dynasty_native.py` per Copilot audit.
 
 **Root cause:** The documented dependency filename does not exist.
 
-**Fix:** **DO THIS AFTER:** `requirements.txt`. Use the actual selected dependency file or add the documented native file and maintain it; keep PySide6 aligned with the native build workflow.
+**Fix:** Use the actual selected dependency file or add the documented native file and maintain it; keep PySide6 aligned with the native build workflow.
 
 **Verify:** Confirm the named file exists, install it in a clean environment, and run `python3 -c "import PySide6; import native_ui.main_window"`.
 
@@ -357,13 +388,17 @@ Fix `native_ui/screens/systems_discipline.py` per Copilot audit.
 
 **Current code:**
 ```python
-from .systems_common import (..., add_scroll_content)
-# _build_body calls systems_nav_bar(self)
+from .systems_common import (league_of, tone_color, explainer_label,
+                             section_title, no_game_label, clear_layout,
+                             player_name, add_scroll_content)
+
+def _build_body(self):
+    self._layout.addLayout(systems_nav_bar(self))
 ```
 
 **Root cause:** Scroll refactor omitted a distinct navigation helper import.
 
-**Fix:** **DO THIS AFTER:** `native_ui/screens/systems_common.py` (coordinate the shared API across the three Systems screens). Import `systems_nav_bar` from `.systems_common`.
+**Fix:** Import `systems_nav_bar` from `.systems_common`. Coordinate the import fix with the other two Systems screen owners and keep the shared navigation API unchanged.
 
 **Verify:** Compile and instantiate this screen; confirm nav bar and scroll content both render.
 
@@ -381,13 +416,13 @@ Fix `native_ui/screens/systems_condition.py` per Copilot audit.
 
 **Current code:**
 ```python
-from .systems_common import (..., add_scroll_content)
-# _build_body calls systems_nav_bar(self)
+self._layout.addLayout(systems_nav_bar(self))
+self._content = add_scroll_content(self)
 ```
 
 **Root cause:** Scroll refactor omitted a distinct navigation helper import.
 
-**Fix:** **DO THIS AFTER:** `native_ui/screens/systems_common.py` (coordinate the shared API across the three Systems screens). Import `systems_nav_bar` from `.systems_common`.
+**Fix:** Import `systems_nav_bar` from `.systems_common`. Coordinate the import fix with the other two Systems screen owners and keep the shared navigation API unchanged.
 
 **Verify:** Compile and instantiate this screen; confirm nav bar and scroll content both render.
 
@@ -405,13 +440,13 @@ Fix `native_ui/screens/systems_circumstance.py` per Copilot audit.
 
 **Current code:**
 ```python
-from .systems_common import (..., add_scroll_content)
-# _build_body calls systems_nav_bar(self)
+self._layout.addLayout(systems_nav_bar(self))
+self._content = add_scroll_content(self)
 ```
 
 **Root cause:** Scroll refactor omitted a distinct navigation helper import.
 
-**Fix:** **DO THIS AFTER:** `native_ui/screens/systems_common.py` (coordinate the shared API across the three Systems screens). Import `systems_nav_bar` from `.systems_common`.
+**Fix:** Import `systems_nav_bar` from `.systems_common`. Coordinate the import fix with the other two Systems screen owners and keep the shared navigation API unchanged.
 
 **Verify:** Compile and instantiate this screen; confirm nav bar and scroll content both render.
 
@@ -430,8 +465,9 @@ Fix `native_ui/screens/inbox.py` per Copilot audit.
 **Current code:**
 ```python
 def _all_messages(game):
-    return safe_call(lambda: list(...), []) or []
-# handler interprets an empty result as "No unread messages."
+    return safe_call(lambda: list(getattr(inbox, "messages", None) or []),
+                     []) or []
+# Handler interprets [] as "No unread messages."
 ```
 
 **Root cause:** Fail-soft fallback conflates retrieval failure with valid empty data; UI toggle has no accessible state.
@@ -455,7 +491,9 @@ Fix `native_ui/screens/scouting.py` per Copilot audit.
 **Current code:**
 ```python
 prospects = prospects[:MAX_ASSIGNMENT_PROSPECTS]
-# assignment selector is a flat combo with no search/count
+for p in prospects[:MAX_ASSIGNMENT_PROSPECTS]:
+    self._prospect_combo.addItem(
+        f"{p.full_name} ({_pos_str(p)}, {_overall(p)} OVR)", p)
 ```
 
 **Root cause:** Named cap still silently excludes players; assignment UI and body remain difficult to discover/test.
@@ -478,7 +516,9 @@ Fix `native_ui/screens/trades.py` per Copilot audit.
 
 **Current code:**
 ```python
-# labels at 1031–1041 report retention slots, not selected trade assets
+fresh = sum(1 for v in self._retention.values() if v > 0)
+used = self._slots_used + fresh
+self._slots_lbl.setText(f"Retention: {used}/{self._slots_max} slots")
 ```
 
 **Root cause:** The visible counts represent a different concept than checked trade assets.
@@ -501,7 +541,9 @@ Fix `native_ui/screens/free_agents.py` per Copilot audit.
 
 **Current code:**
 ```python
-# counter/pending result launches another dialog and closes the offer panel
+elif status in ("countered", "awaiting_agent"):
+    self.negotiation_requested.emit(self._pid)
+    self.accept()
 ```
 
 **Root cause:** Result classification and UI lifetime are split across dialogs; UI builders/actions are monolithic.
@@ -513,6 +555,8 @@ Fix `native_ui/screens/free_agents.py` per Copilot audit.
 **Follow dev process:** 3 reviewers, integration check, commit and push to `native-ui` when done.
 
 ### `native_ui/screens/contracts.py` — Minor
+
+**DO THIS AFTER:** `native_ui/screens/contract_negotiation.py` establishes the shared outcome classifier.
 
 Fix `native_ui/screens/contracts.py` per Copilot audit.
 
@@ -529,7 +573,7 @@ Fix `native_ui/screens/contracts.py` per Copilot audit.
 
 **Root cause:** Extension flows were not migrated to the common classifier.
 
-**Fix:** **DO THIS AFTER:** `native_ui/screens/contract_negotiation.py`. Import/use the shared status classifier/text map for all extension results; do not call an offer “Signed” before confirmed acceptance.
+**Fix:** Import/use the shared status classifier/text map for all extension results; do not call an offer “Signed” before confirmed acceptance.
 
 **Verify:** Test accepted, countered, consideration, awaiting, and rejected outcomes and compare wording/status to the negotiation screen.
 
@@ -547,7 +591,8 @@ Fix `native_ui/screens/draft_central.py` per Copilot audit.
 
 **Current code:**
 ```python
-# opens Trades but carries no current-pick context
+def _open_trade_center(self):
+    self._navigate("trades")
 ```
 
 **Root cause:** Button label and destination do not match an initialized trade-up flow.
@@ -570,7 +615,7 @@ Fix `native_ui/screens/standings.py` per Copilot audit.
 
 **Current code:**
 ```python
-return safe_call(operation, default)  # no operation context
+return safe_call(lambda: gm.league)
 ```
 
 **Root cause:** Helper consolidation was not followed by diagnostic context at operation boundaries.
@@ -593,7 +638,7 @@ Fix `native_ui/screens/finances.py` per Copilot audit.
 
 **Current code:**
 ```python
-return safe_call(operation, default)  # no operation context
+pos = safe_call(lambda: getattr(p, "primary_position", ""), "")
 ```
 
 **Root cause:** Helper consolidation was not followed by diagnostic context at operation boundaries.
@@ -616,7 +661,8 @@ Fix `native_ui/screens/draft.py` per Copilot audit.
 
 **Current code:**
 ```python
-return safe_call(operation, default)  # no operation context
+return (safe_call(lambda: gm.user_team)
+        or safe_call(lambda: getattr(game, "user_team", None)))
 ```
 
 **Root cause:** Helper consolidation was not followed by diagnostic context at operation boundaries.

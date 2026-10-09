@@ -11,7 +11,7 @@ This follow-up consolidates `AUDIT_FINDINGS_2026-10-08.md` (32 issues), `AUDIT_Q
 - Missing: 2
 - Better: 0
 - Regressions: 3
-- Additional issue: 1 (also reflected in the launcher finding below)
+- Additional issue: 1 (mark-all-read retrieval failure can masquerade as an empty inbox)
 
 The verified open work is detailed below. Severity is carried forward from the originating audit; regression-only items are Major unless stated otherwise.
 
