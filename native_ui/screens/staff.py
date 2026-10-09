@@ -230,7 +230,16 @@ class StaffScreen(BaseScreen):
         count = len(self._staff)
         self._count_label.setText(
             f"{count} staff member{'s' if count != 1 else ''}")
-        lay.addWidget(self._count_label)
+        header = QHBoxLayout()
+        header.addWidget(self._count_label)
+        header.addStretch()
+        hire_btn = QPushButton("Hire Staff")
+        hire_btn.setObjectName("primary-btn")
+        hire_btn.setCursor(Qt.PointingHandCursor)
+        hire_btn.setToolTip("Open the free-agent staff market")
+        hire_btn.clicked.connect(self._open_hire_staff)
+        header.addWidget(hire_btn)
+        lay.addLayout(header)
         if not count:
             empty = QLabel("No staff on the team.")
             empty.setStyleSheet("color: #6b7488; font-size: 14px;")
@@ -913,6 +922,29 @@ class StaffScreen(BaseScreen):
         table.setMaximumHeight(30 * len(terms) + 36)
         v.addWidget(table)
         return card
+
+    def _open_hire_staff(self):
+        """Jump to the Free Agents screen with the Staff tab selected.
+
+        Mainline parity: Staff Management's 'Hire Staff' tab redirected to
+        the Free Agency staff page (staff_management_window
+        _redirect_to_free_agency). The native free-agent staff market handles
+        search, department filter, offer dialog, acceptance roll, and
+        game_manager.sign_free_agent_staff. Never raises.
+        """
+        try:
+            mw = self.main_window
+            if mw is None:
+                return
+            mw.show_screen("free_agents")
+            scroll = (mw._screens.get("free_agents")
+                      if hasattr(mw, "_screens") else None)
+            inner = (scroll.widget() if scroll is not None
+                     and hasattr(scroll, "widget") else None)
+            if inner is not None and hasattr(inner, "show_staff_tab"):
+                inner.show_staff_tab()
+        except Exception as e:
+            print(f"[staff] hire-staff navigation failed: {e}")
 
     def _open_staff_detail(self, staff):
         """Open the staff detail screen for one staffer."""
