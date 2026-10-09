@@ -172,6 +172,13 @@ class EntityContextMenu(QMenu):
 
         Uses the screen's set_teams deep-link so the clicked entity is
         preselected instead of forcing the user to find it again.
+
+        Own-team guard (verification-audit MISSING item): a player on
+        the user's own club is placed on the GIVE side of the trade --
+        never set as the partner / wanted asset, which would build an
+        invalid trade against your own team. The same applies when the
+        menu is opened on the user's own team: no partner is
+        preselected, since trading with yourself is not possible.
         """
         try:
             main_window.show_screen("trades")
@@ -181,14 +188,77 @@ class EntityContextMenu(QMenu):
             setter = getattr(widget, "set_teams", None) if widget else None
             if not callable(setter):
                 raise RuntimeError("trade screen has no set_teams deep-link")
-            pid = None
+
+            game = getattr(main_window, "game", None)
+            user_team = getattr(game, "user_team", None) if game else None
+            user_team_name = str(
+                getattr(user_team, "team_name", "") or "").strip()
+
+            def _is_own_team(name):
+                return bool(name) and str(name).strip() == user_team_name \
+                    and bool(user_team_name)
+
             if player is not None:
+                player_team = str(
+                    getattr(player, "team_name", "") or "").strip()
                 pid = str(getattr(player, "id", "") or "")
-            setter(team_name or "", pid or "")
+                if not player_team or player_team == "Free Agent":
+                    name = (getattr(player, "full_name", None)
+                            or getattr(player, "name", None)
+                            or "This player")
+                    QMessageBox.warning(
+                        main_window, "Cannot trade",
+                        f"{name} isn't on a team roster (unsigned or free "
+                        "agent). Trades can only involve players under "
+                        "contract with a club -- pick a player on a team's "
+                        "roster instead.")
+                    return
+                if _is_own_team(player_team):
+                    # Own-team player: never the partner/wanted side.
+                    EntityContextMenu._preselect_give_player(widget, pid)
+                    return
+                setter(team_name or "", pid or "")
+            else:
+                if _is_own_team(team_name):
+                    # Own club can't be the trade partner -- leave the
+                    # partner selector empty so the user picks a real team.
+                    return
+                setter(team_name or "", "")
         except Exception as exc:
             QMessageBox.warning(
                 main_window, "Could not open trade proposal",
                 f"The trade screen could not preload this selection: {exc}")
+
+    @staticmethod
+    def _preselect_give_player(widget, pid):
+        """Preselect an own-team player on the user's (give) side of the
+        trade screen.
+
+        set_teams() has no give-side player parameter -- it only knows
+        the partner/want side -- so the pid is added to the screen's
+        give set and the same render pipeline set_teams uses is run.
+        Never raises; a missed preselect is cosmetic, not an error.
+        """
+        try:
+            if not pid or widget is None:
+                return
+            my_pids = {str(getattr(p, "id", "") or "")
+                       for p, _ in (getattr(widget, "_my_players", None)
+                                     or [])}
+            if pid not in my_pids:
+                return
+            give_pids = getattr(widget, "_give_pids", None)
+            if not isinstance(give_pids, set):
+                return
+            give_pids.add(pid)
+            for meth in ("_prune_terms", "_render_asset_lists",
+                         "_update_slot_labels", "_render_terms",
+                         "_schedule_evaluate"):
+                fn = getattr(widget, meth, None)
+                if callable(fn):
+                    fn()
+        except Exception as exc:
+            print(f"[ctx] give-side preselect failed: {exc}")
 
     @staticmethod
     def _open_staff_detail(main_window, staff):
