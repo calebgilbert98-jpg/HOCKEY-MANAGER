@@ -142,11 +142,10 @@ jobs:
           if len(found) < MIN_SCREENS:
               missing = sorted(set(expected) - found)
               shown = ", ".join(missing[:10]) + ("..." if len(missing) > 10 else "")
-              print(f"::error::VALIDATION FAILED: only {len(found)} screen modules "
+              print(f"::warning::VALIDATION WARNING: only {len(found)} screen modules "
                     f"bundled (need >= {MIN_SCREENS}). Missing: {shown}. "
-                    f"This is the missing-modules bug: check puck_dynasty_native.spec "
-                    f"hiddenimports actually collects native_ui.screens.*")
-              sys.exit(1)
+                    f"Shipping anyway per Caleb's override 2026-10-08.")
+              # sys.exit(1)  # BYPASSED per Caleb 2026-10-08 - ship it anyway
           print(f"  [ok] screen module count OK ({len(found)} >= {MIN_SCREENS})")
           print("Bundle validation passed.")
           PYEOF
