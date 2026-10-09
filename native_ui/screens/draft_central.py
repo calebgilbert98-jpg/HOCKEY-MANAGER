@@ -62,7 +62,9 @@ class DraftCentralScreen(BaseScreen):
         self._btn_board.clicked.connect(lambda: self._navigate("draft"))
         head.addWidget(self._btn_board)
         self._btn_trade = QPushButton("Trade This Pick")
-        self._btn_trade.clicked.connect(lambda: self._navigate("draft"))
+        self._btn_trade.setToolTip(
+            "Open the Trade Center to shop this pick")
+        self._btn_trade.clicked.connect(self._open_trade_center)
         head.addWidget(self._btn_trade)
         self._btn_scout = QPushButton("Scouting Department")
         self._btn_scout.clicked.connect(lambda: self._navigate("scouting"))
@@ -148,6 +150,14 @@ class DraftCentralScreen(BaseScreen):
                 fn(name)
             except Exception:
                 pass
+
+    def _open_trade_center(self):
+        """Open the Trade Center for pick trading.
+
+        The draft screen's war room doesn't handle pick trades; the
+        Trade Center is the real trade flow.
+        """
+        self._navigate("trades")
 
     @staticmethod
     def _clear(layout):

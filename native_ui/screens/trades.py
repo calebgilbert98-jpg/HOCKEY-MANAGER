@@ -606,11 +606,21 @@ class TradesScreen(BaseScreen):
         self._partner_name_lbl.setStyleSheet("color: #8b95ab;")
         get_l.addWidget(self._partner_name_lbl)
         get_l.addWidget(QLabel("Players — click to add"))
+        self._get_player_search = QLineEdit()
+        self._get_player_search.setPlaceholderText("Filter players…")
+        self._get_player_search.textChanged.connect(
+            self._render_asset_lists)
+        get_l.addWidget(self._get_player_search)
         self._get_players = QListWidget()
         self._get_players.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "want"))
         get_l.addWidget(self._get_players, 1)
         get_l.addWidget(QLabel("Draft picks"))
+        self._get_pick_search = QLineEdit()
+        self._get_pick_search.setPlaceholderText("Filter picks…")
+        self._get_pick_search.textChanged.connect(
+            self._render_asset_lists)
+        get_l.addWidget(self._get_pick_search)
         self._get_picks = QListWidget()
         self._get_picks.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "want"))
@@ -622,11 +632,21 @@ class TradesScreen(BaseScreen):
         self._my_name_lbl.setStyleSheet("color: #8b95ab;")
         give_l.addWidget(self._my_name_lbl)
         give_l.addWidget(QLabel("Players — click to add"))
+        self._give_player_search = QLineEdit()
+        self._give_player_search.setPlaceholderText("Filter players…")
+        self._give_player_search.textChanged.connect(
+            self._render_asset_lists)
+        give_l.addWidget(self._give_player_search)
         self._give_players = QListWidget()
         self._give_players.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "give"))
         give_l.addWidget(self._give_players, 1)
         give_l.addWidget(QLabel("Draft picks"))
+        self._give_pick_search = QLineEdit()
+        self._give_pick_search.setPlaceholderText("Filter picks…")
+        self._give_pick_search.textChanged.connect(
+            self._render_asset_lists)
+        give_l.addWidget(self._give_pick_search)
         self._give_picks = QListWidget()
         self._give_picks.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "give"))
@@ -907,10 +927,11 @@ class TradesScreen(BaseScreen):
                + (f"  {tag_txt}" if tag_txt else ""))
         return txt, name
 
-    def _fill_list(self, widget, items, kind, selected):
+    def _fill_list(self, widget, items, kind, selected, query=""):
         self._updating = True
         try:
             widget.clear()
+            q = (query or "").strip().lower()
             if kind == "player":
                 items = sorted(items, key=lambda pl: -_player_ovr(pl[0]))
             else:
@@ -919,6 +940,17 @@ class TradesScreen(BaseScreen):
                     key=lambda pk: (
                         safe_call(lambda: int(getattr(pk, "year", 0) or 0), 0),
                         safe_call(lambda: int(getattr(pk, "round", 0) or 0), 0)))
+            # Apply text filter; checked items always stay visible so
+            # selections survive filtering.
+            if q:
+                filtered = []
+                for obj, level in ([(o, l) for o, l in items]
+                                   if kind == "player"
+                                   else [(o, "") for o in items]):
+                    txt, _name = self._asset_text(obj, kind, level)
+                    if q in txt.lower() or _pid(obj) in selected:
+                        filtered.append((obj, level))
+                items = filtered
             if not items:
                 it = QListWidgetItem("— None —")
                 it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable
@@ -939,14 +971,22 @@ class TradesScreen(BaseScreen):
             self._updating = False
 
     def _render_asset_lists(self):
+        get_pq = getattr(self, "_get_player_search", None)
+        get_kq = getattr(self, "_get_pick_search", None)
+        give_pq = getattr(self, "_give_player_search", None)
+        give_kq = getattr(self, "_give_pick_search", None)
         self._fill_list(self._give_players, self._my_players, "player",
-                        self._give_pids)
+                        self._give_pids,
+                        query=getattr(give_pq, "text", lambda: "")())
         self._fill_list(self._give_picks, self._my_picks, "pick",
-                        self._give_picks)
+                        self._give_picks,
+                        query=getattr(give_kq, "text", lambda: "")())
         self._fill_list(self._get_players, self._partner_players, "player",
-                        self._want_pids)
+                        self._want_pids,
+                        query=getattr(get_pq, "text", lambda: "")())
         self._fill_list(self._get_picks, self._partner_picks, "pick",
-                        self._want_picks)
+                        self._want_picks,
+                        query=getattr(get_kq, "text", lambda: "")())
 
     def _on_asset_toggled(self, item, side):
         if self._updating:

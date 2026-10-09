@@ -24,13 +24,34 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+#: Contract-term widget limits. These mirror the engine's contract rules;
+#: verify against the engine before changing.
+MIN_CONTRACT_YEARS = 1
+MAX_CONTRACT_YEARS = 7
+MIN_OFFER_AAV_M = 0.75
+MAX_OFFER_AAV_M = 15.0
+MAX_SIGNING_BONUS_M = 5.0
+MAX_PERFORMANCE_BONUS_M = 2.0
+
+
+#: Shared contract-offer outcome wording. Use for both inline labels and
+#: dialogs; reserve "Signed" for confirmed acceptance only.
+OFFER_OUTCOME_TEXT = {
+    "accepted": "Signed \u2014 the contract is filed.",
+    "countered": "The player countered. Review the proposed terms.",
+    "awaiting_agent": "Offer submitted; awaiting the agent's response.",
+    "consideration": "Offer is under consideration; no contract is signed.",
+    "rejected": "Offer rejected. No contract was signed.",
+}
+
+
+def offer_outcome_text(status):
+    """Player-facing text for a contract-offer outcome status."""
+    return OFFER_OUTCOME_TEXT.get(
+        status, "Offer status unavailable.")
 
 
 class ContractNegotiationScreen(BaseScreen):
@@ -79,7 +100,7 @@ class ContractNegotiationScreen(BaseScreen):
         # Years slider 1-7
         years_row = QHBoxLayout()
         self._years_slider = QSlider(Qt.Horizontal)
-        self._years_slider.setRange(1, 7)
+        self._years_slider.setRange(MIN_CONTRACT_YEARS, MAX_CONTRACT_YEARS)
         self._years_slider.setValue(4)
         self._years_slider.setTickPosition(QSlider.TicksBelow)
         self._years_slider.setTickInterval(1)
@@ -93,7 +114,7 @@ class ContractNegotiationScreen(BaseScreen):
         # AAV stepper
         aav_row = QHBoxLayout()
         self._aav_spin = QDoubleSpinBox()
-        self._aav_spin.setRange(0.75, 15.0)
+        self._aav_spin.setRange(MIN_OFFER_AAV_M, MAX_OFFER_AAV_M)
         self._aav_spin.setSingleStep(0.1)
         self._aav_spin.setValue(3.0)
         self._aav_spin.setPrefix("$")
@@ -112,7 +133,7 @@ class ContractNegotiationScreen(BaseScreen):
 
         # Signing bonus
         self._sb_spin = QDoubleSpinBox()
-        self._sb_spin.setRange(0, 5.0)
+        self._sb_spin.setRange(0, MAX_SIGNING_BONUS_M)
         self._sb_spin.setSingleStep(0.1)
         self._sb_spin.setPrefix("$")
         self._sb_spin.setSuffix("M")
@@ -120,7 +141,7 @@ class ContractNegotiationScreen(BaseScreen):
 
         # Performance bonus
         self._pb_spin = QDoubleSpinBox()
-        self._pb_spin.setRange(0, 2.0)
+        self._pb_spin.setRange(0, MAX_PERFORMANCE_BONUS_M)
         self._pb_spin.setSingleStep(0.1)
         self._pb_spin.setPrefix("$")
         self._pb_spin.setSuffix("M")
@@ -168,7 +189,7 @@ class ContractNegotiationScreen(BaseScreen):
         # Cap fit check
         try:
             from salary_cap_system import cap_breakdown
-            team = _safe(
+            team = safe_call(
                 lambda: (getattr(self.game, "game_manager", None)
                          or self.game).user_team)
             if team is not None:
@@ -207,7 +228,7 @@ class ContractNegotiationScreen(BaseScreen):
                 # ELC path: the engine's handle_elc_offer takes salary and
                 # both bonus types as params (band validation, prospect
                 # handshake inside). No player-attribute staging needed.
-                result = _safe(
+                result = safe_call(
                     lambda: game.handle_elc_offer(
                         self._player, offer["aav"],
                         offer["signing_bonus"],
@@ -215,7 +236,7 @@ class ContractNegotiationScreen(BaseScreen):
                 self._handle_agent_response(result, offer)
                 return
             # Validate through the game's own gate
-            ok, reason = _safe(
+            ok, reason = safe_call(
                 lambda: game._validate_contract_terms(
                     self._player, offer["aav"], offer["years"],
                     extension=self._is_extension),
@@ -243,7 +264,7 @@ class ContractNegotiationScreen(BaseScreen):
             self._player.offered_clause_list_size = 10
             # Submit the offer — the agent responds via the game's
             # negotiation logic (may accept, counter, or reject)
-            result = _safe(
+            result = safe_call(
                 lambda: game.handle_contract_offer(
                     self._player, extension=self._is_extension,
                     notify="popup"))
@@ -305,15 +326,13 @@ class ContractNegotiationScreen(BaseScreen):
             QMessageBox.information(
                 self, signed_title,
                 signed_text if signed_text is not None
-                else f"{name} accepts!")
+                else offer_outcome_text("accepted"))
             self.navigate_to("contracts")
             return True
         if result == "consideration":
             QMessageBox.information(
                 self, "Under Consideration",
-                f"{name} is considering your offer alongside bids from "
-                "other clubs. You'll hear back in a few days — no contract "
-                "has been signed.")
+                offer_outcome_text("consideration"))
             return False
         if isinstance(result, dict):
             verdict = str(result.get("verdict", "")).lower()
@@ -321,14 +340,14 @@ class ContractNegotiationScreen(BaseScreen):
                 counter = result.get("counter", {}) or {}
                 self._show_counter(counter)
                 return False
-            note = result.get("note") or "The agent rejected the offer."
+            note = result.get("note") or offer_outcome_text("rejected")
             QMessageBox.information(self, "Rejected", str(note))
             return False
         # Falsy or unrecognized: the engine refused or blocked the offer.
         QMessageBox.information(
             self, "Offer Not Accepted",
-            f"{name} did not accept the offer — no contract was signed. "
-            "Your negotiation is still open.")
+            offer_outcome_text("rejected") +
+            " Your negotiation is still open.")
         return False
 
     def _show_counter(self, counter):
@@ -344,7 +363,8 @@ class ContractNegotiationScreen(BaseScreen):
             self._years_slider.setValue(max(1, min(7, years)))
             QMessageBox.information(
                 self, "Counter-Offer",
-                f"The agent counters at ${aav:.2f}M × {years} years.\n"
+                offer_outcome_text("countered") +
+                f"\n${aav:.2f}M × {years} years.\n"
                 "Your offer form has been updated — adjust or accept.")
         except Exception:
             pass
@@ -364,7 +384,7 @@ class ContractNegotiationScreen(BaseScreen):
                 salary = ask.get("salary", ask.get("aav", 0))
                 sb = ask.get("signing_bonus", 0)
                 pb = ask.get("performance_bonus", 0)
-                result = _safe(
+                result = safe_call(
                     lambda: game.handle_elc_offer(
                         self._player, salary, sb, pb))
                 self._handle_agent_response(
@@ -378,7 +398,7 @@ class ContractNegotiationScreen(BaseScreen):
             years = self._agent_ask.get("years", 0)
             # Validate the agent's terms through the same gate as our own
             # offers — a stale or illegal ask must not slip through.
-            ok, reason = _safe(
+            ok, reason = safe_call(
                 lambda: game._validate_contract_terms(
                     self._player, aav, years,
                     extension=self._is_extension),
@@ -400,7 +420,7 @@ class ContractNegotiationScreen(BaseScreen):
             ask_clause = self._agent_ask.get("clause")
             self._player.offered_clause_kind = ask_clause or "none"
             self._player.offered_clause_list_size = 10
-            result = _safe(
+            result = safe_call(
                 lambda: game.handle_contract_offer(
                     self._player, extension=self._is_extension,
                     notify="popup"))

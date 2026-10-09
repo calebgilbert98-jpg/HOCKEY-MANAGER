@@ -37,6 +37,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QIntValidator
 
 from .base import BaseScreen
+from .contract_negotiation import offer_outcome_text
 from .contracts import (
     _safe, _fmt_money, _pid, _player_name, _pos_str, _live_cap,
     _resolve_gm, _user_team, _user_league, _salary_bounds, _cap_state,
@@ -795,7 +796,7 @@ class OfferDialog(QDialog):
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
         btn_row.addWidget(cancel)
-        self._submit_btn = QPushButton("Sign")
+        self._submit_btn = QPushButton("Submit Offer")
         self._submit_btn.setObjectName("primary-btn")
         self._submit_btn.setEnabled(False)
         self._submit_btn.clicked.connect(self._on_submit)
@@ -988,8 +989,7 @@ class OfferDialog(QDialog):
         status = st.get("status")
         if status == "accepted":
             self._note_lbl.setStyleSheet("color: #3fb950;")
-            self._note_lbl.setText("Signed ✓ — the deal is filed with the "
-                                   "league office.")
+            self._note_lbl.setText(offer_outcome_text("accepted"))
             QTimer.singleShot(900, self.accept)
         elif status in ("countered", "awaiting_agent"):
             # Hand the open talks to the negotiation dialog.
@@ -998,11 +998,10 @@ class OfferDialog(QDialog):
         else:
             self._note_lbl.setStyleSheet("color: #e5484d;")
             self._note_lbl.setText(
-                "Offer refused: " + (st.get("note")
-                                     or "the player rejected the offer "
-                                        "outright."))
+                offer_outcome_text("rejected") + " " +
+                (st.get("note") or ""))
             self._submit_btn.setEnabled(True)
-            self._submit_btn.setText("Sign")
+            self._submit_btn.setText("Submit Offer")
 
 
 class AnalysisDialog(QDialog):
