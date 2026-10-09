@@ -97,23 +97,22 @@ class SystemsCircumstanceScreen(BaseScreen):
             return None
         return best
 
-    def refresh(self):
-        body = getattr(self, "_body", None)
-        if body is None:
-            return
-        clear_layout(body)
+    def _build_game_context(self):
+        """Gather team/league/next-game context for refresh.
+
+        Returns a SimpleNamespace with team, league, nxt (next game tuple
+        or None), is_home, fake (sim stub), and key (composite), or None
+        if the engine/game context is unavailable.
+        """
         team = user_team(self.game)
         league = league_of(self.game)
         if team is None or league is None:
-            body.addWidget(no_game_label())
-            return
+            return None
         try:
             import attribute_composites as acmp
             import condition_system as cs
         except Exception:
-            body.addWidget(explainer_label(
-                "Engine unavailable -- circumstance data can't be read."))
-            return
+            return None
 
         key = self._combo.currentData()
         if key not in _COMPOSITE_LABELS:
@@ -135,59 +134,78 @@ class SystemsCircumstanceScreen(BaseScreen):
             my_name = getattr(team, "team_name", "")
             home_name = getattr(h, "team_name", "") or ""
             is_home = bool(home_name) and home_name == my_name
+        return SimpleNamespace(
+            team=team, league=league, nxt=nxt, is_home=is_home,
+            fake=fake, key=key, acmp=acmp, cs=cs)
+
+    def _render_next_game(self, body, context):
+        """Render the next-game note and opponent read."""
+        team, league, nxt = context.team, context.league, context.nxt
+        is_home = context.is_home
 
         body.addWidget(explainer_label(
             "Composite points added per event at tonight's baseline. "
             "Components verified to sum to the engine's own total."))
 
-        # Next-game note + opponent read (qualitative only).
         if nxt is None:
             body.addWidget(explainer_label(
                 "Offseason / no fixture found \u2014 showing the energy + "
                 "morale baseline only (home ice and rivalry apply once "
                 "there's a next game)."))
-        else:
-            d, h, a = nxt
-            hn = getattr(h, "team_name", h)
-            an = getattr(a, "team_name", a)
-            body.addWidget(explainer_label(
-                f"Next game: {an} @ {hn} ({d}). "
-                f"You are {'home' if is_home else 'away'}. Pre-game "
-                "baseline (period 1) \u2014 the late/close-game clutch term "
-                "applies in-game only."))
-            try:
-                import physicality as phys
-                heat = float(phys.rivalry_heat_between(
-                    getattr(league, "rivalries", None), h, a) or 0.0)
-            except Exception:
-                heat = 0.0
-            band, tone = heat_band(heat)
-            opp = QFrame()
-            opp.setObjectName("tile")
-            ol = QVBoxLayout(opp)
-            ot = QLabel("Opponent read")
-            ot.setObjectName("tile-title")
-            my_name = getattr(team, "team_name", "")
-            opp_name = str(an) if str(hn) == my_name else str(hn)
-            ob = QLabel(f"{opp_name} \u2014 {band}")
-            ob.setStyleSheet(
-                f"color: {tone_color(tone)}; font-size: 14px; "
-                "font-weight: 700;")
-            os_ = QLabel("Qualitative only \u2014 their room is their "
-                         "business.")
-            os_.setObjectName("tile-sub")
-            ol.addWidget(ot)
-            ol.addWidget(ob)
-            ol.addWidget(os_)
-            body.addWidget(opp)
+            return
 
-        body.addWidget(section_title("Applied shifts"))
+        d, h, a = nxt
+        hn = getattr(h, "team_name", h)
+        an = getattr(a, "team_name", a)
+        body.addWidget(explainer_label(
+            f"Next game: {an} @ {hn} ({d}). "
+            f"You are {'home' if is_home else 'away'}. Pre-game "
+            "baseline (period 1) \u2014 the late/close-game clutch term "
+            "applies in-game only."))
+        try:
+            import physicality as phys
+            heat = float(phys.rivalry_heat_between(
+                getattr(league, "rivalries", None), h, a) or 0.0)
+        except Exception:
+            heat = 0.0
+        band, tone = heat_band(heat)
+        opp = QFrame()
+        opp.setObjectName("tile")
+        ol = QVBoxLayout(opp)
+        ot = QLabel("Opponent read")
+        ot.setObjectName("tile-title")
+        my_name = getattr(team, "team_name", "")
+        opp_name = str(an) if str(hn) == my_name else str(hn)
+        ob = QLabel(f"{opp_name} \u2014 {band}")
+        ob.setStyleSheet(
+            f"color: {tone_color(tone)}; font-size: 14px; "
+            "font-weight: 700;")
+        os_ = QLabel("Qualitative only \u2014 their room is their "
+                     "business.")
+        os_.setObjectName("tile-sub")
+        ol.addWidget(ot)
+        ol.addWidget(ob)
+        ol.addWidget(os_)
+        body.addWidget(opp)
 
-        # Per-player decomposition from the documented engine terms
-        # (same as the desktop view; sums to the real total).
+    def _build_player_shift_rows(self, context):
+        """Build per-player shift decomposition rows.
+
+        Returns a list of dicts sorted by total. Per-player calculation
+        errors are logged with the player ID instead of silently skipping.
+        """
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        team, league = context.team, context.league
+        nxt, is_home = context.nxt, context.is_home
+        fake, key = context.fake, context.key
+        acmp, cs = context.acmp, context.cs
+
         rows = []
         event_kinds = getattr(acmp, "_EVENT_KIND", {}) or {}
         for p in list(getattr(team, "roster", None) or []):
+            pid = getattr(p, "id", "?")
             try:
                 energy = cs.get_game_energy(p)
                 total = acmp.circumstance_shift(
@@ -196,7 +214,10 @@ class SystemsCircumstanceScreen(BaseScreen):
                 try:
                     m = max(1.0, min(100.0,
                                      float(getattr(p, "morale", 70.0))))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError) as exc:
+                    _logger.warning(
+                        "Invalid morale for player %s, using 70: %s",
+                        pid, exc)
                     m = 70.0
                 mo_term = max(-1.0, min(1.0, (m - 70.0) / 30.0))
                 h_term = 0.4 if is_home else 0.0
@@ -221,10 +242,19 @@ class SystemsCircumstanceScreen(BaseScreen):
                              "morale": round(mo_term, 2),
                              "home": round(h_term, 2),
                              "rivalry": round(r_term, 2)})
+            except (TypeError, ValueError) as exc:
+                _logger.warning(
+                    "Skipping invalid circumstance data for player %s: %s",
+                    pid, exc)
             except Exception:
-                continue
+                _logger.exception(
+                    "Failed to calculate circumstance row for player %s",
+                    pid)
         rows.sort(key=lambda r: r["total"])
+        return rows
 
+    def _render_shift_table(self, body, rows):
+        """Render the per-player shift table."""
         table = QTableWidget(len(rows), 7)
         table.setHorizontalHeaderLabels(
             ["PLAYER", "POS", "TOTAL", "ENERGY", "MORALE", "HOME", "RIVALRY"])
@@ -250,3 +280,17 @@ class SystemsCircumstanceScreen(BaseScreen):
                     table.setItem(i, j, QTableWidgetItem(v))
         table.setMinimumHeight(min(420, 30 + 26 * max(len(rows), 1)))
         body.addWidget(table)
+
+    def refresh(self):
+        body = getattr(self, "_body", None)
+        if body is None:
+            return
+        clear_layout(body)
+        context = self._build_game_context()
+        if context is None:
+            body.addWidget(no_game_label())
+            return
+        self._render_next_game(body, context)
+        body.addWidget(section_title("Applied shifts"))
+        rows = self._build_player_shift_rows(context)
+        self._render_shift_table(body, rows)
