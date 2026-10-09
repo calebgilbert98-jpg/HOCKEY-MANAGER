@@ -1653,6 +1653,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.save import SaveScreen
         from native_ui.screens.schedule import ScheduleScreen
         from native_ui.screens.scouting import ScoutingScreen
+        from native_ui.screens.season_flow import SeasonFlowScreen
         from native_ui.screens.season_goals import SeasonGoalsScreen
         from native_ui.screens.season_meeting import SeasonMeetingScreen
         from native_ui.screens.season_summary import SeasonSummaryScreen
@@ -1734,6 +1735,7 @@ class MainWindow(QMainWindow):
             "fa_frenzy": FaFrenzyScreen,
             "fantasy_draft": FantasyDraftScreen,
             "scouting": ScoutingScreen,
+            "season_flow": SeasonFlowScreen,
             "season_meeting": SeasonMeetingScreen,
             "contract_negotiation": ContractNegotiationScreen,
             "dressing_room": DressingRoomScreen,
