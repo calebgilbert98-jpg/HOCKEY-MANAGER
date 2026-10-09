@@ -229,6 +229,9 @@ def run_threaded(parent, title, worker, on_done=None,
         QTimer.singleShot(100, _poll)
 
     threading.Thread(target=_worker, daemon=True).start()
+    # The dialog must be visible or the user never sees progress and can
+    # never press Cancel -- a QDialog is hidden until show()/open()/exec().
+    dlg.show()
     QTimer.singleShot(100, _poll)
     return dlg
 

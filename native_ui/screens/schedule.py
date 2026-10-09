@@ -583,7 +583,16 @@ class ScheduleScreen(BaseScreen):
             # Pin this specific game so the watch screen sims it
             # instead of auto-picking the next game.
             from .watch import set_target_entry
-            set_target_entry(g)
+            # Watch consumes the shared entry schema (date/home_team/away_team)
+            # while the schedule screen row uses date_iso/home/away -- adapt.
+            set_target_entry({
+                "date": g.get("date_iso"),
+                "date_iso": g.get("date_iso"),
+                "home_team": g.get("home"),
+                "away_team": g.get("away"),
+                "home": g.get("home"),
+                "away": g.get("away"),
+            })
             self.navigate_to("watch")
             # Auto-start the sim for the pinned game.
             mw = self.main_window

@@ -35,6 +35,19 @@ def _pos_key(pos):
         return str(pos)
 
 
+def _natural_fit(primary_pos, slot_pos):
+    """True when primary_pos is a natural fit for slot_pos, treating
+    generic 'F'/'D' slots (e.g. PK1_F1, PP1_D1) by position group."""
+    p, s = primary_pos.upper(), slot_pos.upper()
+    if p == s:
+        return True
+    if s == "F":
+        return p in ("LW", "C", "RW", "F")
+    if s == "D":
+        return p in ("LD", "RD", "D")
+    return False
+
+
 def position_fit(player, slot_id):
     """Return 'green' (natural), 'yellow' (playable), or 'red' (out of
     position) for a player in a slot. Mirrors web lines.js fitClass."""
@@ -47,18 +60,23 @@ def position_fit(player, slot_id):
                            or getattr(player, "position", None))
         if not slot_pos or not primary:
             return ""
-        if primary.upper() == slot_pos.upper():
+        if _natural_fit(primary, slot_pos):
             return "green"
-        fam = get_familiarity(player, slot_pos)
+        fam_pos = slot_pos
+        if slot_pos.upper() == "F":
+            # The familiarity table has no generic 'F' key (falls back to 30
+            # for everyone); use center as the representative forward slot.
+            fam_pos = "C"
+        fam = get_familiarity(player, fam_pos)
         return "yellow" if fam >= 60 else "red"
     except Exception:
         pass
-    # Fallback: exact match only
+    # Fallback: natural fit by position group, else red
     try:
         primary = _pos_key(getattr(player, "primary_position", None)
                            or getattr(player, "position", None))
         slot_pos = _slot_pos(slot_id)
-        if primary and slot_pos and primary.upper() == slot_pos.upper():
+        if primary and slot_pos and _natural_fit(primary, slot_pos):
             return "green"
         return "red"
     except Exception:
@@ -66,13 +84,16 @@ def position_fit(player, slot_id):
 
 
 def _slot_pos(slot_id):
-    """'LW1' -> 'LW'; 'PP1_LW' -> 'LW'; 'D3' -> 'D'."""
+    """'LW1' -> 'LW'; 'PP1_LW' -> 'LW'; 'D3' -> 'D';
+    'PP1_D1'/'PP1_D2' -> 'D'; 'PK1_F1'/'PK2_F2' -> 'F'."""
     import re
     s = str(slot_id or "")
     m = re.match(r"^([A-Z]+)\d+$", s)
     if m:
         return m.group(1)
-    m = re.match(r"^[A-Z]+\d+_([A-Z]+)$", s)
+    # Unit prefix with numeric position suffix: strip the digits so
+    # special-teams slots resolve to a generic position.
+    m = re.match(r"^[A-Z]+\d+_([A-Z]+?)(\d*)$", s)
     if m:
         return m.group(1)
     return ""
@@ -280,13 +301,16 @@ class LineEditorTab(QWidget):
 
         def pick_skater(want_pos):
             want = want_pos.upper()
-            # For generic 'D' slots, accept LD/RD/D players
+            # For generic 'D' slots, accept LD/RD/D players;
+            # for generic 'F' slots, accept LW/C/RW/F players.
             def _matches(p):
                 ppos = _pos_key(getattr(p, "primary_position", None)
                                 or getattr(p, "position", "")).upper()
                 if ppos == want:
                     return True
                 if want == "D" and ppos in ("LD", "RD", "D"):
+                    return True
+                if want == "F" and ppos in ("LW", "C", "RW", "F"):
                     return True
                 if want in ("LD", "RD") and ppos == "D":
                     return True

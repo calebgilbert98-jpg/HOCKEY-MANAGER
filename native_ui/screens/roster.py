@@ -373,7 +373,8 @@ class RosterScreen(BaseScreen):
             "font-size: 13px; font-weight: 700; border: 1px solid #7f2d2d; "
             "border-radius: 6px; padding: 8px; text-align: left; } "
             "QPushButton:hover { background: #4a2424; }")
-        self._crisis_banner.setWordWrap(True)
+        # NOTE: QPushButton has no setWordWrap() in Qt -- calling it raises
+        # AttributeError and kills _build_body(). Banner text stays single-line.
         self._crisis_banner.clicked.connect(
             lambda: self._try_navigate("morale"))
         self._crisis_banner.hide()
