@@ -754,9 +754,20 @@ class RosterScreen(BaseScreen):
                                 f"Could not open the trade block: {e}")
 
     def _open_contracts(self, player, elc=False):
-        # The contracts screen is not ported yet; hand off navigation.
+        """Right-click 'Contract Extension' / 'Offer ELC': open the Contracts
+        screen deep-linked to the player via set_player(player, elc=...),
+        following the main_window.show_player deep-link pattern. The player
+        and ELC/extension mode are no longer discarded on navigation."""
         try:
             self.navigate_to("contracts")
+            scroll = self.main_window._screens.get("contracts")
+            inner = scroll.widget() if scroll is not None and hasattr(
+                scroll, "widget") else scroll
+            setter = getattr(inner, "set_player", None)
+            if callable(setter):
+                setter(player, elc=elc)
+            else:
+                raise RuntimeError("contracts screen has no set_player")
         except Exception:
             what = "an entry-level contract" if elc else "a contract extension"
             name = _safe(lambda: getattr(player, "full_name", "?"), "?")
@@ -818,7 +829,24 @@ class RosterScreen(BaseScreen):
 
     def _move_players(self, players, frm, to):
         """CBA-validated roster moves. Port of execute_roster_move
-        (web_ui/screens/roster.py) -- runs synchronously on the Qt thread."""
+        (web_ui/screens/roster.py) -- runs synchronously on the Qt thread.
+
+        Move-type matrix (each with its own validation):
+          prospects -> nhl/ahl : promotion (ELC gate, CHL-NHL agreement,
+                                 23-man NHL limit)
+          ahl -> nhl           : recall (23-man NHL limit, AHL
+                                 paper-transaction gate)
+          nhl -> ahl           : demotion (waiver check: eligible players
+                                 go on the 2-day wire and stay rostered;
+                                 exempt players go straight down)
+          nhl/ahl -> prospects : junior return (junior-aged CHL check)
+
+        All mutations go through Team.remove_player / Team.add_player so
+        team_name, last_team_name, season-history stints, and history stay
+        consistent (direct list surgery skipped all of these -- and the old
+        src.remove() even operated on a list() copy, duplicating players
+        instead of moving them).
+        """
         team = self._user_team()
         if team is None:
             return 0, ["no team"]
@@ -828,12 +856,13 @@ class RosterScreen(BaseScreen):
             "prospects": _safe(lambda: list(getattr(team, "prospects", [])), []) or [],
         }
         src = src_map.get(frm, [])
-        dst_attr = {"nhl": "roster", "ahl": "ahl_roster",
-                    "prospects": "prospects"}.get(to)
-        if dst_attr is None:
+        # Team.add_player roster_type values ("roster" = NHL).
+        roster_type = {"nhl": "roster", "ahl": "ahl",
+                       "prospects": "prospects"}.get(to)
+        if roster_type is None:
             return 0, ["bad destination"]
         by_id = {str(_safe(lambda: getattr(p, "id", ""), "")): p for p in src}
-        wanted = [by_id[str(_safe(lambda: getattr(p, "id", ""), ""))]
+        wanted = [by_id.get(str(_safe(lambda: getattr(p, "id", ""), "")))
                   for p in players]
         wanted = [p for p in wanted if p is not None]
         try:
@@ -841,13 +870,18 @@ class RosterScreen(BaseScreen):
         except Exception:
             _gc = None
         moved, errors = 0, []
-        is_promotion = frm not in ("nhl", "ahl") and to in ("nhl", "ahl")
-        is_junior_return = frm in ("nhl", "ahl") and to not in ("nhl", "ahl")
-        dst = getattr(team, dst_attr, None)
-        if dst is None:
-            return 0, ["bad destination"]
+        is_promotion = frm == "prospects" and to in ("nhl", "ahl")
+        is_recall = frm == "ahl" and to == "nhl"
+        is_demotion = frm == "nhl" and to == "ahl"
+        is_junior_return = frm in ("nhl", "ahl") and to == "prospects"
         for player in wanted:
             name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+            # --- 23-man NHL roster limit: EVERY move into the NHL,
+            # --- regardless of source (promotion OR recall).
+            if to == "nhl" and len(
+                    _safe(lambda: list(team.roster), []) or []) >= 23:
+                errors.append(f"{name}: NHL roster full (23)")
+                continue
             if is_promotion:
                 if to == "ahl" and _gc is not None:
                     try:
@@ -858,16 +892,64 @@ class RosterScreen(BaseScreen):
                             continue
                     except Exception:
                         pass
-                if to == "nhl" and len(
-                        _safe(lambda: list(team.roster), []) or []) >= 23:
-                    errors.append(f"{name}: NHL roster full (23)")
-                    continue
                 if getattr(player, "contract", None) is None:
                     errors.append(
                         f"{name}: needs an entry-level contract first")
                     continue
                 try:
                     player.playing_where = "NHL" if to == "nhl" else "AHL"
+                except Exception:
+                    pass
+            elif is_recall:
+                # New-CBA paper-transaction rule (mirrors windows.py
+                # move_player): a player assigned to the AHL must play at
+                # least one game down there before he can be recalled.
+                try:
+                    import ahl_system as _ahl_gate
+                    _block = _ahl_gate.ahl_recall_block_reason(player)
+                except Exception:
+                    _block = None
+                if _block:
+                    errors.append(f"{name}: recall blocked ({_block})")
+                    continue
+                try:
+                    player.playing_where = "NHL"
+                except Exception:
+                    pass
+            elif is_demotion:
+                # Waiver check (mirrors waivers.py _place_on_waivers /
+                # _demote_exempt): eligible players go on the 2-day wire
+                # and STAY rostered -- the move does not complete here.
+                # Exempt players go straight down via the Team APIs below.
+                _eligible = False
+                try:
+                    import waiver_logic as _wl
+                    _eligible = bool(_wl.is_waiver_eligible(player))
+                except Exception:
+                    _eligible = False
+                if _eligible:
+                    try:
+                        from .waivers import _place_on_waivers as _pow
+                        ok, msg = _pow(self.game, player)
+                    except Exception as e:
+                        ok, msg = False, str(e)
+                    if ok:
+                        errors.append(
+                            f"{name}: placed on waivers (2-day wire) -- "
+                            f"stays on NHL roster until he clears")
+                    else:
+                        errors.append(
+                            f"{name}: waiver placement failed "
+                            f"({msg or 'unknown error'})")
+                    continue
+                try:
+                    player.playing_where = "AHL"
+                except Exception:
+                    pass
+                # Stamp the AHL assignment (new-CBA recall gate).
+                try:
+                    import ahl_system as _ahl_stamp
+                    _ahl_stamp.stamp_ahl_assignment(player)
                 except Exception:
                     pass
             elif is_junior_return:
@@ -883,9 +965,18 @@ class RosterScreen(BaseScreen):
                             continue
                     except Exception:
                         pass
+                try:
+                    if _gc is not None:
+                        player.playing_where = _gc.junior_assignment_label(
+                            player)
+                    else:
+                        player.playing_where = "Junior"
+                except Exception:
+                    pass
+            # --- Execute via the Team APIs (never raw list surgery) ---
             try:
-                src.remove(player)
-                dst.append(player)
+                team.remove_player(player)
+                team.add_player(player, roster_type)
                 moved += 1
             except Exception as e:
                 errors.append(f"{name}: move failed ({e})")
