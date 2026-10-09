@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QLabel, QFrame, QVBoxLayout, QHBoxLayout)
 from .base import BaseScreen
 from .systems_common import (league_of, tone_color, explainer_label,
                              section_title, no_game_label, clear_layout,
-                             player_name,
+                             player_name, systems_nav_bar,
                              add_scroll_content)
 
 

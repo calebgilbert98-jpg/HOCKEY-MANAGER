@@ -19,7 +19,7 @@ from .base import BaseScreen
 from .systems_common import (user_team, league_of, today_of, tone_color,
                              heat_band, explainer_label, section_title,
                              no_game_label, clear_layout, pos_short,
-                             player_name,
+                             player_name, systems_nav_bar,
                              add_scroll_content)
 
 _COMPOSITE_LABELS = {
