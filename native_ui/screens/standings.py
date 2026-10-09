@@ -31,12 +31,12 @@ from .base import BaseScreen
 # ---------------------------------------------------------------------------
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="standings/get_game_manager") or game
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    return safe_call(lambda: gm.league)
+    return safe_call(lambda: gm.league, context="standings/load_league")
 
 
 def _rich_team_rows(game):
@@ -45,35 +45,35 @@ def _rich_team_rows(game):
     league = _league(game)
     if league is None:
         return [], None
-    table = safe_call(lambda: dict(league.standings), {}) or {}
-    teams = safe_call(lambda: list(league.teams), []) or []
-    user_team_name = (safe_call(lambda: league.user_team.team_name)
+    table = safe_call(lambda: dict(league.standings), {}, context="standings/load_standings") or {}
+    teams = safe_call(lambda: list(league.teams), [], context="standings/load_teams") or []
+    user_team_name = (safe_call(lambda: league.user_team.team_name, context="standings/load_team_name")
                       or safe_call(lambda: getattr(game, "user_team", None)
-                               and game.user_team.team_name))
+                               and game.user_team.team_name, context="standings/get_user_team"))
 
     rows = []
     for t in teams:
         try:
-            name = safe_call(lambda: t.team_name, "")
+            name = safe_call(lambda: t.team_name, "", context="standings/load_team_name")
             if not name:
                 continue
-            row = safe_call(lambda: table.get(name), {}) or {}
-            w = safe_call(lambda: int(row.get("W", 0) or 0), 0)
-            l = safe_call(lambda: int(row.get("L", 0) or 0), 0)
-            otl = safe_call(lambda: int(row.get("OTL", 0) or 0), 0)
-            pts = safe_call(lambda: int(row.get("Points", 0) or 0), 0)
-            gf = safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0)
-            ga = safe_call(lambda: int(getattr(t, "goals_against", 0) or 0), 0)
+            row = safe_call(lambda: table.get(name), {}, context="standings/get_table_get_name") or {}
+            w = safe_call(lambda: int(row.get("W", 0) or 0), 0, context="standings/get_W")
+            l = safe_call(lambda: int(row.get("L", 0) or 0), 0, context="standings/get_L")
+            otl = safe_call(lambda: int(row.get("OTL", 0) or 0), 0, context="standings/get_OTL")
+            pts = safe_call(lambda: int(row.get("Points", 0) or 0), 0, context="standings/get_Points")
+            gf = safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0, context="standings/get_goals_for")
+            ga = safe_call(lambda: int(getattr(t, "goals_against", 0) or 0), 0, context="standings/get_goals_against")
             gp = w + l + otl
             rows.append({
                 "name": name,
-                "division": safe_call(lambda: t.division, "") or "",
-                "conf": safe_call(lambda: t.conference, "") or "",
+                "division": safe_call(lambda: t.division, "", context="standings/load_division") or "",
+                "conf": safe_call(lambda: t.conference, "", context="standings/load_conference") or "",
                 "gp": gp, "w": w, "l": l, "otl": otl, "pts": pts,
                 "gf": gf, "ga": ga, "diff": gf - ga,
                 "pt_pct": round(pts / (2 * gp), 3) if gp else 0.0,
-                "streak": safe_call(lambda: getattr(t, "streak", "") or "", ""),
-                "is_user": (safe_call(lambda: bool(t.is_user_team), False)
+                "streak": safe_call(lambda: getattr(t, "streak", "") or "", "", context="standings/get_streak"),
+                "is_user": (safe_call(lambda: bool(t.is_user_team), False, context="standings/load_is_user_team")
                             or name == user_team_name),
             })
         except Exception:
@@ -129,8 +129,8 @@ def _team_analytics_rows(game, category):
     league = _league(game)
     teams_by_name = {}
     if league is not None:
-        for t in (safe_call(lambda: list(league.teams), []) or []):
-            n = safe_call(lambda: t.team_name, "")
+        for t in (safe_call(lambda: list(league.teams), [], context="standings/load_teams") or []):
+            n = safe_call(lambda: t.team_name, "", context="standings/load_team_name")
             if n:
                 teams_by_name[n] = t
 
@@ -138,10 +138,10 @@ def _team_analytics_rows(game, category):
     for r in rows:
         t = teams_by_name.get(r["name"])
         gp = max(1, r["gp"])
-        pp = safe_call(lambda: float(getattr(t, "power_play_pct", 0) or 0), 0)
-        pk = safe_call(lambda: float(getattr(t, "penalty_kill_pct", 0) or 0), 0)
-        gaa_team = safe_call(lambda: float(getattr(t, "team_gaa", 0) or 0), 0)
-        svp_team = safe_call(lambda: float(getattr(t, "team_save_pct", 0) or 0), 0)
+        pp = safe_call(lambda: float(getattr(t, "power_play_pct", 0) or 0), 0, context="standings/get_power_play_pct")
+        pk = safe_call(lambda: float(getattr(t, "penalty_kill_pct", 0) or 0), 0, context="standings/get_penalty_kill_pct")
+        gaa_team = safe_call(lambda: float(getattr(t, "team_gaa", 0) or 0), 0, context="standings/get_team_gaa")
+        svp_team = safe_call(lambda: float(getattr(t, "team_save_pct", 0) or 0), 0, context="standings/get_team_save_pct")
         gf, ga = r["gf"], r["ga"]
         out.append({
             "name": r["name"], "division": r["division"], "conf": r["conf"],
@@ -646,7 +646,7 @@ class StandingsScreen(BaseScreen):
     def _strength_of_schedule(self, rows, user_team):
         league = _league(self.game)
         sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
-                      []) or []
+                      [], context="standings/load_schedule") or []
         pct = {r["name"]: r["pt_pct"] for r in rows}
         rem = {}
         for g in sched:

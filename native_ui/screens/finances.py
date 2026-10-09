@@ -49,7 +49,7 @@ def _fmt_money(v):
 
 
 def _pid(p):
-    return str(safe_call(lambda: getattr(p, "id", id(p)), ""))
+    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context="finances/get_id"))
 
 
 _POSITION_ABBR = {
@@ -73,7 +73,7 @@ def _clean_position(pos):
 
 def _pos_str(p):
     """Enum-safe position string: PlayerPosition -> 'RW', never raw enum."""
-    pos = safe_call(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="finances/get_primary_position")
     return _clean_position(getattr(pos, "value", pos))
 
 
@@ -93,24 +93,24 @@ def _player_ovr(p):
 
 
 def _player_name(p):
-    return safe_call(lambda: getattr(p, "full_name", "?"), "?")
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context="finances/get_full_name")
 
 
 def _resolve_gm(game):
-    gm = safe_call(lambda: getattr(game, "game_manager", None))
+    gm = safe_call(lambda: getattr(game, "game_manager", None), context="finances/get_game_manager")
     return gm if gm is not None else game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return safe_call(lambda: gm.user_team) or safe_call(lambda: game.user_team)
+    return safe_call(lambda: gm.user_team, context="finances/load_user_team") or safe_call(lambda: game.user_team, context="finances/load_user_team")
 
 
 def _season_year(game):
     gm = _resolve_gm(game)
     return safe_call(
         lambda: int(getattr(getattr(gm, "league", None), "season_year", 0)
-                    or 0), 0)
+                    or 0), 0, context="finances/get_league")
 
 
 # ---------------------------------------------------------------------------
@@ -118,24 +118,24 @@ def _season_year(game):
 # ---------------------------------------------------------------------------
 
 def _contract_salary(p):
-    c = safe_call(lambda: getattr(p, "contract", None))
-    s = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0)
+    c = safe_call(lambda: getattr(p, "contract", None), context="finances/get_contract")
+    s = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0, context="finances/get_salary")
     if s <= 0:
-        s = safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0)
+        s = safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0, context="finances/get_salary")
     return max(0, s)
 
 
 def _contract_years_left(p):
-    c = safe_call(lambda: getattr(p, "contract", None))
-    y = safe_call(lambda: getattr(c, "years_remaining", None))
+    c = safe_call(lambda: getattr(p, "contract", None), context="finances/get_contract")
+    y = safe_call(lambda: getattr(c, "years_remaining", None), context="finances/get_years_remaining")
     if y is None:
-        y = safe_call(lambda: getattr(p, "contract_years", 1), 1)
-    return max(0, safe_call(lambda: int(y or 0), 0))
+        y = safe_call(lambda: getattr(p, "contract_years", 1), 1, context="finances/get_contract_years")
+    return max(0, safe_call(lambda: int(y or 0), 0, context="finances/get_y_or_0"))
 
 
 def _contract_status(p, years_left):
     """Desktop determine_contract_status: RFA / UFA / Expiring / Long-term."""
-    age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22)
+    age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22, context="finances/get_age")
     if years_left <= 1:
         return "RFA" if age < 25 else "UFA"
     if years_left <= 2:
@@ -150,7 +150,7 @@ def _estimate_ask(p):
         ovr = float(p.overall_rating())
     except Exception:
         ovr = 75.0
-    age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22)
+    age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22, context="finances/get_age")
     cur = _contract_salary(p)
     if ovr >= 85:
         lo, hi = 8_000_000, 12_000_000
@@ -177,10 +177,10 @@ def _player_cap_hit(p):
     hit = safe_call(
         lambda: int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
         + int(getattr(getattr(p, "contract", None), "signing_bonus", 0) or 0)
-        - int(getattr(p, "retained_amount", 0) or 0), None)
+        - int(getattr(p, "retained_amount", 0) or 0), None, context="finances/get_retained_amount")
     if hit is not None and hit > 0:
         return max(0, hit)
-    return safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0)
+    return safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0, context="finances/get_salary")
 
 
 def _cap_breakdown(team):
@@ -188,17 +188,17 @@ def _cap_breakdown(team):
     sum-of-salaries fallback (same chain as the web endpoint)."""
     try:
         from salary_cap_system import cap_breakdown as _cb
-        bd = safe_call(lambda: _cb(team))
+        bd = safe_call(lambda: _cb(team), context="finances/get_cb_team")
     except Exception:
         bd = None
     cap = safe_call(lambda: int(getattr(team, "salary_cap", 104_000_000)
-                            or 104_000_000), 104_000_000)
+                            or 104_000_000), 104_000_000, context="finances/get_salary_cap")
     floor = safe_call(lambda: int(getattr(team, "salary_floor", 78_000_000)
-                              or 78_000_000), 78_000_000)
-    roster = safe_call(lambda: list(getattr(team, "roster", None) or []), []) or []
-    sum_hits = safe_call(lambda: sum(_player_cap_hit(p) for p in roster), 0)
+                              or 78_000_000), 78_000_000, context="finances/get_salary_floor")
+    roster = safe_call(lambda: list(getattr(team, "roster", None) or []), [], context="finances/load_roster") or []
+    sum_hits = safe_call(lambda: sum(_player_cap_hit(p) for p in roster), 0, context="finances/calc_player_cap_hit_p_for_p_in_roster")
     if (not isinstance(bd, dict)
-            or (safe_call(lambda: int(bd.get("total", 0) or 0), 0) == 0
+            or (safe_call(lambda: int(bd.get("total", 0) or 0), 0, context="finances/get_total") == 0
                 and sum_hits > 0)):
         bd = {
             "cap": cap, "roster": sum_hits, "buried": 0,
@@ -213,12 +213,12 @@ def _cap_breakdown(team):
 
 
 def _cap_status(bd):
-    total = safe_call(lambda: int(bd.get("total", 0) or 0), 0)
-    space = safe_call(lambda: int(bd.get("space", 0) or 0), 0)
-    cap = safe_call(lambda: int(bd.get("cap", 1) or 1), 1)
-    if safe_call(lambda: bool(bd.get("over_cap", space < 0)), space < 0):
+    total = safe_call(lambda: int(bd.get("total", 0) or 0), 0, context="finances/get_total")
+    space = safe_call(lambda: int(bd.get("space", 0) or 0), 0, context="finances/get_space")
+    cap = safe_call(lambda: int(bd.get("cap", 1) or 1), 1, context="finances/get_cap")
+    if safe_call(lambda: bool(bd.get("over_cap", space < 0)), space < 0, context="finances/get_over_cap"):
         return "over"
-    if safe_call(lambda: bool(bd.get("under_floor", False)), False):
+    if safe_call(lambda: bool(bd.get("under_floor", False)), False, context="finances/get_under_floor"):
         return "under_floor"
     if cap and space / cap < 0.03:
         return "tight"
@@ -234,7 +234,7 @@ def _position_breakdown(team):
         from game_classes import PlayerPosition as _PP
     except Exception:
         _PP = None
-    roster = safe_call(lambda: list(getattr(team, "roster", None) or []), []) or []
+    roster = safe_call(lambda: list(getattr(team, "roster", None) or []), [], context="finances/load_roster") or []
     for p in roster:
         try:
             s = _contract_salary(p)
@@ -270,11 +270,11 @@ def _buyout_schedule(p):
 
 
 def _buyout_candidate(p):
-    c = safe_call(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None), context="finances/get_contract")
     if c is None:
         return None
-    salary = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0)
-    years = safe_call(lambda: int(getattr(c, "years_remaining", 0) or 0), 0)
+    salary = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0, context="finances/get_salary")
+    years = safe_call(lambda: int(getattr(c, "years_remaining", 0) or 0), 0, context="finances/get_years_remaining")
     if salary <= 0 or years <= 0:
         return None
     total, annual, byears, rows = _buyout_schedule(p)
@@ -284,7 +284,7 @@ def _buyout_candidate(p):
         "player": p,
         "name": _player_name(p),
         "position": _pos_str(p),
-        "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
+        "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="finances/get_age"),
         "cap_hit": salary,
         "years_left": years,
         "buyout_cost": int(total),
@@ -292,16 +292,16 @@ def _buyout_candidate(p):
         "dead_years": int(byears),
         "schedule": [(int(i), int(hit), int(sav)) for (i, hit, sav) in rows],
         "nmc": safe_call(lambda: bool(getattr(c, "no_movement_clause", False)),
-                     False),
+                     False, context="finances/get_no_movement_clause"),
         "ntc": safe_call(lambda: bool(getattr(c, "no_trade_clause", False)),
-                     False),
+                     False, context="finances/get_no_trade_clause"),
     }
 
 
 def _buyout_window_ok(game):
     try:
         import transaction_windows as _tw
-        cur = safe_call(lambda: getattr(_resolve_gm(game), "current_date", None))
+        cur = safe_call(lambda: getattr(_resolve_gm(game), "current_date", None), context="finances/get_current_date")
         return _tw.check_window("buyout", cur)
     except Exception:
         return True, ""
@@ -615,13 +615,13 @@ class FinancesScreen(BaseScreen):
     def _load_hero(self):
         team = self._team
         bd = _cap_breakdown(team)
-        total = safe_call(lambda: int(bd.get("total", 0) or 0), 0)
-        space = safe_call(lambda: int(bd.get("space", 0) or 0), 0)
+        total = safe_call(lambda: int(bd.get("total", 0) or 0), 0, context="finances/get_total")
+        space = safe_call(lambda: int(bd.get("space", 0) or 0), 0, context="finances/get_space")
         cap = safe_call(lambda: int(bd.get("cap", 104_000_000) or 104_000_000),
-                    104_000_000)
+                    104_000_000, context="finances/get_cap")
         floor = safe_call(lambda: int(bd.get("floor", 78_000_000) or 78_000_000),
-                      78_000_000)
-        dead = safe_call(lambda: int(bd.get("dead_cap", 0) or 0), 0)
+                      78_000_000, context="finances/get_floor")
+        dead = safe_call(lambda: int(bd.get("dead_cap", 0) or 0), 0, context="finances/get_dead_cap")
         status = _cap_status(bd)
         status_txt = {
             "over": "OVER THE CAP", "under_floor": "UNDER THE CAP FLOOR",
@@ -656,10 +656,10 @@ class FinancesScreen(BaseScreen):
 
         # owner budget
         self._clear_layout(self._budget_l)
-        budget = safe_call(lambda: int(getattr(team, "player_budget", 0) or 0), 0)
-        spent = safe_call(lambda: int(getattr(team, "bonus_spent", 0) or 0), 0)
+        budget = safe_call(lambda: int(getattr(team, "player_budget", 0) or 0), 0, context="finances/get_player_budget")
+        spent = safe_call(lambda: int(getattr(team, "bonus_spent", 0) or 0), 0, context="finances/get_bonus_spent")
         remaining = safe_call(lambda: int(team.player_budget_remaining()),
-                          budget - spent)
+                          budget - spent, context="finances/get_player_budget_remaining")
         left = QLabel(_fmt_money(remaining))
         left.setStyleSheet("font-size: 20px; font-weight: 700;")
         self._budget_l.addWidget(QLabel("Cash Remaining"))
@@ -676,21 +676,21 @@ class FinancesScreen(BaseScreen):
     def _load_hits(self):
         team = self._team
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         bd = _cap_breakdown(team)
         cap = safe_call(lambda: int(bd.get("cap", 104_000_000) or 104_000_000),
-                    104_000_000)
+                    104_000_000, context="finances/get_cap")
         hits = []
         for p in roster:
             try:
                 hits.append({
                     "player": p, "name": _player_name(p),
                     "position": _pos_str(p),
-                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
+                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="finances/get_age"),
                     "overall": _player_ovr(p),
                     "salary": _player_cap_hit(p),
                     "injured": safe_call(
-                        lambda: bool(getattr(p, "is_injured", False)), False),
+                        lambda: bool(getattr(p, "is_injured", False)), False, context="finances/get_is_injured"),
                 })
             except Exception:
                 continue
@@ -713,7 +713,7 @@ class FinancesScreen(BaseScreen):
             year = season
         years_ahead = max(0, year - season)
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         committed = 0
         expiring = []
         for p in roster:
@@ -727,7 +727,7 @@ class FinancesScreen(BaseScreen):
                         "player": p, "name": _player_name(p),
                         "position": _pos_str(p),
                         "age": safe_call(lambda: int(getattr(p, "age", 0) or 0),
-                                     0),
+                                     0, context="finances/get_age"),
                         "salary": salary, "years_left": yl,
                         "status": _contract_status(p, yl),
                         "estimated_ask": _estimate_ask(p),
@@ -737,7 +737,7 @@ class FinancesScreen(BaseScreen):
         expiring.sort(key=lambda e: -e["salary"])
         self._proj_expiring = expiring
         cap = safe_call(lambda: int(getattr(team, "salary_cap", 104_000_000)
-                                or 104_000_000), 104_000_000)
+                                or 104_000_000), 104_000_000, context="finances/get_salary_cap")
         self._proj_committed.setText(_fmt_money(committed))
         self._proj_cap.setText(_fmt_money(cap))
         self._proj_space.setText(_fmt_money(cap - committed))
@@ -753,7 +753,7 @@ class FinancesScreen(BaseScreen):
         if team is None:
             return
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         filt = self._ctr_status.currentText()
         posf = self._ctr_pos.currentText()
         q = self._ctr_q.text().strip().lower()
@@ -778,16 +778,16 @@ class FinancesScreen(BaseScreen):
                     continue
                 if q and q not in name.lower():
                     continue
-                c = safe_call(lambda: getattr(p, "contract", None))
+                c = safe_call(lambda: getattr(p, "contract", None), context="finances/get_contract")
                 rows.append({
                     "player": p, "name": name, "position": pos,
-                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
+                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="finances/get_age"),
                     "salary": _contract_salary(p), "years_left": yl,
                     "status": status,
                     "ntc": safe_call(lambda: bool(
-                        getattr(c, "no_trade_clause", False)), False),
+                        getattr(c, "no_trade_clause", False)), False, context="finances/get_no_trade_clause"),
                     "nmc": safe_call(lambda: bool(
-                        getattr(c, "no_movement_clause", False)), False),
+                        getattr(c, "no_movement_clause", False)), False, context="finances/get_no_movement_clause"),
                     "estimated_ask": _estimate_ask(p),
                 })
             except Exception:
@@ -814,9 +814,9 @@ class FinancesScreen(BaseScreen):
         posd = _position_breakdown(team)
         payroll = sum(d["total"] for d in posd.values())
         cap = safe_call(lambda: int(getattr(team, "salary_cap", 104_000_000)
-                                or 104_000_000), 104_000_000)
+                                or 104_000_000), 104_000_000, context="finances/get_salary_cap")
         floor = safe_call(lambda: int(getattr(team, "salary_floor", 78_000_000)
-                                  or 78_000_000), 78_000_000)
+                                  or 78_000_000), 78_000_000, context="finances/get_salary_floor")
         self._cap_pos_l.addWidget(_kv_rows([
             ("Salary cap", _fmt_money(cap)),
             ("Cap floor", _fmt_money(floor)),
@@ -832,7 +832,7 @@ class FinancesScreen(BaseScreen):
             for k, d in posd.items()
         ]))
         ahl = safe_call(lambda: list(getattr(team, "ahl_roster", None) or []),
-                    []) or []
+                    [], context="finances/load_ahl_roster") or []
         ahl_payroll = sum(_contract_salary(p) for p in ahl)
         try:
             from salary_cap_system import BURY_THRESHOLD as _bt
@@ -864,7 +864,7 @@ class FinancesScreen(BaseScreen):
         team = self._team
         season = _season_year(self.game)
         cap = safe_call(lambda: int(getattr(team, "salary_cap", 104_000_000)
-                                or 104_000_000), 104_000_000)
+                                or 104_000_000), 104_000_000, context="finances/get_salary_cap")
         if key == "salary_breakdown":
             return self._report_salary_breakdown(team, cap)
         if key == "contract_timeline":
@@ -877,7 +877,7 @@ class FinancesScreen(BaseScreen):
 
     def _report_salary_breakdown(self, team, cap):
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         payroll = sum(_contract_salary(p) for p in roster)
         rows = []
         for p in sorted(roster, key=_contract_salary, reverse=True)[:10]:
@@ -903,13 +903,13 @@ class FinancesScreen(BaseScreen):
 
     def _report_contract_timeline(self, team, season):
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         groups = {}
         for p in roster:
             try:
                 yl = _contract_years_left(p)
                 yr = season + yl
-                age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22)
+                age = safe_call(lambda: int(getattr(p, "age", 22) or 22), 22, context="finances/get_age")
                 groups.setdefault(yr, []).append({
                     "name": _player_name(p),
                     "salary": _contract_salary(p),
@@ -932,7 +932,7 @@ class FinancesScreen(BaseScreen):
 
     def _report_position_analysis(self, team):
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         try:
             from game_classes import PlayerPosition as _PP
         except Exception:
@@ -962,10 +962,10 @@ class FinancesScreen(BaseScreen):
                 avg_ovr = sum(float(p.overall_rating()) for p in ps) / len(ps)
             except Exception:
                 avg_ovr = 0
-            avg_age = sum(safe_call(lambda: int(getattr(p, "age", 22) or 22), 22)
+            avg_age = sum(safe_call(lambda: int(getattr(p, "age", 22) or 22), 22, context="finances/get_age")
                           for p in ps) / len(ps)
             rows = [[_player_name(p), _fmt_money(_contract_salary(p)),
-                     safe_call(lambda: int(getattr(p, "age", 0) or 0), 0)]
+                     safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="finances/get_age")]
                     for p in sorted(ps, key=_contract_salary, reverse=True)]
             widgets.append(
                 (f"{name} — {len(ps)} players, {_fmt_money(total)} total, "
@@ -975,17 +975,17 @@ class FinancesScreen(BaseScreen):
 
     def _report_age_demographics(self, team):
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         bands = [("Under 25", 0, 24), ("25-29", 25, 29),
                  ("30-34", 30, 34), ("35+", 35, 99)]
         widgets = []
         for name, lo, hi in bands:
             ps = [p for p in roster
-                  if lo <= safe_call(lambda: int(getattr(p, "age", 27) or 27), 27)
+                  if lo <= safe_call(lambda: int(getattr(p, "age", 27) or 27), 27, context="finances/get_age")
                   <= hi]
             total = sum(_contract_salary(p) for p in ps)
             rows = [[_player_name(p),
-                     safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
+                     safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="finances/get_age"),
                      _fmt_money(_contract_salary(p))]
                     for p in sorted(ps, key=_contract_salary, reverse=True)]
             avg = _fmt_money(total // len(ps)) if ps else "--"
@@ -997,7 +997,7 @@ class FinancesScreen(BaseScreen):
 
     def _report_performance_salary(self, team):
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         rows = []
         for p in roster:
             try:
@@ -1005,13 +1005,13 @@ class FinancesScreen(BaseScreen):
                 s = _contract_salary(p)
                 if pos.upper() in ("G", "GOALIE"):
                     gp = safe_call(lambda: int(getattr(p, "games_played", 0)
-                                           or 0), 0)
+                                           or 0), 0, context="finances/get_games_played")
                     sv = safe_call(lambda: float(getattr(p, "save_percentage", 0)
-                                            or 0), 0.0)
+                                            or 0), 0.0, context="finances/get_save_percentage")
                     metric, label = sv, "SV%"
                     _ = gp
                 else:
-                    pts = safe_call(lambda: int(getattr(p, "points", 0) or 0), 0)
+                    pts = safe_call(lambda: int(getattr(p, "points", 0) or 0), 0, context="finances/get_points")
                     metric, label = pts, "PTS"
                 per = s / metric if metric else None
                 rows.append([_player_name(p), pos, _fmt_money(s),
@@ -1059,10 +1059,10 @@ class FinancesScreen(BaseScreen):
             self._mgmt_box.addWidget(QLabel("No team loaded."))
             return
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         payroll = sum(_contract_salary(p) for p in roster)
         cap = safe_call(lambda: int(getattr(team, "salary_cap", 104_000_000)
-                                or 104_000_000), 104_000_000)
+                                or 104_000_000), 104_000_000, context="finances/get_salary_cap")
         space = cap - payroll
         pct = (payroll / cap * 100) if cap else 0
         recs = []
@@ -1085,7 +1085,7 @@ class FinancesScreen(BaseScreen):
                 "Start extension negotiations early to avoid losing key "
                 "players."))
         old_exp = [p for p in roster
-                   if safe_call(lambda: int(getattr(p, "age", 22) or 22), 22) > 33
+                   if safe_call(lambda: int(getattr(p, "age", 22) or 22), 22, context="finances/get_age") > 33
                    and _contract_salary(p) > 4_000_000]
         if old_exp:
             names = ", ".join(_player_name(p) for p in old_exp[:3])
@@ -1146,14 +1146,14 @@ class FinancesScreen(BaseScreen):
         players = []
         for lst in ("roster", "ahl_roster"):
             players.extend(
-                safe_call(lambda: list(getattr(team, lst, None) or []), []) or [])
+                safe_call(lambda: list(getattr(team, lst, None) or []), [], context="finances/load_team_lst") or [])
         expiring_players = [p for p in players
                             if _contract_years_left(p) == 1]
         expiring_staff = [
             s for s in safe_call(lambda: list(getattr(team, "staff", None)
-                                          or []), []) or []
+                                          or []), [], context="finances/load_staff") or []
             if safe_call(lambda: int(getattr(s, "contract_years", 0) or 0),
-                     0) == 1]
+                     0, context="finances/get_contract_years") == 1]
         n = len(expiring_players) + len(expiring_staff)
         if n == 0:
             QMessageBox.information(
@@ -1168,18 +1168,18 @@ class FinancesScreen(BaseScreen):
         results = []
         for person in expiring_players + expiring_staff:
             name = safe_call(lambda: getattr(person, "full_name", None),
-                         None) or safe_call(
+                         None, context="finances/get_full_name") or safe_call(
                              lambda: getattr(person, "name", "Unknown"),
-                             "Unknown")
+                             "Unknown", context="finances/get_name")
             salary = _contract_salary(person) or safe_call(
                 lambda: int(getattr(person, "salary", 750_000) or 750_000),
-                750_000)
+                750_000, context="finances/get_salary")
             years = _contract_years_left(person) or safe_call(
-                lambda: int(getattr(person, "contract_years", 1) or 1), 1)
+                lambda: int(getattr(person, "contract_years", 1) or 1), 1, context="finances/get_contract_years")
             ok, reason = safe_call(
                 lambda: game._validate_contract_terms(
                     person, salary, years, extension=True),
-                (False, "validation failed"))
+                (False, "validation failed"), context="finances/get_validate_contract_terms")
             if not ok:
                 results.append(f"{name}: Skipped ({reason})")
                 continue
@@ -1222,7 +1222,7 @@ class FinancesScreen(BaseScreen):
             self._buyout_window_lbl.setText(
                 f"⚠️ Buyout window closed: {win_msg or 'not open'}")
         roster = safe_call(lambda: list(getattr(team, "roster", None) or []),
-                       []) or []
+                       [], context="finances/load_roster") or []
         cands = []
         for p in roster:
             try:
@@ -1253,7 +1253,7 @@ class FinancesScreen(BaseScreen):
         self._buyout_warn.setText("")
         self._buyout_exec.setVisible(False)
         hits = safe_call(lambda: dict(getattr(team, "buyout_cap_hits", None)
-                                  or {}), {}) or {}
+                                  or {}), {}, context="finances/load_buyout_cap_hits") or {}
         if hits:
             self._buyout_active_lbl.setText(", ".join(
                 f"{y}: {_fmt_money(v)}" for y, v in sorted(hits.items())))
@@ -1319,7 +1319,7 @@ class FinancesScreen(BaseScreen):
             return
         team = self._team
         league = safe_call(lambda: getattr(_resolve_gm(self.game), "league",
-                                       None))
+                                       None), context="finances/get_league")
         try:
             from buyout_window import execute_buyout
             execute_buyout(league, team, player)
