@@ -57,7 +57,6 @@ jobs:
           version = "${{ steps.version.outputs.APP_VERSION }}"
           zip_path = f"dist/PuckDynasty-Native-v{version}-Windows.zip"
           tmp_dir = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "bundle_check")
-          MIN_SCREENS = 70
 
           print(f"Validating {zip_path}...")
 
@@ -99,11 +98,12 @@ jobs:
               sys.exit(1)
           print("  [ok] _internal folder present")
 
-          # 4. Count bundled screen modules.
+          # 4. Discover bundled screen modules.
           # Expected list comes from the source tree (what SHOULD be bundled).
           screens_dir = "native_ui/screens"
           expected = [f[:-3] for f in os.listdir(screens_dir)
                       if f.endswith(".py") and f != "__init__.py"]
+          expected_set = set(expected)
           print(f"  Expecting {len(expected)} screen modules from source")
 
           found = set()
@@ -114,7 +114,7 @@ jobs:
               for f in os.listdir(bundled_dir):
                   if f.endswith((".pyc", ".py")):
                       name = f.rsplit(".", 1)[0]
-                      if name in expected:
+                      if name in expected_set:
                           found.add(name)
               print(f"  Found {len(found)} via _internal/native_ui/screens/ directory")
 
@@ -125,7 +125,9 @@ jobs:
           # from the bundle (v0.26.36 boot crash).  Only the PYZ TOC proves a
           # module is actually importable at runtime.  Uses PyInstaller's own
           # archive reader (pinned pyinstaller==6.22.3 on the runner).
-          if len(found) < MIN_SCREENS:
+          # Runs whenever the directory scan did not recover the full set.
+          pyz_screens = set()
+          if found != expected_set:
               try:
                   from PyInstaller.archive.readers import pkg_archive_contents
                   bundled = set(pkg_archive_contents(exe_path, recursive=True))
@@ -133,20 +135,37 @@ jobs:
                   print(f"::error::VALIDATION FAILED: could not read bundle "
                         f"archive TOC: {e}")
                   sys.exit(1)
-              for s in expected:
-                  if s not in found:
-                      if f"native_ui.screens.{s}" in bundled:
-                          found.add(s)
+              for entry in bundled:
+                  if entry.startswith("native_ui.screens."):
+                      mod = entry.rsplit(".", 1)[-1]
+                      if mod.endswith("pyc"):
+                          mod = mod[:-3]
+                      pyz_screens.add(mod)
+              for s in expected_set - found:
+                  if f"native_ui.screens.{s}" in bundled:
+                      found.add(s)
               print(f"  Found {len(found)} total after PYZ TOC check")
 
-          if len(found) < MIN_SCREENS:
-              missing = sorted(set(expected) - found)
-              shown = ", ".join(missing[:10]) + ("..." if len(missing) > 10 else "")
-              print(f"::warning::VALIDATION WARNING: only {len(found)} screen modules "
-                    f"bundled (need >= {MIN_SCREENS}). Missing: {shown}. "
-                    f"Shipping anyway per Caleb's override 2026-10-08.")
-              # sys.exit(1)  # BYPASSED per Caleb 2026-10-08 - ship it anyway
-          print(f"  [ok] screen module count OK ({len(found)} >= {MIN_SCREENS})")
+          # 5. Exact-set comparison -- HARD FAILURE (bypass reverted).
+          # The source tree is the authoritative manifest. A count threshold
+          # is not sufficient: v0.26.38 passed a count check while draft and
+          # morale were missing from the bundle. The temporary warn-and-ship
+          # bypass from Caleb's 2026-10-08 override is removed; a broken
+          # bundle must never ship.
+          missing = sorted(expected_set - found)
+          unexpected = sorted(pyz_screens - expected_set)
+          if missing or unexpected:
+              if missing:
+                  print(f"::error::VALIDATION FAILED: {len(missing)} expected "
+                        f"screen module(s) missing from bundle: "
+                        f"{', '.join(missing)}")
+              if unexpected:
+                  print(f"::error::VALIDATION FAILED: {len(unexpected)} "
+                        f"unexpected screen module(s) in bundle: "
+                        f"{', '.join(unexpected)}")
+              sys.exit(1)
+          print(f"  [ok] all {len(expected)} screen modules bundled "
+                f"(exact set match)")
           print("Bundle validation passed.")
           PYEOF
 

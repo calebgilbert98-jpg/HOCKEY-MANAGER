@@ -2,6 +2,9 @@
 
 Launches the PySide6/Qt native interface. The game logic runs in-process;
 the UI calls it directly (no Flask, no browser, no HTTP).
+
+Requires PySide6, installed via the repo requirements file:
+    pip install -r requirements.txt
 """
 import sys
 import os

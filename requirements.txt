@@ -20,3 +20,8 @@ customtkinter>=5.2.0
 # Web UI: Flask serves the tile frontend on localhost (offline)
 Flask>=3.0.0
 
+# Native Qt UI (PySide6) -- required by puck_dynasty_native.py, the native
+# launcher. Pinned to match .github/workflows/build-native.yml exactly so
+# local dev and CI build against the same Qt version.
+PySide6==6.12.0
+
