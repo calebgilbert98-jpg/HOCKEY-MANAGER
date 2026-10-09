@@ -39,6 +39,18 @@ from PySide6.QtCore import Qt, QTimer
 from .base import BaseScreen
 from ..widgets.attribute_bar import AttributeBar
 
+# --- hoisted: formerly function-level imports (PyInstaller-safe) ---
+import re
+import random as _random
+import draft_night as _dn
+import draft_stories as _ds
+import trade_engine as _te
+import draft_day_trades as _ddt
+import scouting as _scmod
+from game_classes import DraftPick
+from PySide6.QtGui import QBrush, QColor
+
+
 
 # ---------------------------------------------------------------------------
 # helpers (ported from web_ui/screens/draft.py, Flask removed)
@@ -376,7 +388,6 @@ def do_draft_pick(game, pid):
 def do_sim_pick(game):
     """AI auto-picks for the current slot (port of the draft_sim_pick op)."""
     try:
-        import draft_night as dn
         league = _league(game)
         session = _session(game)
         if league is None or session is None:
@@ -410,17 +421,16 @@ def do_sim_pick(game):
                 break
         if oteam is None:
             return False, "Owning team not found."
-        import random as _rnd
         pick = None
         try:
             avail_sorted = sorted(
                 avail,
                 key=lambda q: int(getattr(q, "draft_ranking", 9999) or 9999))
-            rnd = _rnd.Random()
+            rnd = _random.Random()
             # Returns (selected, reach, steal) -- the web op assigned the
             # raw tuple and recorded an empty player_id; unpack it like
             # the desktop conductor does.
-            res = dn.ai_select_prospect(oteam, avail_sorted, None, None,
+            res = _dn.ai_select_prospect(oteam, avail_sorted, None, None,
                                         1, None, rnd, overall=overall)
             pick = res[0] if isinstance(res, tuple) else res
         except Exception:
@@ -459,13 +469,6 @@ def buzz_items(game):
     league = _league(game)
     if league is None:
         return []
-    import random as _random
-    try:
-        import draft_night as _dn
-        import draft_stories as _ds
-    except Exception:
-        return []
-
     prospects = safe_call(lambda: list(getattr(league, "draft_prospects",
                                           None) or []), [], context="draft/load_draft_prospects") or []
     session = _session(game)
@@ -632,7 +635,6 @@ def buzz_items(game):
 
 def trade_feed(game):
     """Draft-day trade feed from league.draft_day_deals, newest first."""
-    import re
     league = _league(game)
     gm = _resolve_gm(game)
     if league is None:
@@ -689,11 +691,6 @@ def draft_grades(game):
     league = _league(game)
     if league is None:
         return {"source": "none", "year": None, "grades": []}
-    try:
-        import draft_night as _dn
-    except Exception:
-        return {"source": "none", "year": None, "grades": []}
-
     session = _session(game)
     complete = (safe_call(lambda: bool(session.is_complete()), True, context="draft/get_is_complete")
                 if session else True)
@@ -802,12 +799,6 @@ def trade_pick_info(game):
                 "owner": cur_row.get("owner") if cur_row else None,
                 "overall": cur}
 
-    try:
-        import trade_engine as te  # noqa: F401 (parity import)
-        import draft_night as dn
-    except Exception:
-        return {"can_trade": False, "reason": "Engine unavailable."}
-
     # Real DraftPick objects by overall, for ai_consider_trade parity.
     dp_by_overall = {}
     try:
@@ -837,7 +828,7 @@ def trade_pick_info(game):
                 continue
             val = 0
             try:
-                val = int(dn.pick_slot_value(b["overall"]))
+                val = int(_dn.pick_slot_value(b["overall"]))
             except Exception:
                 pass
             pe = next((p for p in partners if p["name"] == pname), None)
@@ -856,7 +847,7 @@ def trade_pick_info(game):
 
     my_value = 0
     try:
-        my_value = int(dn.pick_slot_value(cur))
+        my_value = int(_dn.pick_slot_value(cur))
     except Exception:
         pass
     return {
@@ -878,7 +869,6 @@ def do_trade_pick_propose(game, partner, partner_overall, info=None):
     details returned for the dialog.
     """
     try:
-        import trade_engine as te
         league = _league(game)
         user_team = _user_team(game)
         session = _session(game)
@@ -937,7 +927,7 @@ def do_trade_pick_propose(game, partner, partner_overall, info=None):
                             def __init__(self, slot):
                                 self.current_team = slot.get("owner")
                         tgt_dp = _SlotPick2(tgt_slot)
-                    resp = te.ai_consider_trade(
+                    resp = _te.ai_consider_trade(
                         partner_team, [my_dp], [tgt_dp],
                         user_team=user_team)
                     decision = getattr(resp, "decision", "reject")
@@ -949,11 +939,11 @@ def do_trade_pick_propose(game, partner, partner_overall, info=None):
                         result = {
                             "ok": False, "counter": True,
                             "message": getattr(resp, "message", ""),
-                            "want_added": [te.asset_label(a)
+                            "want_added": [_te.asset_label(a)
                                            for a in getattr(
                                                resp, "want_added", [])
                                            or []],
-                            "will_add": [te.asset_label(a)
+                            "will_add": [_te.asset_label(a)
                                          for a in getattr(
                                              resp, "will_add", [])
                                          or []],
@@ -979,7 +969,7 @@ def do_trade_pick_propose(game, partner, partner_overall, info=None):
                                 gm.trade_history = []
                             try:
                                 gm.trade_history.append(
-                                    te.CompletedTrade(
+                                    _te.CompletedTrade(
                                         str(getattr(gm, "current_date",
                                                     "")),
                                         user_name, partner,
@@ -1093,15 +1083,13 @@ def _ddt_declined(game):
 def _ddt_serialize_asset(a):
     """Draft pick -> dict. Draft-day calls only ever move picks."""
     try:
-        from game_classes import DraftPick
         is_pick = isinstance(a, DraftPick)
     except Exception:
         is_pick = False
     if not is_pick:
         return None
     try:
-        import trade_engine as te
-        label = te.asset_label(a)
+        label = _te.asset_label(a)
     except Exception:
         label = (f"{getattr(a, 'year', '?')} "
                  f"round {getattr(a, 'round', '?')} pick")
@@ -1121,15 +1109,6 @@ def ddt_build_call(game):
     Reuses draft_day_trades' offer-building + AI-verdict helpers.
     Never raises.
     """
-    try:
-        import draft_day_trades as ddt
-        import trade_engine as te
-    except Exception:
-        return None
-    try:
-        import random as _rng
-    except Exception:
-        return None
     session = _session(game)
     if session is None:
         return None
@@ -1153,10 +1132,10 @@ def ddt_build_call(game):
     if str(cur_slot.get("owner", "") or "") != uname:
         return None
     _ddt_mark_offered(game, overall)
-    if _rng.random() > 0.35:
+    if _random.random() > 0.35:
         return None
-    order = ddt._round1_order(league, year)
-    board = ddt._draft_board(league)
+    order = _ddt._round1_order(league, year)
+    board = _ddt._draft_board(league)
     if not order or not board:
         return None
     try:
@@ -1166,31 +1145,31 @@ def ddt_build_call(game):
     best = None
     for o2, t2, pk2 in order:
         try:
-            if o2 <= overall or ddt._is_human(t2):
+            if o2 <= overall or _ddt._is_human(t2):
                 continue
-            pname = ddt._priority_name(ddt._priority_of(t2, ai_manager))
-            tgt = ddt._trade_up_target(t2, o2, board, pname)
+            pname = _ddt._priority_name(_ddt._priority_of(t2, ai_manager))
+            tgt = _ddt._trade_up_target(t2, o2, board, pname)
             if tgt is None:
                 continue
             t_overall, prosp = tgt
             if t_overall != overall:
                 continue
-            mine = ddt._owned_picks(t2, year, 1)
+            mine = _ddt._owned_picks(t2, year, 1)
             if not mine:
                 continue
-            offer = ddt._build_trade_up_offer(te, t2, mine[0], user_team,
+            offer = _ddt._build_trade_up_offer(_te, t2, mine[0], user_team,
                                               year)
             if offer is None:
                 continue
             gives, gets = offer
             try:
-                resp = te.ai_consider_trade(
+                resp = _te.ai_consider_trade(
                     user_team, list(gives), list(gets), user_team=t2)
             except Exception:
                 continue
             if getattr(resp, "decision", "reject") == "reject":
                 continue
-            score = _rng.uniform(0, 1)
+            score = _random.uniform(0, 1)
             if best is None or score > best[0]:
                 best = (score, t2, gives, gets, prosp, resp)
         except Exception:
@@ -1208,19 +1187,18 @@ def ddt_build_call(game):
     if not ser_gives or not ser_gets:
         return None
     try:
-        why = ddt._call_why_lines(
-            te, caller, prosp, board,
-            ddt._priority_name(ddt._priority_of(caller, ai_manager)))
+        why = _ddt._call_why_lines(
+            _te, caller, prosp, board,
+            _ddt._priority_name(_ddt._priority_of(caller, ai_manager)))
     except Exception:
         why = {}
     try:
-        import scouting as _scmod
         tpot = _scmod.consensus_range(prosp)
     except Exception:
         tpot = "?"
     try:
-        v_in = sum(te.asset_value(a) for a in gives)
-        v_out = sum(te.asset_value(a) for a in gets)
+        v_in = sum(_te.asset_value(a) for a in gives)
+        v_out = sum(_te.asset_value(a) for a in gets)
         share = v_in / (v_in + v_out) if (v_in + v_out) > 0 else 0.5
     except Exception:
         share = 0.5
@@ -1236,7 +1214,7 @@ def ddt_build_call(game):
         "why_bullets": [str(b) for b in (why.get("bullets", None) or [])],
         "target": {
             "name": safe_call(lambda: getattr(prosp, "full_name", "?"), "?", context="draft/get_full_name"),
-            "position": ddt._pos_of(prosp),
+            "position": _ddt._pos_of(prosp),
             "age": safe_call(lambda: int(getattr(prosp, "age", 0) or 0), 0, context="draft/get_age"),
             "potential": str(tpot),
             "potential_grade": str(
@@ -1303,11 +1281,6 @@ def ddt_answer(game, action):
             pass
         return True, "counter", deeplink
     if action == "accept":
-        try:
-            import trade_engine as _te
-            import draft_day_trades as _ddt
-        except Exception:
-            return False, "Engine unavailable.", None
         league = _league(game)
         user_team = _user_team(game)
         caller = next(
@@ -2300,7 +2273,6 @@ class DraftScreen(BaseScreen):
 
     @staticmethod
     def _grade_bg(color):
-        from PySide6.QtGui import QColor, QBrush
         try:
             return QBrush(QColor(str(color or "#666666")))
         except Exception:
