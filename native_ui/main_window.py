@@ -265,6 +265,10 @@ class HubPage(QWidget):
         self.auto_btn.setCursor(Qt.PointingHandCursor)
         self.auto_btn.clicked.connect(self._on_auto_advance)
         hero_foot.addWidget(self.auto_btn)
+        # auto-advance status note (mirrors web th-auto-note)
+        self.auto_note = QLabel("")
+        self.auto_note.setObjectName("hub-auto-note")
+        hero_foot.addWidget(self.auto_note)
         hero_foot.addStretch()
         hero_l.addLayout(hero_foot)
         outer.addWidget(self.hero)
@@ -363,9 +367,9 @@ class HubPage(QWidget):
         # Batch D: the 7 HTML panels the native hub was missing
         self.panel_sched = self._make_panel("SCHEDULE")
         panels.addWidget(self.panel_sched, 1, 0)
-        self.panel_inj = self._make_panel("INJURIES", click_screen="dressing_room")
+        self.panel_inj = self._make_panel("INJURIES", click_screen="morale")
         panels.addWidget(self.panel_inj, 1, 1)
-        self.panel_morale = self._make_panel("MORALE", click_screen="dressing_room")
+        self.panel_morale = self._make_panel("MORALE", click_screen="morale")
         panels.addWidget(self.panel_morale, 1, 2)
         self.panel_prosp = self._make_panel("TOP PROSPECTS", click_screen="development")
         panels.addWidget(self.panel_prosp, 1, 3)
@@ -396,6 +400,35 @@ class HubPage(QWidget):
         self.ticker.mousePressEvent = lambda e: self._main.show_screen("news")
         tick_wrap.addWidget(self.ticker, 1)
         outer.addLayout(tick_wrap)
+
+        # ---- footer hints bar (mirrors web footer.hints) ----
+        foot = QHBoxLayout()
+        foot.setContentsMargins(0, 6, 0, 8)
+        foot.setSpacing(18)
+        hint1 = QLabel("<b>Click</b> a tile to open")
+        hint1.setObjectName("hub-hint")
+        hint1.setTextFormat(Qt.RichText)
+        foot.addWidget(hint1)
+        hint2 = QLabel("<b>Esc</b> back to hub")
+        hint2.setObjectName("hub-hint")
+        hint2.setTextFormat(Qt.RichText)
+        foot.addWidget(hint2)
+        foot.addStretch()
+        self.exit_btn = QPushButton("\u23fb Exit")
+        self.exit_btn.setObjectName("hub-exit-btn")
+        self.exit_btn.setToolTip("Save and quit Puck Dynasty")
+        self.exit_btn.setCursor(Qt.PointingHandCursor)
+        self.exit_btn.clicked.connect(self._on_hub_exit)
+        foot.addWidget(self.exit_btn)
+        outer.addLayout(foot)
+
+        # loading overlay ("LOADING FRANCHISE…" — mirrors web spinner)
+        self._loading = QLabel("\u27f3 LOADING FRANCHISE\u2026")
+        self._loading.setObjectName("hub-loading")
+        self._loading.setAlignment(Qt.AlignCenter)
+        self._loading.hide()
+        # overlay is positioned over the page on refresh
+        self._loading.setParent(self)
 
         # ticker scroll timer
         self._ticker_timer = QTimer(self)
@@ -448,6 +481,22 @@ class HubPage(QWidget):
                 padding: 6px 14px; font-size: 13px;
             }
             #hub-auto-btn:hover { border-color: #3B82F6; color: #f2f5fa; }
+            #hub-auto-note {
+                font-size: 12px; color: #9aa3b2; font-style: italic;
+            }
+            #hub-hint { font-size: 12px; color: #8b95ab; }
+            #hub-hint b { color: #e5e9f0; font-weight: 700; }
+            #hub-exit-btn {
+                background: transparent; border: 1px solid #2a3550;
+                border-radius: 6px; padding: 4px 14px;
+                font-size: 12px; font-weight: 600; color: #c6cdd8;
+            }
+            #hub-exit-btn:hover { border-color: #F44336; color: #ffffff; }
+            #hub-loading {
+                background: rgba(6,10,19,0.82);
+                font-size: 18px; font-weight: 800; letter-spacing: 3px;
+                color: #3B82F6;
+            }
             #hub-more-label {
                 font-size: 12px; font-weight: 800; letter-spacing: 4px;
                 color: rgba(255,255,255,0.38);
@@ -593,6 +642,28 @@ class HubPage(QWidget):
                             sw.deleteLater()
 
     # ---------- interactions ----------
+    def _automation_state_text(self):
+        """Current automation state for the hub status note."""
+        try:
+            auto = getattr(self._main, "_season_flow_automation", None)
+            if auto is None:
+                return ""
+            active = bool(getattr(auto, "automation_active", False))
+            mode = getattr(auto, "mode", None)
+            mode_name = getattr(mode, "name", "") or str(mode or "")
+            if active:
+                return "Auto-advance on \u2014 %s" % (
+                    mode_name.replace("_", " ").title() or "simming days")
+            return ""
+        except Exception:
+            return ""
+
+    def _refresh_auto_note(self):
+        try:
+            self.auto_note.setText(self._automation_state_text())
+        except Exception:
+            pass
+
     def _on_auto_advance(self):
         game = getattr(self._main, "game", None)
         if game and hasattr(game, "toggle_auto_advance"):
@@ -601,7 +672,25 @@ class HubPage(QWidget):
             except Exception as e:
                 print("[hub] auto-advance failed: %s" % e)
         else:
-            print("[hub] auto-advance not available on this game object")
+            # No hub-level toggle on the game object: open the season-flow
+            # screen, which owns the real automation controls.
+            try:
+                self._main.show_screen("season_flow")
+                return
+            except Exception as e:
+                print("[hub] auto-advance not available: %s" % e)
+        self._refresh_auto_note()
+
+    def _on_hub_exit(self):
+        """Save and quit (mirrors web footer Exit button)."""
+        try:
+            self._main.save_game()
+        except Exception as e:
+            print("[hub] save before exit failed: %s" % e)
+        try:
+            QApplication.instance().quit()
+        except Exception:
+            pass
 
     def _scroll_ticker(self):
         if not self._ticker_items:
@@ -736,6 +825,15 @@ class HubPage(QWidget):
             team = getattr(gm, "user_team", None) or getattr(game, "user_team", None)
             if not team:
                 return
+            # loading indicator (mirrors web "LOADING FRANCHISE…" spinner)
+            try:
+                self._loading.resize(self.size())
+                self._loading.move(0, 0)
+                self._loading.show()
+                self._loading.raise_()
+                QApplication.processEvents()
+            except Exception:
+                pass
             team_name = getattr(team, "team_name", "") or ""
             primary, deep, soft, wash, glow = self._team_colors(team_name)
 
@@ -828,8 +926,40 @@ class HubPage(QWidget):
                 if gp > 0:
                     self._strip["gf"]._val.setText("%.1f" % (gf / gp))
                     self._strip["ga"]._val.setText("%.1f" % (ga / gp))
-                self._strip["gf"]._sub.setText("Offense")
-                self._strip["ga"]._sub.setText("Defense")
+                # league ranks under offense/defense (mirrors web sublabels)
+                try:
+                    _lg = getattr(game, "league", None) or getattr(gm, "league", None)
+                    _teams = list(getattr(_lg, "teams", []) or []) if _lg else []
+
+                    def _rank_suffix(n):
+                        if 10 <= n % 100 <= 20:
+                            return "th"
+                        return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+                    if _teams:
+                        _by_off = sorted(
+                            _teams, key=lambda t: getattr(t, "goals_for", 0) or 0,
+                            reverse=True)
+                        _orank = next(
+                            (i + 1 for i, t in enumerate(_by_off) if t is team),
+                            None)
+                        _by_def = sorted(
+                            _teams, key=lambda t: getattr(t, "goals_against", 0) or 0)
+                        _drank = next(
+                            (i + 1 for i, t in enumerate(_by_def) if t is team),
+                            None)
+                        self._strip["gf"]._sub.setText(
+                            "Offense: %d%s" % (_orank, _rank_suffix(_orank))
+                            if _orank else "Offense")
+                        self._strip["ga"]._sub.setText(
+                            "Defense: %d%s" % (_drank, _rank_suffix(_drank))
+                            if _drank else "Defense")
+                    else:
+                        self._strip["gf"]._sub.setText("Offense")
+                        self._strip["ga"]._sub.setText("Defense")
+                except Exception:
+                    self._strip["gf"]._sub.setText("Offense")
+                    self._strip["ga"]._sub.setText("Defense")
             except Exception:
                 pass
 
@@ -942,6 +1072,10 @@ class HubPage(QWidget):
             self._fill_ticker(game, gm)
         except Exception as e:
             print("[hub] refresh failed: %s" % e)
+            try:
+                self._loading.hide()
+            except Exception:
+                pass
 
     def _fill_next_panel(self, g, team_name):
         panel = self.panel_next
@@ -1527,6 +1661,21 @@ class HubPage(QWidget):
         self._ticker_items = items
         self._ticker_pos = 0
         self.ticker.setText(("   \u2022   ".join(items)).upper()[:400])
+
+        # hide loading indicator; refresh auto-advance status note
+        try:
+            self._loading.hide()
+        except Exception:
+            pass
+        self._refresh_auto_note()
+
+    def resizeEvent(self, event):
+        try:
+            if self._loading.isVisible():
+                self._loading.resize(self.size())
+        except Exception:
+            pass
+        super().resizeEvent(event)
 
 
 class MainWindow(QMainWindow):
