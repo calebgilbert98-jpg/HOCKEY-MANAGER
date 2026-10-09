@@ -100,13 +100,18 @@ class _DayDetailDialog(QDialog):
     Mirrors the DailyResultsDialog layout (dialog-title, date header,
     scrollable game cards, Close button). Games come from the real
     league schedule; an empty day shows "No games scheduled".
+
+    Event markers (trade deadline, entry draft) are clickable and
+    navigate to the Deadline Center / Draft Day Central. Team names
+    in game cards are clickable and open the team page.
     """
 
     def __init__(self, iso_date, games, events, my_name, today_iso,
-                 parent=None):
+                 parent=None, main_window=None):
         super().__init__(parent)
         self._iso = str(iso_date or "")
         self._today_iso = today_iso or ""
+        self._main_window = main_window
         self._cards = []
         self._event_labels = []
         self._empty_label = None
@@ -129,12 +134,29 @@ class _DayDetailDialog(QDialog):
             icon = {"deadline": "\u23F0", "draft": "\U0001F3AF",
                     "season": "\U0001F3C1"}.get(kind, "\u2022")
             label = ev.get("label", "") if isinstance(ev, dict) else ""
-            el = QLabel(f"{icon} {label}")
-            el.setStyleSheet(
-                "font-size: 13px; font-weight: 700; color: #e8b34b;")
-            el.setWordWrap(True)
-            layout.addWidget(el)
-            self._event_labels.append(el)
+            # Deadline/draft events get action buttons; others are labels.
+            target = {"deadline": "deadline",
+                      "draft": "draft_central"}.get(kind)
+            if target and self._main_window is not None:
+                btn = QPushButton(f"{icon} {label}  →")
+                btn.setCursor(Qt.PointingHandCursor)
+                btn.setStyleSheet(
+                    "QPushButton { font-size: 13px; font-weight: 700; "
+                    "color: #e8b34b; background: transparent; border: none; "
+                    "text-align: left; padding: 2px; } "
+                    "QPushButton:hover { color: #f5c86e; "
+                    "text-decoration: underline; }")
+                btn.clicked.connect(
+                    lambda _c=False, t=target: self._goto(t))
+                layout.addWidget(btn)
+                self._event_labels.append(btn)
+            else:
+                el = QLabel(f"{icon} {label}")
+                el.setStyleSheet(
+                    "font-size: 13px; font-weight: 700; color: #e8b34b;")
+                el.setWordWrap(True)
+                layout.addWidget(el)
+                self._event_labels.append(el)
 
         # Scrollable game list
         scroll = QScrollArea()
@@ -175,6 +197,38 @@ class _DayDetailDialog(QDialog):
         except Exception:
             return str(iso or "Unknown date")
 
+    def _goto(self, screen_name):
+        """Navigate to a screen and close this dialog."""
+        try:
+            if self._main_window is not None:
+                self.accept()
+                self._main_window.show_screen(screen_name)
+        except Exception:
+            pass
+
+    def _open_team(self, team_name):
+        """Open a team page and close this dialog."""
+        try:
+            if self._main_window is not None and team_name:
+                self.accept()
+                self._main_window.open_team(team_name)
+        except Exception:
+            pass
+
+    def _team_link(self, team_name):
+        """Clickable team-name button styled as a link."""
+        btn = QPushButton(str(team_name or "?"))
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            "QPushButton { font-size: 15px; font-weight: 700; "
+            "color: #ffffff; background: transparent; border: none; "
+            "padding: 0px; } "
+            "QPushButton:hover { color: #3B82F6; "
+            "text-decoration: underline; }")
+        btn.clicked.connect(
+            lambda _c=False, t=str(team_name or ""): self._open_team(t))
+        return btn
+
     def _make_game_card(self, g):
         card = QFrame()
         card.setObjectName("tile")
@@ -183,12 +237,26 @@ class _DayDetailDialog(QDialog):
         layout.setSpacing(2)
 
         mine = bool(g.get("mine"))
-        matchup = QLabel(f"{g.get('away', '?')} @ {g.get('home', '?')}")
-        matchup.setStyleSheet(
-            "font-size: 15px; font-weight: 700; "
-            f"color: {'#3B82F6' if mine else '#ffffff'};")
-        matchup.setWordWrap(True)
-        layout.addWidget(matchup)
+        # Clickable team names (away @ home).
+        matchup_row = QHBoxLayout()
+        matchup_row.setSpacing(4)
+        matchup_row.setContentsMargins(0, 0, 0, 0)
+        away_btn = self._team_link(g.get("away", "?"))
+        at_lbl = QLabel("@")
+        at_lbl.setStyleSheet("font-size: 15px; color: #9aa4b8;")
+        home_btn = self._team_link(g.get("home", "?"))
+        if mine:
+            for b in (away_btn, home_btn):
+                b.setStyleSheet(
+                    "QPushButton { font-size: 15px; font-weight: 700; "
+                    "color: #3B82F6; background: transparent; border: none; "
+                    "padding: 0px; } "
+                    "QPushButton:hover { text-decoration: underline; }")
+        matchup_row.addWidget(away_btn)
+        matchup_row.addWidget(at_lbl)
+        matchup_row.addWidget(home_btn)
+        matchup_row.addStretch()
+        layout.addLayout(matchup_row)
 
         status = _game_status(g, self._iso, self._today_iso)
         if g.get("played"):
@@ -313,6 +381,14 @@ class CalendarScreen(BaseScreen):
         self._selected_iso = ""
 
     # ------------------------------------------------------------------
+    def _open_team_page(self, team_name):
+        """Open a team page from a clickable opponent name."""
+        try:
+            if team_name and hasattr(self, "main_window"):
+                self.main_window.open_team(team_name)
+        except Exception:
+            pass
+
     def _open_deadline(self):
         try:
             self.navigate_to("deadline")
@@ -500,7 +576,8 @@ class CalendarScreen(BaseScreen):
             self._selected_iso = iso
             self._render_grid()
             dlg = _DayDetailDialog(iso, games, events, self._my_name,
-                                   self._today_iso, parent=self)
+                                   self._today_iso, parent=self,
+                                   main_window=self.main_window)
             dlg.exec()
         except Exception as e:
             print(f"[calendar] day detail failed: {e}")
@@ -540,11 +617,30 @@ class CalendarScreen(BaseScreen):
                 "font-size: 11px; font-weight: 700; color: #3B82F6;")
             cl.addWidget(gl)
             for g in mine[:2]:
-                ol = QLabel(
-                    f"{'vs' if g['is_home'] else '@'} {g['opponent'] or g['away']}"
-                    + (" (PRE)" if g["preseason"] else ""))
-                ol.setStyleSheet("font-size: 10px; color: #9aa4b8;")
-                cl.addWidget(ol)
+                opp = g['opponent'] or g['away']
+                pre = 'vs' if g['is_home'] else '@'
+                row = QHBoxLayout()
+                row.setSpacing(2)
+                row.setContentsMargins(0, 0, 0, 0)
+                pre_lbl = QLabel(pre + (" (PRE)" if g["preseason"] else ""))
+                pre_lbl.setStyleSheet("font-size: 10px; color: #9aa4b8;")
+                row.addWidget(pre_lbl)
+                if opp:
+                    ob = QPushButton(opp)
+                    ob.setCursor(Qt.PointingHandCursor)
+                    ob.setStyleSheet(
+                        "QPushButton { font-size: 10px; color: #9aa4b8; "
+                        "background: transparent; border: none; padding: 0px; "
+                        "text-align: left; } "
+                        "QPushButton:hover { color: #3B82F6; "
+                        "text-decoration: underline; }")
+                    ob.clicked.connect(
+                        lambda _c=False, t=opp: self._open_team_page(t))
+                    row.addWidget(ob)
+                row.addStretch()
+                cw = QWidget()
+                cw.setLayout(row)
+                cl.addWidget(cw)
         elif games:
             gl = QLabel(f"{len(games)} league")
             gl.setStyleSheet("font-size: 11px; color: #6b7488;")

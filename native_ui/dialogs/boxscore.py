@@ -276,6 +276,7 @@ def _box_player_stats(r, by_id, home_name, away_name):
                         sa = sv + ga
                     svp = round(sv / sa * 100, 1) if sa else None
                     goalies.append({
+                        "pid": getattr(p, "id", None),
                         "name": _player_name(by_id, getattr(p, "id", None)),
                         "sa": sa, "saves": sv, "svp": svp, "ga": ga,
                     })
@@ -283,6 +284,7 @@ def _box_player_stats(r, by_id, home_name, away_name):
                     g = int(gs.get("g", 0) or 0)
                     a = int(gs.get("a", 0) or 0)
                     skaters.append({
+                        "pid": getattr(p, "id", None),
                         "name": _player_name(by_id, getattr(p, "id", None)),
                         "pos": _pos_short(p),
                         "g": g, "a": a, "p": g + a,
@@ -477,16 +479,37 @@ class BoxscoreDialog(QDialog):
                  parent=None):
         super().__init__(parent)
         self.game = game
+        # Resolve main_window from the parent screen for navigation.
+        self._main_window = None
+        try:
+            p = parent
+            seen = 0
+            while p is not None and seen < 5:
+                if hasattr(p, "main_window"):
+                    self._main_window = p.main_window
+                    break
+                if hasattr(p, "show_screen"):
+                    self._main_window = p
+                    break
+                p = p.parent() if hasattr(p, "parent") else None
+                seen += 1
+        except Exception:
+            pass
         self.setWindowTitle("Box Score")
         self.setMinimumSize(900, 700)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        # Header
+        # Header (clickable team names)
+        self._header_row = QHBoxLayout()
+        self._header_row.setAlignment(Qt.AlignCenter)
+        layout.addLayout(self._header_row)
         self._header = QLabel("")
         self._header.setObjectName("dialog-title")
         self._header.setAlignment(Qt.AlignCenter)
+        # kept for error state; hidden when teams render as buttons
+        self._header.hide()
         layout.addWidget(self._header)
         self._meta = QLabel("")
         self._meta.setAlignment(Qt.AlignCenter)
@@ -614,6 +637,7 @@ class BoxscoreDialog(QDialog):
             }
             self._players_team = away_name
             self._lines_team = away_name
+            self._by_id = by_id
             self._error.hide()
             self._render_all()
         except Exception as e:
@@ -624,12 +648,49 @@ class BoxscoreDialog(QDialog):
     def _show_error(self, msg):
         self._error.setText(msg)
         self._error.show()
+        self._clear_header_row()
         self._header.setText("BOX SCORE")
+        self._header.show()
         self._meta.setText("")
         self._stars.setText("")
         for pane in (self._scoring_pane, self._players_pane,
                      self._lines_pane, self._teams_pane):
             self._clear_pane(pane)
+
+    def _clear_header_row(self):
+        while self._header_row.count():
+            item = self._header_row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _team_header_btn(self, label, team_name):
+        btn = QPushButton(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            "QPushButton { font-size: 20px; font-weight: 800; "
+            "color: #ffffff; background: transparent; border: none; } "
+            "QPushButton:hover { color: #3B82F6; "
+            "text-decoration: underline; }")
+        btn.clicked.connect(
+            lambda _c=False, t=team_name: self._open_team(t))
+        return btn
+
+    def _open_team(self, team_name):
+        try:
+            if self._main_window is not None and team_name:
+                self.accept()
+                self._main_window.open_team(team_name)
+        except Exception:
+            pass
+
+    def _open_player(self, player):
+        try:
+            if self._main_window is not None and player is not None:
+                self.accept()
+                self._main_window.show_player(player)
+        except Exception:
+            pass
 
     # -- render --------------------------------------------------------
 
@@ -638,8 +699,19 @@ class BoxscoreDialog(QDialog):
         if not data:
             return
         a, h = data["away"], data["home"]
-        self._header.setText(
-            f"{a['abbr']}  {a['score']}  @  {h['score']}  {h['abbr']}")
+        self._header.hide()
+        self._clear_header_row()
+        # Clickable team abbreviations flanking the score.
+        self._header_row.addStretch()
+        self._header_row.addWidget(
+            self._team_header_btn(a["abbr"], a["name"]))
+        score_lbl = QLabel(f"  {a['score']}  @  {h['score']}  ")
+        score_lbl.setStyleSheet(
+            "font-size: 20px; font-weight: 800; color: #ffffff;")
+        self._header_row.addWidget(score_lbl)
+        self._header_row.addWidget(
+            self._team_header_btn(h["abbr"], h["name"]))
+        self._header_row.addStretch()
         self._meta.setText(
             f"{a['name']} @ {h['name']} · {data['date_label']}"
             + (f" · {data['note']}" if data["note"] else ""))
@@ -790,11 +862,17 @@ class BoxscoreDialog(QDialog):
             0, QHeaderView.Stretch)
         sk.verticalHeader().setVisible(False)
         sk.setEditTriggers(QTableWidget.NoEditTriggers)
+        sk.setCursor(Qt.PointingHandCursor)
         for i, s in enumerate(t["skaters"]):
             for j, val in enumerate(
                     [s["name"], s["pos"], s["g"], s["a"], s["p"],
                      s["sog"], s["hits"], s["blk"], s["fo"]]):
-                sk.setItem(i, j, QTableWidgetItem(str(val)))
+                item = QTableWidgetItem(str(val))
+                if j == 0 and s.get("pid") is not None:
+                    item.setData(Qt.UserRole, s["pid"])
+                    item.setForeground(QColor("#3B82F6"))
+                sk.setItem(i, j, item)
+        sk.cellClicked.connect(self._on_player_cell_clicked)
         layout.addWidget(sk)
         if t["goalies"]:
             gh = QLabel("Goaltenders")
@@ -807,13 +885,38 @@ class BoxscoreDialog(QDialog):
                 0, QHeaderView.Stretch)
             gl.verticalHeader().setVisible(False)
             gl.setEditTriggers(QTableWidget.NoEditTriggers)
+            gl.setCursor(Qt.PointingHandCursor)
             for i, gg in enumerate(t["goalies"]):
                 svp = "–" if gg["svp"] is None else f"{gg['svp']:.1f}%"
                 for j, val in enumerate(
                         [gg["name"], gg["sa"], gg["saves"], svp, gg["ga"]]):
-                    gl.setItem(i, j, QTableWidgetItem(str(val)))
+                    item = QTableWidgetItem(str(val))
+                    if j == 0 and gg.get("pid") is not None:
+                        item.setData(Qt.UserRole, gg["pid"])
+                        item.setForeground(QColor("#3B82F6"))
+                    gl.setItem(i, j, item)
+            gl.cellClicked.connect(self._on_player_cell_clicked)
             layout.addWidget(gl)
         layout.addStretch()
+
+    def _on_player_cell_clicked(self, row, col):
+        """Open the player profile when a player-name cell is clicked."""
+        try:
+            tbl = self.sender()
+            if tbl is None:
+                return
+            item = tbl.item(row, 0)
+            if item is None:
+                return
+            pid = item.data(Qt.UserRole)
+            if pid is None:
+                return
+            by_id = getattr(self, "_by_id", None) or {}
+            player = by_id.get(pid)
+            if player is not None:
+                self._open_player(player)
+        except Exception:
+            pass
 
     def _render_lines(self):
         pane = self._lines_pane
