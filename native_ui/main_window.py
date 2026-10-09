@@ -1881,9 +1881,26 @@ class MainWindow(QMainWindow):
             if blockers:
                 self.show_blockers(blockers)
             else:
-                # Advance the day
-                if hasattr(self.game, "simulate_day"):
-                    self.game.simulate_day()
+                # Advance the day with a non-modal loading toast so the app
+                # doesn't look frozen during long sims (mainline parity:
+                # day_sim_loading.py). The toast never blocks input.
+                overlay = None
+                try:
+                    from native_ui.dialogs.sim_progress import (
+                        DaySimLoadingOverlay)
+                    overlay = DaySimLoadingOverlay(self)
+                    overlay.set_status("Simulating day...")
+                except Exception as e:
+                    print(f"[native] day-sim overlay failed (non-fatal): {e}")
+                try:
+                    if hasattr(self.game, "simulate_day"):
+                        self.game.simulate_day()
+                finally:
+                    if overlay is not None:
+                        try:
+                            overlay.destroy()
+                        except Exception:
+                            pass
                 # Refresh current screen
                 current = self.stack.currentWidget() if hasattr(self, "stack") else None
                 if current and hasattr(current, "refresh"):

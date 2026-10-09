@@ -75,6 +75,12 @@ a = Analysis(
         'native_ui.screens.draft', 'native_ui.screens.morale',
         'native_ui.widgets', 'native_ui.widgets.player_table',
         'native_ui.widgets.attribute_bar',
+        # Explicit: dialog modules. Some are imported inside functions
+        # (deferred), which PyInstaller's static analysis can miss.
+        'native_ui.dialogs', 'native_ui.dialogs.modal',
+        'native_ui.dialogs.sim_progress', 'native_ui.dialogs.daily_results',
+        'native_ui.dialogs.boxscore', 'native_ui.dialogs.recall_picker',
+        'native_ui.dialogs.shortcuts',
     ] + _screen_mods \
       + _first_party,
     hookspath=[],
