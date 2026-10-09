@@ -126,7 +126,7 @@ class AssignDialog(QDialog):
             role = str(getattr(getattr(s, "role", None), "value",
                                getattr(s, "role", "") or ""))
             if "scout" in role.lower():
-                self._prospect_combo.addItem(
+                self._scout_combo.addItem(
                     getattr(s, "full_name", getattr(s, "name", "?")), s)
 
     def get_selection(self):
