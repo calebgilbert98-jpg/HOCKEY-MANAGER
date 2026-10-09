@@ -301,79 +301,87 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
                           if _team_name(t) == away_name), None)
         if home_team is None or away_team is None:
             return
+        # Grudge-week presentation (canonical day-sim order: pre-game).
+        # Never raises; no-ops when the matchup has no feud history.
+        try:
+            _gmkt = getattr(gm, "_grudge_week_market", None)
+            if callable(_gmkt):
+                _gmkt(gdate, home_team, away_team)
+        except Exception:
+            pass
         from simulation import GameSim
         sim = GameSim(home_team, away_team)
-        sim.run()
-        home_score = int(getattr(sim, "home_score", 0) or 0)
-        away_score = int(getattr(sim, "away_score", 0) or 0)
-        winner = home_team if home_score > away_score else away_team
-        notable = safe_call(lambda: list(getattr(sim, "notable_events", None) or []),
-                        [], context="schedule/sim_missed_game") or []
+        winner, loser, scores, events, notable = sim.run()
+        home_score = int(scores[0] or 0)
+        away_score = int(scores[1] or 0)
+        notable = list(notable or [])
         went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
                       for e in notable)
-        went_so = any(isinstance(e, dict) and e.get("period", 0) == 5
+        went_so = any(isinstance(e, dict) and
+                      (e.get("period", 0) == 5
+                       or e.get("event") == "Shootout Goal")
                       for e in notable)
-        # Game lines dressed for the box-score Lines tab -- canonical
-        # day-sim path stamps these via gm._snapshot_game_lines().
-        try:
-            _snap_lines = gm._snapshot_game_lines(home_team, away_team)
-        except Exception:
-            _snap_lines = None
-        # NEW-A6 TOI/fatigue snapshots, same as the day-sim batch path
-        # keeps for full-engine games.
-        try:
-            _toi, _fat = gm._snapshot_game_toi_fatigue(sim, home_team, away_team)
-        except Exception:
-            _toi, _fat = None, None
-        game_result = {
-            "date": gdate,
-            "home_team": home_team,
-            "away_team": away_team,
-            "home_score": home_score,
-            "away_score": away_score,
-            "winner": winner,
-            "events": safe_call(lambda: list(getattr(sim, "game_log", None) or []),
-                            [], context="schedule/sim_missed_game") or [],
-            "notable_events": notable,
-            "player_ratings": {},
-            "event_log": safe_call(lambda: list(getattr(sim, "event_log", None) or []),
-                               [], context="schedule/sim_missed_game") or [],
-            "game_stats": safe_call(lambda: dict(getattr(sim, "game_stats", None) or {}),
-                                {}, context="schedule/sim_missed_game") or {},
-            "team_stats": safe_call(lambda: dict(getattr(sim, "team_stats", None) or {}),
-                                {}, context="schedule/sim_missed_game") or {},
-            "overtime": went_ot,
-            "shootout": went_so,
-            # Post-game Lines tab: the combos actually dressed.
-            "lines": _snap_lines,
-        }
-        if _toi is not None:
-            game_result["player_toi"] = _toi
-        if _fat is not None:
-            game_result["player_fatigue"] = _fat
-        # Career NHL GP credit -- the day-sim batch path credits every
-        # rostered player on both clubs for each completed game (waiver
-        # exemption input). GameSim.run() already flushed player season
-        # stats (goals/assists/shots/saves/...) so nothing else is derived.
+        # Career NHL GP credit -- the day-sim path credits every rostered
+        # player on both clubs for each completed game (waiver exemption
+        # input). GameSim.run() already flushed player season stats
+        # (goals/assists/shots/saves/...) so nothing else is derived.
         try:
             _credit = getattr(gm, "_credit_nhl_games_played", None)
             if callable(_credit):
                 _credit(home_team, away_team, preseason=False)
         except Exception:
             pass
-        # Record (keeps the derived indexes in sync when available).
-        rec = getattr(game, "_record_game_result", None)
-        if callable(rec):
-            rec(game_result)
-        else:
-            safe_call(lambda: getattr(game, "game_results", None).append(game_result),
-                      context="schedule/sim_missed_game")
-        # Three stars -- canonical day-sim path records these right after
-        # _record_game_result for every regular-season game.
+        # Narrative post-game hook (canonical day-sim order): the quick-sim
+        # path rolls fights/brawls through the shared incident module, records
+        # the night's stories, and feeds the fight count back onto the sim so
+        # the grudge-week grader below sees real numbers. Headlines only for
+        # the user's games. Never raises; never touches scoring or stats.
         try:
-            import stars as _stars_mod
-            _stars_mod.record_game_stars(game_result, home_team, away_team,
-                                        preseason=False, game_date=gdate)
+            _npg = getattr(gm, "_narrative_postgame", None)
+            if callable(_npg):
+                _user_team = getattr(gm, "user_team", None)
+                _npg(sim, home_team, away_team, (home_score, away_score),
+                     went_ot=went_ot, shootout=went_so,
+                     roll_incidents=True,
+                     deliver_headlines=bool(
+                         _user_team is not None
+                         and _user_team in (home_team, away_team)),
+                     game_date=gdate)
+        except Exception:
+            pass
+        # Canonical result processing: takes the already-simmed game and
+        # builds the full result dict with every side effect -- standings
+        # (W/L/OTL/points + team records), grudge-week report card, player
+        # ratings, lines/TOI/fatigue snapshots, game-record storage, three
+        # stars, media engine, news log + post-game emails. Exactly-once:
+        # GameSim.run() already flushed player season stats itself, so the
+        # event-based stat pass is skipped (stats_from_events=False) to
+        # avoid double counting. This replaces the hand-built result dict
+        # (which left player_ratings empty) and the manually replicated
+        # standings/stars/record calls that used to live here.
+        _proc = getattr(gm, "_process_single_game_result", None)
+        if callable(_proc):
+            _proc(gdate, home_team, away_team, winner, loser,
+                  (home_score, away_score), events, notable, sim,
+                  stats_from_events=False, preseason=False)
+        else:
+            # Fallback: the game manager predates the canonical API. Record
+            # the raw sim output so the game is never dropped.
+            safe_call(
+                lambda: getattr(game, "game_results", None).append({
+                    "date": gdate, "home_team": home_team,
+                    "away_team": away_team, "home_score": home_score,
+                    "away_score": away_score, "winner": winner,
+                    "notable_events": notable,
+                }),
+                context="schedule/sim_missed_game")
+        # Lore: deliver any headlines the sim collected (line brawls, ...),
+        # the same call the day-sim makes right after result processing.
+        try:
+            import headlines as _hl_mod
+            _drain = getattr(_hl_mod, "drain_sim_headlines", None)
+            if callable(_drain):
+                _drain(gm, sim)
         except Exception:
             pass
         # Stamp the schedule entry so the page shows Final.
@@ -381,18 +389,6 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
             if isinstance(entry, dict):
                 entry["home_score"] = home_score
                 entry["away_score"] = away_score
-        except Exception:
-            pass
-        # Apply standings updates via the canonical GameManager method --
-        # the same call the day-sim makes for simmed games (and the same
-        # pattern watch.py uses for watched games). This replaces the
-        # manual team-record/standings duplication that used to live here.
-        try:
-            upd = getattr(gm, "_update_standings_fast", None)
-            if callable(upd):
-                upd(home_team, away_team, winner,
-                    (home_score, away_score),
-                    went_to_ot=(went_ot or went_so), preseason=False)
         except Exception:
             pass
         try:
