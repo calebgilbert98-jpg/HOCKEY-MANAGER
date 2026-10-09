@@ -242,20 +242,32 @@ class ShortlistScreen(BaseScreen):
                     text += f" ({notes[:40]})"
                 item = QListWidgetItem(text)
                 item.setData(Qt.UserRole, getattr(e, "player_id", ""))
-                # Resolve the player object for double-click nav
+                # Resolve the player object for double-click nav.
+                # Search the same pools Add Player uses: team rosters,
+                # free agents, and draft prospects. Entries store the
+                # player's `id` attribute (see _add_player).
                 player_obj = None
                 try:
                     pid = getattr(e, "player_id", "")
                     if pid and hasattr(self, "game"):
-                        # Search all teams for the player
-                        league = getattr(self.game, "league", None)
+                        gm = _safe(lambda: getattr(self.game, "game_manager",
+                                                   None)) or self.game
+                        league = _safe(lambda: getattr(gm, "league", None)) or \
+                            getattr(self.game, "league", None)
                         if league:
-                            for team in getattr(league, "teams", []):
-                                for p in getattr(team, "roster", []):
-                                    if str(getattr(p, "player_id", "")) == str(pid):
-                                        player_obj = p
-                                        break
-                                if player_obj:
+                            pools = []
+                            for team in getattr(league, "teams", []) or []:
+                                pools.extend(
+                                    list(getattr(team, "roster", None) or []))
+                            for src in ("free_agents", "draft_prospects"):
+                                pools.extend(list(
+                                    getattr(league, src, None) or []))
+                            for p in pools:
+                                cand = getattr(p, "id", None)
+                                if cand is None:
+                                    cand = getattr(p, "player_id", None)
+                                if str(cand) == str(pid):
+                                    player_obj = p
                                     break
                 except Exception:
                     pass

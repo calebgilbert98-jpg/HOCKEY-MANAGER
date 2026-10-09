@@ -592,7 +592,21 @@ class TacticsScreen(BaseScreen):
         try:
             cat = pill._cat
             skey = pill.property("sys_key")
-            _tx.set_team_system(self._team, cat, skey)
+            team = self._team
+            # Route through the coach-ownership flow: if the GM owns the
+            # whiteboard, apply directly; if the coach owns it, suggest
+            # (personality/trust consequences fire inside).
+            control = "coach"
+            if _tx is not None:
+                control = _safe(lambda: _tx.get_tactics_control(team), "coach")
+            if control == "gm" or _rs is None:
+                _tx.set_team_system(team, cat, skey)
+            else:
+                res = _rs.suggest_tactics_to_coach(
+                    team, {cat: skey}, self._team_context()) or {}
+                text = res.get("text", "")
+                if text:
+                    self._push_tactics_news(f"Tactics: {text}")
         except Exception:
             pass
         self.refresh()
@@ -859,7 +873,20 @@ class TacticsScreen(BaseScreen):
             return
         try:
             if action[0] == "system":
-                _tx.set_team_system(self._team, action[1], action[2])
+                team = self._team
+                cat, skey = action[1], action[2]
+                control = "coach"
+                if _tx is not None:
+                    control = _safe(
+                        lambda: _tx.get_tactics_control(team), "coach")
+                if control == "gm" or _rs is None:
+                    _tx.set_team_system(team, cat, skey)
+                else:
+                    res = _rs.suggest_tactics_to_coach(
+                        team, {cat: skey}, self._team_context()) or {}
+                    text = res.get("text", "")
+                    if text:
+                        self._push_tactics_news(f"Tactics: {text}")
             elif action[0] == "coach_takeover":
                 self._coach_takeover()
         except Exception:
@@ -1153,7 +1180,7 @@ class TacticsScreen(BaseScreen):
         bag_note.setWordWrap(True)
         lay.addWidget(bag_note)
 
-        save = QPushButton("Set & Run Practice")
+        save = QPushButton("Set Weekly Practice Plan")
         save.setObjectName("primary-btn")
         save.setCursor(Qt.PointingHandCursor)
         save.clicked.connect(self._on_save_practice)

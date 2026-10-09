@@ -338,17 +338,44 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
         except Exception:
             pass
         # Team records (mirrors _update_team_stats_from_game).
+        # Also update league.standings (canonical day-sim parity):
+        # the standings table is a separate dict from team.wins/losses.
         try:
             home_team.goals_for = getattr(home_team, "goals_for", 0) + home_score
             home_team.goals_against = getattr(home_team, "goals_against", 0) + away_score
             away_team.goals_for = getattr(away_team, "goals_for", 0) + away_score
             away_team.goals_against = getattr(away_team, "goals_against", 0) + home_score
             if home_score > away_score:
+                winner, loser = home_team, away_team
                 home_team.update_record("WIN")
                 away_team.update_record("LOSS", overtime=went_ot)
             elif away_score > home_score:
+                winner, loser = away_team, home_team
                 away_team.update_record("WIN")
                 home_team.update_record("LOSS", overtime=went_ot)
+            else:
+                winner, loser = home_team, away_team
+                home_team.update_record("TIE")
+                away_team.update_record("TIE")
+            # Sync league.standings (day-sim parity: winner gets 2 pts,
+            # OT/SO loser gets 1 pt).
+            st = getattr(league, "standings", None)
+            if isinstance(st, dict):
+                for tname in (getattr(winner, "team_name", None),
+                              getattr(loser, "team_name", None)):
+                    if tname and tname not in st:
+                        st[tname] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+                wname = getattr(winner, "team_name", None)
+                lname = getattr(loser, "team_name", None)
+                if wname and wname in st:
+                    st[wname]["W"] = st[wname].get("W", 0) + 1
+                    st[wname]["Points"] = st[wname].get("Points", 0) + 2
+                if lname and lname in st:
+                    if went_ot or went_so:
+                        st[lname]["OTL"] = st[lname].get("OTL", 0) + 1
+                        st[lname]["Points"] = st[lname].get("Points", 0) + 1
+                    else:
+                        st[lname]["L"] = st[lname].get("L", 0) + 1
         except Exception:
             pass
         try:

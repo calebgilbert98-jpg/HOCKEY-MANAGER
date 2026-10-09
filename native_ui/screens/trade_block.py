@@ -773,9 +773,35 @@ class TradeBlockScreen(BaseScreen):
         return None
 
     def _on_negotiate(self):
-        # Jump to the trade center for this player.
+        # Jump to the trade center for this player, preselecting the
+        # interested team and player.
+        r = self._interest_row()
+        if r is None:
+            QMessageBox.information(self, "Negotiate",
+                                    "Select an interest row first.")
+            return
         try:
             self.navigate_to("trades")
+            screen = None
+            try:
+                screen = self.main_window._screens.get("trades")
+            except Exception:
+                pass
+            if screen is not None:
+                widget = screen.widget() if hasattr(screen, "widget") \
+                    else screen
+                setter = getattr(widget, "set_teams", None)
+                if callable(setter):
+                    # r has "team" (name) and "player" (name); resolve
+                    # the player id from the trade-block list.
+                    pid = None
+                    pname = str(r.get("player", ""))
+                    for p in getattr(self, "_mine_players", []):
+                        if str(getattr(p, "name",
+                                       getattr(p, "full_name", ""))) == pname:
+                            pid = _pid(p)
+                            break
+                    setter(r.get("team"), pid)
         except Exception:
             QMessageBox.information(
                 self, "Negotiate",

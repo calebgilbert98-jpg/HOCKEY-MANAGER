@@ -1027,10 +1027,7 @@ class MoraleScreen(BaseScreen):
 
         for title, attr, options in (
                 ("Situation", "_talk_situation",
-                 [("pregame", "Pregame"), ("intermission", "Intermission")]),
-                ("Score State", "_talk_score",
-                 [("trailing", "Trailing"), ("tied", "Tied"),
-                  ("leading", "Leading")])):
+                 [("pregame", "Pregame"), ("intermission", "Intermission")]),):
             h = QLabel(title.upper())
             h.setObjectName("section-header")
             layout.addWidget(h)
@@ -1039,7 +1036,11 @@ class MoraleScreen(BaseScreen):
             setattr(self, attr, pills)
             layout.addWidget(pills)
         self._talk_situation.set_value("pregame")
-        self._talk_score.set_value("tied")
+        # Score state is derived from game state, not user-editable.
+        # (Pregame defaults to tied; intermission uses live score when
+        # available.)
+        self._talk_score_label = QLabel("")
+        self._talk_score_label.setObjectName("tile")
 
         h = QLabel("SPEAKER")
         h.setObjectName("section-header")
@@ -1050,23 +1051,22 @@ class MoraleScreen(BaseScreen):
         self._talk_speaker.connect(self._update_talk_preview)
         layout.addWidget(self._talk_speaker)
 
-        h = QLabel("CONTEXT")
+        h = QLabel("CONTEXT (FROM GAME STATE)")
         h.setObjectName("section-header")
         layout.addWidget(h)
+        layout.addWidget(QLabel(
+            "Score, rivalry, and streak are read from the league — "
+            "they can't be edited."))
         ctx_row = QHBoxLayout()
-        self._talk_rival = QCheckBox("Rivalry game")
-        self._talk_rival.stateChanged.connect(
-            lambda _s: self._update_talk_preview())
-        ctx_row.addWidget(self._talk_rival)
-        ctx_row.addWidget(QLabel("Losing/winning streak:"))
-        self._talk_streak = QSpinBox()
-        self._talk_streak.setRange(-20, 20)
-        self._talk_streak.setValue(0)
-        self._talk_streak.valueChanged.connect(
-            lambda _v: self._update_talk_preview())
-        ctx_row.addWidget(self._talk_streak)
+        self._talk_rival_label = QLabel("")
+        self._talk_rival_label.setObjectName("tile")
+        ctx_row.addWidget(self._talk_rival_label)
+        self._talk_streak_label = QLabel("")
+        self._talk_streak_label.setObjectName("tile")
+        ctx_row.addWidget(self._talk_streak_label)
         ctx_row.addStretch()
         layout.addLayout(ctx_row)
+        layout.addWidget(self._talk_score_label)
 
         h = QLabel("TONE")
         h.setObjectName("section-header")
@@ -1097,16 +1097,94 @@ class MoraleScreen(BaseScreen):
         scroll.setWidget(inner)
         return scroll
 
+    def _talk_derived_context(self):
+        """Derive talk context from game state (not user input).
+
+        Score state, rivalry, and streak are factual — the user must not
+        be able to fabricate advantageous context for the tone/outcome
+        calculation in give_talk().
+        """
+        _gm, team, league = self._resolve()
+        ctx = {"score_state": "tied", "rival": False, "streak": 0}
+        if team is None:
+            return ctx
+        # Streak: positive = winning streak, negative = losing streak.
+        try:
+            ws = int(getattr(team, "win_streak", 0) or 0)
+            if ws > 0:
+                ctx["streak"] = ws
+            else:
+                # Derive losing streak from recent_results (W/L/OTL).
+                rr = list(getattr(team, "recent_results", None) or [])
+                losing = 0
+                for r in reversed(rr):
+                    if r == "W":
+                        break
+                    losing += 1
+                ctx["streak"] = -losing
+            ctx["streak"] = max(-20, min(20, ctx["streak"]))
+        except Exception:
+            pass
+        # Rivalry: is the next opponent a declared rival?
+        try:
+            if _rs is not None and league is not None:
+                rivalries = _safe(lambda: _rs._rivalry_store(league), []) or []
+                # Find next scheduled opponent.
+                opp = self._next_opponent(team, league)
+                if opp is not None:
+                    r = _safe(lambda: _rs.rivalry_between(
+                        rivalries, team, opp))
+                    ctx["rival"] = bool(r)
+        except Exception:
+            pass
+        # Score state: pregame has no score (tied default). Intermission
+        # would need a live game — default tied if none in progress.
+        # (Live-game score lookup can be added when the sim exposes it.)
+        return ctx
+
+    def _next_opponent(self, team, league):
+        """Find the next scheduled opponent for team."""
+        try:
+            gm = getattr(self.game, "game_manager", None) or self.game
+            today = getattr(gm, "current_date", None)
+            today_key = today.date() if hasattr(today, "date") else today
+            my_name = getattr(team, "team_name", "")
+            sched = list(getattr(league, "schedule", None) or [])
+            best = None
+            for item in sched:
+                try:
+                    if isinstance(item, dict):
+                        gd = item.get("date")
+                        gd = gd.date() if hasattr(gd, "date") else gd
+                        if gd is None or (today_key and gd < today_key):
+                            continue
+                        hn = getattr(item.get("home_team"), "team_name",
+                                     item.get("home_team"))
+                        an = getattr(item.get("away_team"), "team_name",
+                                     item.get("away_team"))
+                        if hn == my_name:
+                            opp = item.get("away_team")
+                        elif an == my_name:
+                            opp = item.get("home_team")
+                        else:
+                            continue
+                        if best is None or gd < best[0]:
+                            best = (gd, opp)
+                except Exception:
+                    continue
+            return best[1] if best else None
+        except Exception:
+            return None
+
     def _talk_inputs(self):
-        streak = int(self._talk_streak.value() or 0)
-        streak = max(-20, min(20, streak))
+        derived = self._talk_derived_context()
         return {
             "tone": self._talk_tones.value() or "calm",
             "situation": self._talk_situation.value() or "pregame",
-            "score_state": self._talk_score.value() or "tied",
+            "score_state": derived["score_state"],
             "speaker": self._talk_speaker.value() or "coach",
-            "rival": bool(self._talk_rival.isChecked()),
-            "streak": streak,
+            "rival": derived["rival"],
+            "streak": derived["streak"],
         }
 
     @staticmethod
@@ -1132,6 +1210,22 @@ class MoraleScreen(BaseScreen):
         if team is None:
             return
         inp = self._talk_inputs()
+        # Refresh the derived-context labels.
+        try:
+            ss = inp["score_state"].capitalize()
+            self._talk_score_label.setText(f"Score: <b>{ss}</b>")
+            rv = "Yes — rivalry game" if inp["rival"] else "No rivalry"
+            self._talk_rival_label.setText(f"Rivalry: <b>{rv}</b>")
+            st = inp["streak"]
+            if st > 0:
+                st_txt = f"W{st}"
+            elif st < 0:
+                st_txt = f"L{-st}"
+            else:
+                st_txt = "—"
+            self._talk_streak_label.setText(f"Streak: <b>{st_txt}</b>")
+        except Exception:
+            pass
         try:
             if inp["speaker"] == "captain":
                 cap = _dr.captain_of(team)
