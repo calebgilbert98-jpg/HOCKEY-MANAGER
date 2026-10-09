@@ -658,6 +658,20 @@ class RosterScreen(BaseScreen):
                        lambda: self._add_trade_block(player))
         menu.addAction("Contract Extension",
                        lambda: self._open_contracts(player))
+        # IR place/activate -- mirrors EntityContextMenu.player_menu.
+        try:
+            import ir_system as _irs
+            _ir_status = _irs.ir_status_of(player)
+        except Exception:
+            _ir_status = "None"
+        if _ir_status in ("IR", "LTIR"):
+            menu.addAction(f"Activate from {_ir_status}",
+                           lambda: self._ir_activate(player))
+        else:
+            menu.addAction("Place on IR",
+                           lambda: self._ir_place(player, "IR"))
+            menu.addAction("Place on LTIR",
+                           lambda: self._ir_place(player, "LTIR"))
         if key == "prospects" and getattr(player, "contract", None) is None:
             menu.addAction("Offer ELC",
                            lambda: self._open_contracts(player, elc=True))
@@ -695,6 +709,25 @@ class RosterScreen(BaseScreen):
                 self, "Contracts",
                 f"Offer {what} to {name} on the Contracts screen, "
                 f"which is not available in this build yet.")
+
+    def _ir_place(self, player, kind):
+        """Place a player on IR/LTIR. Delegates to the shared context-menu
+        helper so both right-click paths run the same code."""
+        try:
+            from ..widgets.context_menu import EntityContextMenu
+            EntityContextMenu._ir_place(self.main_window, player, kind)
+        except Exception as e:
+            QMessageBox.warning(self, "Injured Reserve",
+                                f"Could not place on {kind}: {e}")
+
+    def _ir_activate(self, player):
+        """Activate a player off IR/LTIR. Delegates to the shared helper."""
+        try:
+            from ..widgets.context_menu import EntityContextMenu
+            EntityContextMenu._ir_activate(self.main_window, player)
+        except Exception as e:
+            QMessageBox.warning(self, "Injured Reserve",
+                                f"Could not activate: {e}")
 
     # -- bulk moves ------------------------------------------------------------
 
