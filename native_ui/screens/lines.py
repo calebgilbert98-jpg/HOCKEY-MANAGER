@@ -186,7 +186,7 @@ class LineEditorTab(QWidget):
     SLOTS = {
         "line1": [("LW1", "Left Wing"), ("C1", "Center"), ("RW1", "Right Wing"),
                   ("D1", "Defense"), ("D2", "Defense"),
-                  ("G1", "Goalie")],
+                  ("G1", "Starter"), ("G2", "Backup")],
         "line2": [("LW2", "Left Wing"), ("C2", "Center"), ("RW2", "Right Wing"),
                   ("D3", "Defense"), ("D4", "Defense")],
         "line3": [("LW3", "Left Wing"), ("C3", "Center"), ("RW3", "Right Wing"),
@@ -456,6 +456,22 @@ class LinesScreen(BaseScreen):
                     ids.add(str(getattr(player, "id", id(player))))
         return ids
 
+    def _find_dressed_slot(self, player_id, exclude_slot=None):
+        """Return the slot_id where player_id is currently dressed, or None.
+
+        exclude_slot: a LineSlot whose own occupant is ignored, so
+        re-picking the player already in the target slot is a no-op
+        rather than a duplicate.
+        """
+        for tab in self._line_tabs.values():
+            for sid, s in tab._slots.items():
+                if exclude_slot is not None and s is exclude_slot:
+                    continue
+                p = s.player
+                if p is not None and str(getattr(p, "id", id(p))) == player_id:
+                    return sid
+        return None
+
     def _auto_best(self):
         """Fill the current tab with the best available players."""
         tab = self._current_tab()
@@ -638,6 +654,22 @@ class LinesScreen(BaseScreen):
         layout.addWidget(hint)
 
         def _pick(player):
+            # One player, one slot (web parity: lines.js rejects a drop when
+            # the player is already dressed elsewhere). Re-picking the player
+            # already in this slot is a no-op, not a duplicate.
+            if player is not None:
+                pid = str(getattr(player, "id", id(player)))
+                cur = slot.player
+                cur_pid = (str(getattr(cur, "id", id(cur)))
+                           if cur is not None else None)
+                if pid != cur_pid:
+                    dup_slot = self._find_dressed_slot(pid, exclude_slot=slot)
+                    if dup_slot:
+                        QMessageBox.warning(
+                            dlg, "Lines",
+                            f"{getattr(player, 'full_name', '?')} is already "
+                            f"dressed on {dup_slot} — one player, one slot.")
+                        return
             slot.set_player(player)
             self._on_slots_changed()
             dlg.accept()
@@ -651,8 +683,30 @@ class LinesScreen(BaseScreen):
             full_map = {}
             for tab_id, tab in self._line_tabs.items():
                 full_map.update(tab.get_slot_map())
+            # One player, one slot: validate the whole map before writing.
+            # The picker rejects duplicates at selection time; this guards
+            # against tampered or programmatically-built state.
+            seen = {}
+            dupes = []
+            for sid, player in full_map.items():
+                if player is None:
+                    continue
+                pid = str(getattr(player, "id", id(player)))
+                if pid in seen:
+                    dupes.append((getattr(player, "full_name", "?"),
+                                  seen[pid], sid))
+                else:
+                    seen[pid] = sid
+            if dupes:
+                details = "; ".join(
+                    f"{name} on {a} and {b}" for name, a, b in dupes)
+                QMessageBox.warning(
+                    self, "Lines",
+                    f"Cannot save: duplicate assignments — {details}. "
+                    "One player, one slot.")
+                return
             # Convert native slot IDs (LW1, C1, RW1) to sim format (F1_LW, F1_C, F1_RW)
-            # The sim reads F1_LW..F4_RW / D1_L..D3_R / G1 keys
+            # The sim reads F1_LW..F4_RW / D1_L..D3_R / G1..G2 keys
             sim_map = self._to_sim_format(full_map)
             # Save to game: user_team.lineup (both formats for compatibility)
             user_team = getattr(self.game, "user_team", None)
@@ -689,9 +743,10 @@ class LinesScreen(BaseScreen):
                 side = 'L' if num % 2 == 1 else 'R'
                 sim[f'D{pair}_{side}'] = player
                 continue
-            # G1 -> G1 (already correct)
-            if slot_id == 'G1':
-                sim['G1'] = player
+            # G1/G2 -> G1/G2 (flat keys the sim reads; G2 is the backup —
+            # web parity: web_ui writes both flat G1/G2 keys)
+            if slot_id in ('G1', 'G2'):
+                sim[slot_id] = player
                 continue
             # PP/PK slots: PP1_LW -> PP1_F_LW, PP1_D1 -> PP1_D_L, PK1_F1 -> PK1_F_L
             m = re.match(r'^(PP\d+|PK\d+)_(LW|C|RW|D\d+|F\d+|G)$', slot_id)
@@ -754,8 +809,8 @@ class LinesScreen(BaseScreen):
             # D1_L -> D1, D1_R -> D2, D2_L -> D3, etc.
             base = (int(num) - 1) * 2 + (1 if side == 'L' else 2)
             return f'D{base}'
-        if sim_key == 'G1':
-            return 'G1'
+        if sim_key in ('G1', 'G2'):
+            return sim_key
         return None
 
     def _render_overview(self):
@@ -810,9 +865,11 @@ class LinesScreen(BaseScreen):
                 avg_txt = f" <span style='color:#9aa4b8;'>(OVR {avg})</span>" if avg else ""
                 chips = " &nbsp;|&nbsp; ".join(_chip(s, slot_map.get(s)) for s in sids)
                 html.append(f"<div><b>Pair {n}</b>{avg_txt}: {chips}</div>")
-            g_avg = _line_avg(["G1"])
+            g_avg = _line_avg(["G1", "G2"])
             g_txt = f" <span style='color:#9aa4b8;'>(OVR {g_avg})</span>" if g_avg else ""
-            html.append(f"<div><b>Goalies</b>{g_txt}: {_chip('G1', slot_map.get('G1'))}</div>")
+            g_chips = " &nbsp;|&nbsp; ".join(
+                _chip(s, slot_map.get(s)) for s in ("G1", "G2"))
+            html.append(f"<div><b>Goalies</b>{g_txt}: {g_chips}</div>")
 
             html.append('<h3 style="color:#fff; margin:6px 0;">Special Teams</h3>')
             for unit, sids in [
