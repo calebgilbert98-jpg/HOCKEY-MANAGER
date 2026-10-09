@@ -772,14 +772,8 @@ class TradeBlockScreen(BaseScreen):
             return rows[row]
         return None
 
-    def _on_negotiate(self):
-        # Jump to the trade center for this player, preselecting the
-        # interested team and player.
-        r = self._interest_row()
-        if r is None:
-            QMessageBox.information(self, "Negotiate",
-                                    "Select an interest row first.")
-            return
+    def _open_trade_with(self, team_name, player_id):
+        """Jump to the Trade Center, preselecting a partner team/player."""
         try:
             self.navigate_to("trades")
             screen = None
@@ -792,20 +786,42 @@ class TradeBlockScreen(BaseScreen):
                     else screen
                 setter = getattr(widget, "set_teams", None)
                 if callable(setter):
-                    # r has "team" (name) and "player" (name); resolve
-                    # the player id from the trade-block list.
-                    pid = None
-                    pname = str(r.get("player", ""))
-                    for p in getattr(self, "_mine_players", []):
-                        if str(getattr(p, "name",
-                                       getattr(p, "full_name", ""))) == pname:
-                            pid = _pid(p)
-                            break
-                    setter(r.get("team"), pid)
+                    setter(team_name, player_id)
         except Exception:
             QMessageBox.information(
                 self, "Negotiate",
                 "Open the Trade Center to negotiate this deal.")
+
+    def _on_negotiate(self):
+        # Interest tab: jump to the trade center for this player,
+        # preselecting the interested team and player.
+        r = self._interest_row()
+        if r is None:
+            QMessageBox.information(self, "Negotiate",
+                                    "Select an interest row first.")
+            return
+        # r has "team" (name) and "player" (name); resolve the player id
+        # from the trade-block list.
+        pid = None
+        pname = str(r.get("player", ""))
+        for p in getattr(self, "_mine_players", []):
+            if str(getattr(p, "name",
+                           getattr(p, "full_name", ""))) == pname:
+                pid = _pid(p)
+                break
+        self._open_trade_with(r.get("team"), pid)
+
+    def _on_negotiate_others(self):
+        # Other Teams tab: jump to the trade center for the selected
+        # block player, preselecting their team and player id directly.
+        row = self._others_list.currentRow()
+        rows = getattr(self, "_other_rows", [])
+        if not (0 <= row < len(rows)):
+            QMessageBox.information(self, "Negotiate",
+                                    "Select a player first.")
+            return
+        d = rows[row]
+        self._open_trade_with(d.get("team"), d.get("player_id"))
 
     def _on_decline(self):
         r = self._interest_row()
@@ -828,7 +844,7 @@ class TradeBlockScreen(BaseScreen):
         exp_btn.clicked.connect(self._on_express)
         btn_row.addWidget(exp_btn)
         neg_btn = QPushButton("Negotiate")
-        neg_btn.clicked.connect(self._on_negotiate)
+        neg_btn.clicked.connect(self._on_negotiate_others)
         btn_row.addWidget(neg_btn)
         btn_row.addStretch()
         lay.addLayout(btn_row)

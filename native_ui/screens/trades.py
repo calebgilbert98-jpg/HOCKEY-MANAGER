@@ -605,7 +605,8 @@ class TradesScreen(BaseScreen):
         self._partner_name_lbl = QLabel("Select a partner team above")
         self._partner_name_lbl.setStyleSheet("color: #8b95ab;")
         get_l.addWidget(self._partner_name_lbl)
-        get_l.addWidget(QLabel("Players — click to add"))
+        self._get_player_hdr = QLabel("Players — click to add")
+        get_l.addWidget(self._get_player_hdr)
         self._get_player_search = QLineEdit()
         self._get_player_search.setPlaceholderText("Filter players…")
         self._get_player_search.textChanged.connect(
@@ -615,7 +616,8 @@ class TradesScreen(BaseScreen):
         self._get_players.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "want"))
         get_l.addWidget(self._get_players, 1)
-        get_l.addWidget(QLabel("Draft picks"))
+        self._get_pick_hdr = QLabel("Draft picks")
+        get_l.addWidget(self._get_pick_hdr)
         self._get_pick_search = QLineEdit()
         self._get_pick_search.setPlaceholderText("Filter picks…")
         self._get_pick_search.textChanged.connect(
@@ -631,7 +633,8 @@ class TradesScreen(BaseScreen):
         self._my_name_lbl = QLabel("Your roster")
         self._my_name_lbl.setStyleSheet("color: #8b95ab;")
         give_l.addWidget(self._my_name_lbl)
-        give_l.addWidget(QLabel("Players — click to add"))
+        self._give_player_hdr = QLabel("Players — click to add")
+        give_l.addWidget(self._give_player_hdr)
         self._give_player_search = QLineEdit()
         self._give_player_search.setPlaceholderText("Filter players…")
         self._give_player_search.textChanged.connect(
@@ -641,7 +644,8 @@ class TradesScreen(BaseScreen):
         self._give_players.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "give"))
         give_l.addWidget(self._give_players, 1)
-        give_l.addWidget(QLabel("Draft picks"))
+        self._give_pick_hdr = QLabel("Draft picks")
+        give_l.addWidget(self._give_pick_hdr)
         self._give_pick_search = QLineEdit()
         self._give_pick_search.setPlaceholderText("Filter picks…")
         self._give_pick_search.textChanged.connect(
@@ -938,8 +942,10 @@ class TradesScreen(BaseScreen):
                 items = sorted(
                     items,
                     key=lambda pk: (
-                        safe_call(lambda: int(getattr(pk, "year", 0) or 0), 0),
-                        safe_call(lambda: int(getattr(pk, "round", 0) or 0), 0)))
+                        safe_call(lambda: int(getattr(pk, "year", 0) or 0), 0,
+                                  context="trades/sort_pick_year"),
+                        safe_call(lambda: int(getattr(pk, "round", 0) or 0), 0,
+                                  context="trades/sort_pick_round")))
             # Apply text filter; checked items always stay visible so
             # selections survive filtering.
             if q:
@@ -970,6 +976,25 @@ class TradesScreen(BaseScreen):
         finally:
             self._updating = False
 
+    def _update_asset_counts(self):
+        """Show selected player/pick counts on each asset-list header."""
+        get_lbls = getattr(self, "_get_player_hdr", None)
+        if get_lbls is not None:
+            get_lbls.setText(
+                f"Players — click to add ({len(self._want_pids)} selected)")
+        get_pick_lbl = getattr(self, "_get_pick_hdr", None)
+        if get_pick_lbl is not None:
+            get_pick_lbl.setText(
+                f"Draft picks ({len(self._want_picks)} selected)")
+        give_lbl = getattr(self, "_give_player_hdr", None)
+        if give_lbl is not None:
+            give_lbl.setText(
+                f"Players — click to add ({len(self._give_pids)} selected)")
+        give_pick_lbl = getattr(self, "_give_pick_hdr", None)
+        if give_pick_lbl is not None:
+            give_pick_lbl.setText(
+                f"Draft picks ({len(self._give_picks)} selected)")
+
     def _render_asset_lists(self):
         get_pq = getattr(self, "_get_player_search", None)
         get_kq = getattr(self, "_get_pick_search", None)
@@ -987,6 +1012,7 @@ class TradesScreen(BaseScreen):
         self._fill_list(self._get_picks, self._partner_picks, "pick",
                         self._want_picks,
                         query=getattr(get_kq, "text", lambda: "")())
+        self._update_asset_counts()
 
     def _on_asset_toggled(self, item, side):
         if self._updating:
@@ -1005,6 +1031,7 @@ class TradesScreen(BaseScreen):
             s.discard(pid)
         self._prune_terms()
         self._update_slot_labels()
+        self._update_asset_counts()
         self._render_deal_chips()
         self._render_terms()
         self._schedule_evaluate()
@@ -1320,11 +1347,17 @@ class TradesScreen(BaseScreen):
 
             ev = safe_call(lambda: te.evaluate_trade(
                 give_assets, want_assets, user_team=my,
-                partner_team=self._partner, perceiver_team=self._partner))
-            gv = safe_call(lambda: ev.user_value, 0) or 0
-            pv = safe_call(lambda: ev.partner_value, 0) or 0
-            ratio = safe_call(lambda: ev.ratio, 0.0) or 0.0
-            label = safe_call(lambda: ev.label, "Incomplete") or "Incomplete"
+                partner_team=self._partner, perceiver_team=self._partner),
+                context="trades/evaluate_trade")
+            gv = safe_call(lambda: ev.user_value, 0,
+                           context="trades/evaluate_user_value") or 0
+            pv = safe_call(lambda: ev.partner_value, 0,
+                           context="trades/evaluate_partner_value") or 0
+            ratio = safe_call(lambda: ev.ratio, 0.0,
+                              context="trades/evaluate_ratio") or 0.0
+            label = safe_call(lambda: ev.label, "Incomplete",
+                              context="trades/evaluate_label") \
+                or "Incomplete"
 
             all_retention = {**retention_terms, **acquire_terms}
 
@@ -1338,9 +1371,12 @@ class TradesScreen(BaseScreen):
                         self._partner, give_assets, want_assets,
                         user_team=my)
 
-            resp = safe_call(_verdict_call)
-            verdict = (safe_call(lambda: resp.decision, "reject") or "reject")
-            reason = safe_call(lambda: resp.message, "") or ""
+            resp = safe_call(_verdict_call, context="trades/ai_consider_trade")
+            verdict = (safe_call(lambda: resp.decision, "reject",
+                                 context="trades/verdict_decision")
+                       or "reject")
+            reason = safe_call(lambda: resp.message, "",
+                               context="trades/verdict_message") or ""
             data = {
                 "verdict": verdict, "reason": reason,
                 "give_value": gv, "get_value": pv, "ratio": ratio,

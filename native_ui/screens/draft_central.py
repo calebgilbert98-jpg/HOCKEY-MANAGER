@@ -155,9 +155,68 @@ class DraftCentralScreen(BaseScreen):
         """Open the Trade Center for pick trading.
 
         The draft screen's war room doesn't handle pick trades; the
-        Trade Center is the real trade flow.
+        Trade Center is the real trade flow. When the user's next pick
+        can be resolved, it is preloaded into the "You give" side.
         """
         self._navigate("trades")
+        pick_id = self._next_pick_id()
+        if not pick_id:
+            return
+        try:
+            screen = self.main_window._screens.get("trades")
+        except Exception:
+            screen = None
+        if screen is None:
+            return
+        widget = screen.widget() if hasattr(screen, "widget") else screen
+        give_picks = getattr(widget, "_give_picks", None)
+        if not isinstance(give_picks, set):
+            return
+        give_picks.add(str(pick_id))
+        for meth in ("_prune_terms", "_render_asset_lists",
+                     "_update_slot_labels", "_render_deal_chips",
+                     "_render_terms", "_schedule_evaluate"):
+            fn = getattr(widget, meth, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+    def _next_pick_id(self):
+        """ID of the user's next unmade draft pick, or None.
+
+        Maps the draft board's overall pick number to the pick object
+        in the user's ``draft_picks`` for the draft year.
+        """
+        try:
+            from .draft import get_draft_state
+            st = get_draft_state(self.game) or {}
+        except Exception:
+            return None
+        ups = st.get("user_picks") or []
+        if not ups:
+            return None
+        overall = int(ups[0])
+        year = st.get("year")
+        # Round from overall: 32 picks per round.
+        rnd = (overall - 1) // 32 + 1
+        gm = getattr(self.game, "game_manager", None) or self.game
+        team = getattr(gm, "user_team", None)
+        if team is None:
+            return None
+        try:
+            by_year = dict(getattr(team, "draft_picks", None) or {})
+            picks = list(by_year.get(year) or by_year.get(str(year)) or [])
+        except Exception:
+            return None
+        for pk in picks:
+            try:
+                if int(getattr(pk, "round", -1) or -1) == rnd:
+                    return str(getattr(pk, "id", "") or "")
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _clear(layout):
