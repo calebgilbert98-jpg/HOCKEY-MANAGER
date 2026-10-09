@@ -125,33 +125,45 @@ jobs:
           # from the bundle (v0.26.36 boot crash).  Only the PYZ TOC proves a
           # module is actually importable at runtime.  Uses PyInstaller's own
           # archive reader (pinned pyinstaller==6.22.3 on the runner).
-          # Runs whenever the directory scan did not recover the full set.
+          #
+          # This check ALWAYS runs (not just when the directory scan misses
+          # modules).  The TOC is the authoritative record of what the bundle
+          # can actually import, so it is compared against the expected
+          # manifest for both MISSING and UNEXPECTED modules.  Previously the
+          # TOC was only read when the directory scan came up short, so a
+          # stray extra screen packaged in the bundle passed silently.
           pyz_screens = set()
-          if found != expected_set:
-              try:
-                  from PyInstaller.archive.readers import pkg_archive_contents
-                  bundled = set(pkg_archive_contents(exe_path, recursive=True))
-              except Exception as e:
-                  print(f"::error::VALIDATION FAILED: could not read bundle "
-                        f"archive TOC: {e}")
-                  sys.exit(1)
-              for entry in bundled:
-                  if entry.startswith("native_ui.screens."):
-                      mod = entry.rsplit(".", 1)[-1]
-                      if mod.endswith("pyc"):
-                          mod = mod[:-3]
-                      pyz_screens.add(mod)
-              for s in expected_set - found:
-                  if f"native_ui.screens.{s}" in bundled:
-                      found.add(s)
-              print(f"  Found {len(found)} total after PYZ TOC check")
+          try:
+              from PyInstaller.archive.readers import pkg_archive_contents
+              bundled = set(pkg_archive_contents(exe_path, recursive=True))
+          except Exception as e:
+              print(f"::error::VALIDATION FAILED: could not read bundle "
+                    f"archive TOC: {e}")
+              sys.exit(1)
+          for entry in bundled:
+              if entry.startswith("native_ui.screens."):
+                  rest = entry[len("native_ui.screens."):]
+                  # TOC entries are dotted module names without a file
+                  # suffix; strip one defensively in case a ".pyc"/".py"
+                  # form ever appears.
+                  if rest.endswith((".pyc", ".py")):
+                      rest = rest.rsplit(".", 1)[0]
+                  # Top-level screen modules only (ignore submodules).
+                  if rest and "." not in rest:
+                      pyz_screens.add(rest)
+          for s in expected_set - found:
+              if s in pyz_screens:
+                  found.add(s)
+          print(f"  Found {len(found)} via directory scan + PYZ TOC "
+                f"({len(pyz_screens)} screen entries in TOC)")
 
-          # 5. Exact-set comparison -- HARD FAILURE (bypass reverted).
-          # The source tree is the authoritative manifest. A count threshold
-          # is not sufficient: v0.26.38 passed a count check while draft and
-          # morale were missing from the bundle. The temporary warn-and-ship
-          # bypass from Caleb's 2026-10-08 override is removed; a broken
-          # bundle must never ship.
+          # 5. Exact-set comparison against the expected manifest -- HARD
+          # FAILURE (bypass reverted).
+          # The source tree is the authoritative manifest; the PYZ TOC is the
+          # authoritative record of what the bundle can import.  Fail on any
+          # MISSING module (e.g. v0.26.38 shipped without draft/morale) and
+          # on any UNEXPECTED module (a stray screen packaged by mistake must
+          # not ship silently either).  A count threshold is not sufficient.
           missing = sorted(expected_set - found)
           unexpected = sorted(pyz_screens - expected_set)
           if missing or unexpected:
@@ -165,7 +177,7 @@ jobs:
                         f"{', '.join(unexpected)}")
               sys.exit(1)
           print(f"  [ok] all {len(expected)} screen modules bundled "
-                f"(exact set match)")
+                f"(exact set match, no extras)")
           print("Bundle validation passed.")
           PYEOF
 
