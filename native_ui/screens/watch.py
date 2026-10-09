@@ -342,6 +342,15 @@ def _ensure_live_sim(game):
             pass
         game_date = _date_key(entry.get("date"))
 
+        # Grudge-week presentation (canonical day-sim order: pre-game).
+        # Never raises; no-ops when the matchup has no feud history.
+        try:
+            _gmkt = getattr(gm, "_grudge_week_market", None)
+            if callable(_gmkt):
+                _gmkt(game_date, home, away)
+        except Exception:
+            pass
+
         def _listener(ev):
             try:
                 ev = dict(ev)
@@ -367,8 +376,11 @@ def _ensure_live_sim(game):
             return None
 
         def _run():
+            # Capture run()'s own return (winner, loser, scores, game_log,
+            # notable_events) -- the canonical inputs for result processing.
+            run_result = None
             try:
-                sim.run()
+                run_result = sim.run()
             except Exception as e:
                 try:
                     q.put({"type": "sim_error", "error": str(e)})
@@ -382,7 +394,7 @@ def _ensure_live_sim(game):
                     q.put({"type": "game_end", "home_score": hs,
                            "away_score": aws, "period": per})
                     _finish_sim(game, sim, home, away, hs, aws,
-                                per, game_date)
+                                per, game_date, run_result)
                 except Exception as e:
                     print(f"[watch] finish failed: {e}")
                 with _watch_lock:
@@ -405,13 +417,24 @@ def _ensure_live_sim(game):
 
 
 def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
-                game_date):
-    """Flag the schedule entry watched and record the result.
+                game_date, run_result=None):
+    """Flag the schedule entry watched and record the result canonically.
 
-    Mirrors web_ui/screens/watch.py::_mark_game_watched. The GameSim
-    already updated player/team stats; this records the result so
-    day-advance skips re-simming and the replay/box-score surfaces can
-    find the game.
+    Mirrors web_ui/screens/watch.py::_mark_game_watched for the watched
+    flag, then routes the result through
+    GameManager._process_single_game_result -- the same canonical
+    post-game pipeline the day-sim uses for GameSim games. That builder
+    supplies player ratings, lines, TOI/fatigue, three stars, the media
+    engine, news log, and narrative hooks, and it internally performs the
+    record + standings update -- so the direct _record_game_result and
+    _update_standings_fast calls that used to live here are gone (calling
+    both double-recorded).
+
+    Exactly-once: the high-fidelity GameSim already flushed player season
+    stats live, so stats_from_events=False; it modeled fights/brawls live,
+    so the narrative hook runs with roll_incidents=False (the day-sim
+    GameSim branch does the same -- rolling again would double-record
+    incidents in the rivalry store).
     """
     gm = _resolve_gm(game)
     today = game_date or safe_call(
@@ -464,99 +487,130 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                     continue
     except Exception:
         pass
-    # 2. Record the result (native objects, no JSON round-trip).
-    with _watch_lock:
-        events = list(_watch["events"])
-        meta = dict(_watch["id_meta"])
-    # _record_game_result needs the winner as a team OBJECT (it reads
-    # winner.team_name to label recent_results W/L/OTL); without this key
-    # both teams get labeled as losers in the feed.
-    winner = home_team if hs > aws else away_team
-    result = {
-        "date": today,
-        "home_team": home_team,
-        "away_team": away_team,
-        "home_score": hs,
-        "away_score": aws,
-        "winner": winner,
-        "watched": True,
-        "overtime": period > 3,
-        "shootout": bool(safe_call(lambda: getattr(sim, "shootout",
-                                              False), False,
-                                   context="watch/finish_sim:shootout")),
-        "game_stats": dict(safe_call(lambda: getattr(sim, "game_stats",
-                                                None), {}) or {},
-                           context="watch/finish_sim:game_stats"),
-        "event_log": _translate_events(events),
-        "team_stats": _aggregate_team_stats(
-            safe_call(lambda: getattr(sim, "game_stats", None), {},
-                      context="watch/finish_sim:team_stats") or {},
-            meta, hn, an),
-        "three_stars": _three_stars(
-            safe_call(lambda: getattr(sim, "game_stats", None), {},
-                      context="watch/finish_sim:three_stars") or {},
-            meta, hn, an),
-    }
+    # 2. Canonical inputs: unpack the sim's own run() return
+    #    (winner, loser, scores, game_log, notable_events). If the sim
+    #    raised mid-game, fall back to attribute reads / score-derived
+    #    values so the game is still recorded.
+    winner = loser = None
+    events = notable = None
     try:
-        rec = getattr(game, "_record_game_result", None)
-        if callable(rec):
-            rec(result)
-        else:
-            gr = getattr(game, "game_results", None)
-            if isinstance(gr, list):
-                gr.append(result)
-    except Exception as e:
-        print(f"[watch] record result failed: {e}")
-    # 3. Apply standings updates. The day-sim path skips watched games
-    #    entirely (game_manager.py: `if game.get('watched'): continue`),
-    #    so this path must perform the omitted postgame side effects.
-    #    Uses the canonical GameManager._update_standings_fast -- the
-    #    same method the day-sim calls for simmed games. The GameSim
-    #    already updated player stats live; this only touches
-    #    league.standings and team records/goals.
+        if run_result is not None:
+            winner, loser, _scores, events, notable = run_result
+    except Exception:
+        winner = loser = None
+        events = notable = None
+    if winner is None:
+        # The canonical builder needs the winner as a team OBJECT (it
+        # reads winner.team_name to label recent_results W/L/OTL); without
+        # this both teams get labeled as losers in the feed.
+        winner = home_team if hs > aws else away_team
+    if loser is None:
+        loser = away_team if winner is home_team else home_team
+    if events is None:
+        events = safe_call(
+            lambda: list(getattr(sim, "game_log", None) or []), [],
+            context="watch/finish_sim:game_log") or []
+    if notable is None:
+        notable = safe_call(
+            lambda: list(getattr(sim, "notable_events", None) or []), [],
+            context="watch/finish_sim:notable") or []
+    # 3. Canonical post-game pipeline (day-sim order for GameSim games):
+    #    career GP credit -> narrative post-game -> process result ->
+    #    drain headlines. _process_single_game_result builds the full
+    #    result dict (player ratings, lines, TOI/fatigue, three stars,
+    #    media engine, news log, post-game emails) and internally calls
+    #    _record_game_result + the standings update.
+    went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
+                  for e in notable)
+    went_so = any(isinstance(e, dict) and
+                  (e.get("period", 0) == 5
+                   or e.get("event") == "Shootout Goal")
+                  for e in notable)
     try:
-        if gm is not None and not isinstance(home_team, str) \
-                and not isinstance(away_team, str):
-            went_to_ot = period > 3
-            upd = getattr(gm, "_update_standings_fast", None)
-            if callable(upd):
-                upd(home_team, away_team, winner, (hs, aws),
-                    went_to_ot=went_to_ot, preseason=False)
-    except Exception as e:
-        print(f"[watch] standings update failed: {e}")
-
-
-def _translate_events(events):
-    """pbp 'goal' events -> GOAL_ADVANCED event_log entries the box-score
-    dialog understands."""
-    out = []
-    for ev in events or []:
+        _credit = getattr(gm, "_credit_nhl_games_played", None)
+        if callable(_credit):
+            _credit(home_team, away_team, preseason=False)
+    except Exception:
+        pass
+    try:
+        _npg = getattr(gm, "_narrative_postgame", None)
+        if callable(_npg):
+            _user_team = safe_call(lambda: getattr(gm, "user_team", None))
+            _npg(sim, home_team, away_team, (hs, aws),
+                 went_ot=went_ot, shootout=went_so,
+                 roll_incidents=False,
+                 deliver_headlines=bool(
+                     _user_team is not None
+                     and _user_team in (home_team, away_team)),
+                 game_date=today)
+    except Exception:
+        pass
+    _proc = getattr(gm, "_process_single_game_result", None)
+    if callable(_proc):
+        # Canonical: record + standings happen inside (exactly once). On
+        # failure the fallback below is deliberately NOT run -- a partial
+        # canonical write followed by a manual record would double-count.
         try:
-            if not isinstance(ev, dict) or ev.get("type") != "goal":
-                continue
-            shooter = ev.get("shooter")
-            assists = ev.get("assists") or []
-            elapsed = float(ev.get("elapsed", 0) or 0)
-            out.append({
-                "timestamp": elapsed,
-                "duration": 1.0,
-                "type": "GOAL_ADVANCED",
-                "details": {
-                    "scorer_id": getattr(shooter, "id", None),
-                    "assist_ids": [getattr(a, "id", None)
-                                   for a in assists],
-                    "goaltender_id": None,
-                    "goal_type": str(ev.get("shot_type") or ""),
-                    "shot_quality": "high",
-                    "period": int(ev.get("period", 1) or 1),
-                    "strength": ("EN" if ev.get("empty_net") else "EV"),
-                    "time_str": f"{int(elapsed // 60)}:"
-                                f"{int(elapsed % 60):02d}",
-                },
-            })
-        except Exception:
-            continue
-    return out
+            _proc(today, home_team, away_team, winner, loser,
+                  (hs, aws), events, notable, sim,
+                  stats_from_events=False, preseason=False)
+        except Exception as e:
+            print(f"[watch] canonical result processing failed: {e}")
+    else:
+        # Fallback: the game manager predates the canonical API. Record
+        # the raw sim output the old way so the game is never dropped.
+        # Exactly-once: this branch only runs when the canonical call
+        # above did not, so record + standings still happen exactly once.
+        try:
+            rec = getattr(game, "_record_game_result", None)
+            if callable(rec):
+                rec({
+                    "date": today,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "home_score": hs,
+                    "away_score": aws,
+                    "winner": winner,
+                    "watched": True,
+                    "overtime": went_ot,
+                    "shootout": went_so,
+                    "events": events,
+                    "notable_events": notable,
+                    "event_log": list(
+                        getattr(sim, "event_log", None) or []),
+                    "game_stats": dict(
+                        getattr(sim, "game_stats", None) or {}),
+                    "team_stats": dict(
+                        getattr(sim, "team_stats", None) or {}),
+                })
+            else:
+                gr = getattr(game, "game_results", None)
+                if isinstance(gr, list):
+                    gr.append({
+                        "date": today,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "home_score": hs,
+                        "away_score": aws,
+                        "winner": winner,
+                    })
+            if gm is not None and not isinstance(home_team, str) \
+                    and not isinstance(away_team, str):
+                upd = getattr(gm, "_update_standings_fast", None)
+                if callable(upd):
+                    upd(home_team, away_team, winner, (hs, aws),
+                        went_to_ot=(went_ot or went_so), preseason=False)
+        except Exception as e:
+            print(f"[watch] fallback record failed: {e}")
+    # 4. Lore: deliver any headlines the sim collected -- the same call
+    #    the day-sim makes right after result processing.
+    try:
+        import headlines as _hl_mod
+        _drain = getattr(_hl_mod, "drain_sim_headlines", None)
+        if callable(_drain):
+            _drain(gm, sim)
+    except Exception:
+        pass
 
 
 def _normalize_gs(game_stats):
@@ -567,58 +621,6 @@ def _normalize_gs(game_stats):
                 out[str(pid)] = st
     except Exception:
         pass
-    return out
-
-
-def _aggregate_team_stats(game_stats, meta, home_name, away_name):
-    gs = _normalize_gs(game_stats)
-    agg = {0: {}, 1: {}}
-    names = {0: home_name, 1: away_name}
-    for pid, st in gs.items():
-        try:
-            ti = 0 if meta.get(pid, {}).get("team", 0) == 0 else 1
-            a = agg[ti]
-            if meta.get(pid, {}).get("goalie"):
-                a["saves"] = a.get("saves", 0) + int(st.get("saves", 0) or 0)
-            else:
-                a["shots_on_goal"] = a.get("shots_on_goal", 0) + \
-                    int(st.get("shots_on_goal", 0) or 0)
-                a["hits"] = a.get("hits", 0) + int(st.get("hits", 0) or 0)
-                a["blocked_shots_by_team"] = a.get("blocked_shots_by_team", 0) + \
-                    int(st.get("blocked_shots", 0) or 0) + \
-                    int(st.get("blocked_shots_by", 0) or 0)
-                a["faceoffs_won"] = a.get("faceoffs_won", 0) + \
-                    int(st.get("faceoffs_won", 0) or 0)
-                a["takeaways"] = a.get("takeaways", 0) + \
-                    int(st.get("takeaways", 0) or 0)
-                a["giveaways"] = a.get("giveaways", 0) + \
-                    int(st.get("giveaways", 0) or 0)
-        except Exception:
-            continue
-    return {names[0]: agg[0], names[1]: agg[1]}
-
-
-def _three_stars(game_stats, meta, home_name, away_name):
-    gs = _normalize_gs(game_stats)
-    cand = []
-    for pid, st in gs.items():
-        try:
-            if meta.get(pid, {}).get("goalie"):
-                continue
-            g = int(st.get("g", 0) or 0)
-            a = int(st.get("a", 0) or 0)
-            cand.append((g + a, g, meta.get(pid, {}).get("name", "?"),
-                         meta.get(pid, {}).get("team", 0)))
-        except Exception:
-            continue
-    cand.sort(key=lambda c: (c[0], c[1]), reverse=True)
-    names = {0: home_name, 1: away_name}
-    medals = ["1st", "2nd", "3rd"]
-    out = []
-    for i, (pts, g, nm, ti) in enumerate(cand[:3]):
-        a = pts - g
-        out.append({"name": nm, "team_name": names.get(ti, ""),
-                    "line": f"{medals[i]} star — {g}G {a}A"})
     return out
 
 
