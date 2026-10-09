@@ -230,174 +230,233 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
 
     Ported from web_ui/bridge.py::_sim_missed_game (desktop parity with
     windows.ScheduleView.simulate_selected_game). Never raises.
+    Orchestrator: validate -> locate entry -> run sim -> record -> finalize.
     """
     try:
-        gm = _resolve_gm(game)
-        league = safe_call(lambda: getattr(gm, "league", None),
-                           context="schedule/sim_missed_game") or \
-            safe_call(lambda: getattr(game, "league", None),
-                      context="schedule/sim_missed_game")
-        if league is None or not date_iso or not home_name or not away_name:
+        resolved = _validate_missed_game(game, date_iso, home_name, away_name)
+        if resolved is None:
             return
-        try:
-            gdate = date.fromisoformat(str(date_iso)[:10])
-        except Exception:
+        gm, league, gdate = resolved
+        found = _find_missed_entry(game, league, gdate, home_name, away_name)
+        if found is None:
             return
-        today = safe_call(lambda: getattr(gm, "current_date", None),
-                          context="schedule/sim_missed_game") or \
-            safe_call(lambda: getattr(game, "current_date", None),
-                      context="schedule/sim_missed_game")
-        try:
-            today_key = today.date() if hasattr(today, "date") else today
-        except Exception:
-            today_key = today
-        # Today/future games belong to the season sim.
-        if not isinstance(gdate, date) or not isinstance(today_key, date):
-            return
-        if gdate >= today_key:
-            return
-        # Find the scheduled entry and make sure it was never played.
-        sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
-                      [], context="schedule/sim_missed_game") or []
-        entry = None
-        for item in sched:
-            try:
-                if isinstance(item, tuple):
-                    if len(item) >= 3 and item[1] != "NHL_EVENT" and \
-                            _team_name(item[1]) == home_name and \
-                            _team_name(item[2]) == away_name:
-                        gd = item[0].date() if hasattr(item[0], "date") \
-                            else item[0]
-                        if gd == gdate:
-                            entry = item
-                            break
-                elif isinstance(item, dict):
-                    if _team_name(item.get("home_team")) == home_name and \
-                            _team_name(item.get("away_team")) == away_name:
-                        gd = item.get("date")
-                        gd = gd.date() if hasattr(gd, "date") else gd
-                        if gd == gdate and item.get("home_score") is None:
-                            entry = item
-                            break
-            except Exception:
-                continue
-        if entry is None:
-            return
-        # Never double-record.
-        try:
-            idx = getattr(game, "_results_by_date_index", None)
-            existing = list(idx().get(gdate, [])) if callable(idx) else []
-            for r in existing:
-                if _team_name(r.get("home_team")) == home_name and \
-                        _team_name(r.get("away_team")) == away_name:
-                    return
-        except Exception:
-            pass
-        teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
-                          [], context="schedule/sim_missed_game") or []
-        home_team = next((t for t in teams
-                          if _team_name(t) == home_name), None)
-        away_team = next((t for t in teams
-                          if _team_name(t) == away_name), None)
-        if home_team is None or away_team is None:
-            return
-        # Grudge-week presentation (canonical day-sim order: pre-game).
-        # Never raises; no-ops when the matchup has no feud history.
-        try:
-            _gmkt = getattr(gm, "_grudge_week_market", None)
-            if callable(_gmkt):
-                _gmkt(gdate, home_team, away_team)
-        except Exception:
-            pass
-        from simulation import GameSim
-        sim = GameSim(home_team, away_team)
-        winner, loser, scores, events, notable = sim.run()
-        home_score = int(scores[0] or 0)
-        away_score = int(scores[1] or 0)
-        notable = list(notable or [])
-        went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
-                      for e in notable)
-        went_so = any(isinstance(e, dict) and
-                      (e.get("period", 0) == 5
-                       or e.get("event") == "Shootout Goal")
-                      for e in notable)
-        # Career NHL GP credit -- the day-sim path credits every rostered
-        # player on both clubs for each completed game (waiver exemption
-        # input). GameSim.run() already flushed player season stats
-        # (goals/assists/shots/saves/...) so nothing else is derived.
-        try:
-            _credit = getattr(gm, "_credit_nhl_games_played", None)
-            if callable(_credit):
-                _credit(home_team, away_team, preseason=False)
-        except Exception:
-            pass
-        # Narrative post-game hook (canonical day-sim order): the quick-sim
-        # path rolls fights/brawls through the shared incident module, records
-        # the night's stories, and feeds the fight count back onto the sim so
-        # the grudge-week grader below sees real numbers. Headlines only for
-        # the user's games. Never raises; never touches scoring or stats.
-        try:
-            _npg = getattr(gm, "_narrative_postgame", None)
-            if callable(_npg):
-                _user_team = getattr(gm, "user_team", None)
-                _npg(sim, home_team, away_team, (home_score, away_score),
-                     went_ot=went_ot, shootout=went_so,
-                     roll_incidents=True,
-                     deliver_headlines=bool(
-                         _user_team is not None
-                         and _user_team in (home_team, away_team)),
-                     game_date=gdate)
-        except Exception:
-            pass
-        # Canonical result processing: takes the already-simmed game and
-        # builds the full result dict with every side effect -- standings
-        # (W/L/OTL/points + team records), grudge-week report card, player
-        # ratings, lines/TOI/fatigue snapshots, game-record storage, three
-        # stars, media engine, news log + post-game emails. Exactly-once:
-        # GameSim.run() already flushed player season stats itself, so the
-        # event-based stat pass is skipped (stats_from_events=False) to
-        # avoid double counting. This replaces the hand-built result dict
-        # (which left player_ratings empty) and the manually replicated
-        # standings/stars/record calls that used to live here.
-        _proc = getattr(gm, "_process_single_game_result", None)
-        if callable(_proc):
-            _proc(gdate, home_team, away_team, winner, loser,
-                  (home_score, away_score), events, notable, sim,
-                  stats_from_events=False, preseason=False)
-        else:
-            # Fallback: the game manager predates the canonical API. Record
-            # the raw sim output so the game is never dropped.
-            safe_call(
-                lambda: getattr(game, "game_results", None).append({
-                    "date": gdate, "home_team": home_team,
-                    "away_team": away_team, "home_score": home_score,
-                    "away_score": away_score, "winner": winner,
-                    "notable_events": notable,
-                }),
-                context="schedule/sim_missed_game")
-        # Lore: deliver any headlines the sim collected (line brawls, ...),
-        # the same call the day-sim makes right after result processing.
-        try:
-            import headlines as _hl_mod
-            _drain = getattr(_hl_mod, "drain_sim_headlines", None)
-            if callable(_drain):
-                _drain(gm, sim)
-        except Exception:
-            pass
-        # Stamp the schedule entry so the page shows Final.
-        try:
-            if isinstance(entry, dict):
-                entry["home_score"] = home_score
-                entry["away_score"] = away_score
-        except Exception:
-            pass
-        try:
-            game.add_news(f"{away_name} {away_score} @ {home_score} {home_name} "
-                          f"(simmed {gdate.strftime('%b %d')}).")
-        except Exception:
-            pass
+        entry, home_team, away_team = found
+        sim, winner, loser, scores, events, notable, went_ot, went_so = \
+            _run_missed_sim(gm, gdate, home_team, away_team)
+        _record_missed_result(game, gm, gdate, home_team, away_team, sim,
+                              winner, loser, scores, events, notable,
+                              went_ot, went_so)
+        _finalize_missed_game(game, gm, gdate, entry, sim,
+                              home_name, away_name, scores)
     except Exception:
         pass
+
+
+def _validate_missed_game(game, date_iso, home_name, away_name):
+    """Resolve gm/league/dates and enforce the past-date rule.
+    
+    Extracted phase of _sim_missed_game. Returns (gm, league, gdate),
+    or None when this is not a simmable missed game.
+    """
+    gm = _resolve_gm(game)
+    league = safe_call(lambda: getattr(gm, "league", None),
+                       context="schedule/sim_missed_game") or \
+        safe_call(lambda: getattr(game, "league", None),
+                  context="schedule/sim_missed_game")
+    if league is None or not date_iso or not home_name or not away_name:
+        return None
+    try:
+        gdate = date.fromisoformat(str(date_iso)[:10])
+    except Exception:
+        return None
+    today = safe_call(lambda: getattr(gm, "current_date", None),
+                      context="schedule/sim_missed_game") or \
+        safe_call(lambda: getattr(game, "current_date", None),
+                  context="schedule/sim_missed_game")
+    try:
+        today_key = today.date() if hasattr(today, "date") else today
+    except Exception:
+        today_key = today
+    # Today/future games belong to the season sim.
+    if not isinstance(gdate, date) or not isinstance(today_key, date):
+        return None
+    if gdate >= today_key:
+        return None
+    return gm, league, gdate
+
+
+def _find_missed_entry(game, league, gdate, home_name, away_name):
+    """Locate the unplayed schedule entry and resolve the team objects.
+    
+    Extracted phase of _sim_missed_game. Returns (entry, home_team,
+    away_team), or None when there is nothing simmable.
+    """
+    # Find the scheduled entry and make sure it was never played.
+    sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
+                  [], context="schedule/sim_missed_game") or []
+    entry = None
+    for item in sched:
+        try:
+            if isinstance(item, tuple):
+                if len(item) >= 3 and item[1] != "NHL_EVENT" and \
+                        _team_name(item[1]) == home_name and \
+                        _team_name(item[2]) == away_name:
+                    gd = item[0].date() if hasattr(item[0], "date") \
+                        else item[0]
+                    if gd == gdate:
+                        entry = item
+                        break
+            elif isinstance(item, dict):
+                if _team_name(item.get("home_team")) == home_name and \
+                        _team_name(item.get("away_team")) == away_name:
+                    gd = item.get("date")
+                    gd = gd.date() if hasattr(gd, "date") else gd
+                    if gd == gdate and item.get("home_score") is None:
+                        entry = item
+                        break
+        except Exception:
+            continue
+    if entry is None:
+        return None
+    # Never double-record.
+    try:
+        idx = getattr(game, "_results_by_date_index", None)
+        existing = list(idx().get(gdate, [])) if callable(idx) else []
+        for r in existing:
+            if _team_name(r.get("home_team")) == home_name and \
+                    _team_name(r.get("away_team")) == away_name:
+                return None
+    except Exception:
+        pass
+    teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
+                      [], context="schedule/sim_missed_game") or []
+    home_team = next((t for t in teams
+                      if _team_name(t) == home_name), None)
+    away_team = next((t for t in teams
+                      if _team_name(t) == away_name), None)
+    if home_team is None or away_team is None:
+        return None
+    return entry, home_team, away_team
+
+
+def _run_missed_sim(gm, gdate, home_team, away_team):
+    """Run the grudge-week pre-game hook and the GameSim.
+    
+    Extracted phase of _sim_missed_game. Returns (sim, winner, loser,
+    scores, events, notable, went_ot, went_so); scores is the
+    (home_score, away_score) tuple.
+    """
+    # Grudge-week presentation (canonical day-sim order: pre-game).
+    # Never raises; no-ops when the matchup has no feud history.
+    try:
+        _gmkt = getattr(gm, "_grudge_week_market", None)
+        if callable(_gmkt):
+            _gmkt(gdate, home_team, away_team)
+    except Exception:
+        pass
+    from simulation import GameSim
+    sim = GameSim(home_team, away_team)
+    winner, loser, scores, events, notable = sim.run()
+    home_score = int(scores[0] or 0)
+    away_score = int(scores[1] or 0)
+    notable = list(notable or [])
+    went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
+                  for e in notable)
+    went_so = any(isinstance(e, dict) and
+                  (e.get("period", 0) == 5
+                   or e.get("event") == "Shootout Goal")
+                  for e in notable)
+    return (sim, winner, loser, (home_score, away_score), events, notable,
+            went_ot, went_so)
+
+
+def _record_missed_result(game, gm, gdate, home_team, away_team, sim, winner, loser, scores, events, notable, went_ot, went_so):
+    """GP credit + narrative hooks, then the canonical result call (extracted phase)."""
+    home_score, away_score = scores
+    # Career NHL GP credit -- the day-sim path credits every rostered
+    # player on both clubs for each completed game (waiver exemption
+    # input). GameSim.run() already flushed player season stats
+    # (goals/assists/shots/saves/...) so nothing else is derived.
+    try:
+        _credit = getattr(gm, "_credit_nhl_games_played", None)
+        if callable(_credit):
+            _credit(home_team, away_team, preseason=False)
+    except Exception:
+        pass
+    # Narrative post-game hook (canonical day-sim order): the quick-sim
+    # path rolls fights/brawls through the shared incident module, records
+    # the night's stories, and feeds the fight count back onto the sim so
+    # the grudge-week grader below sees real numbers. Headlines only for
+    # the user's games. Never raises; never touches scoring or stats.
+    try:
+        _npg = getattr(gm, "_narrative_postgame", None)
+        if callable(_npg):
+            _user_team = getattr(gm, "user_team", None)
+            _npg(sim, home_team, away_team, (home_score, away_score),
+                 went_ot=went_ot, shootout=went_so,
+                 roll_incidents=True,
+                 deliver_headlines=bool(
+                     _user_team is not None
+                     and _user_team in (home_team, away_team)),
+                 game_date=gdate)
+    except Exception:
+        pass
+    # Canonical result processing: takes the already-simmed game and
+    # builds the full result dict with every side effect -- standings
+    # (W/L/OTL/points + team records), grudge-week report card, player
+    # ratings, lines/TOI/fatigue snapshots, game-record storage, three
+    # stars, media engine, news log + post-game emails. Exactly-once:
+    # GameSim.run() already flushed player season stats itself, so the
+    # event-based stat pass is skipped (stats_from_events=False) to
+    # avoid double counting. This replaces the hand-built result dict
+    # (which left player_ratings empty) and the manually replicated
+    # standings/stars/record calls that used to live here.
+    _proc = getattr(gm, "_process_single_game_result", None)
+    if callable(_proc):
+        _proc(gdate, home_team, away_team, winner, loser,
+              (home_score, away_score), events, notable, sim,
+              stats_from_events=False, preseason=False)
+    else:
+        # Fallback: the game manager predates the canonical API. Record
+        # the raw sim output so the game is never dropped.
+        safe_call(
+            lambda: getattr(game, "game_results", None).append({
+                "date": gdate, "home_team": home_team,
+                "away_team": away_team, "home_score": home_score,
+                "away_score": away_score, "winner": winner,
+                "notable_events": notable,
+            }),
+            context="schedule/sim_missed_game")
+
+
+def _finalize_missed_game(game, gm, gdate, entry, sim, home_name, away_name, scores):
+    """Headline drain, schedule-entry stamp, and news log.
+    
+    Extracted phase of _sim_missed_game.
+    """
+    home_score, away_score = scores
+    # Lore: deliver any headlines the sim collected (line brawls, ...),
+    # the same call the day-sim makes right after result processing.
+    try:
+        import headlines as _hl_mod
+        _drain = getattr(_hl_mod, "drain_sim_headlines", None)
+        if callable(_drain):
+            _drain(gm, sim)
+    except Exception:
+        pass
+    # Stamp the schedule entry so the page shows Final.
+    try:
+        if isinstance(entry, dict):
+            entry["home_score"] = home_score
+            entry["away_score"] = away_score
+    except Exception:
+        pass
+    try:
+        game.add_news(f"{away_name} {away_score} @ {home_score} {home_name} "
+                      f"(simmed {gdate.strftime('%b %d')}).")
+    except Exception:
+        pass
+
 
 
 # ----------------------------------------------------------------------
