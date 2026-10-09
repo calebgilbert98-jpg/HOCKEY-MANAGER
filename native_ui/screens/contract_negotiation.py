@@ -27,14 +27,92 @@ from .base import BaseScreen
 from native_ui.safe import safe_call
 
 
-#: Contract-term widget limits. These mirror the engine's contract rules;
-#: verify against the engine before changing.
-MIN_CONTRACT_YEARS = 1
-MAX_CONTRACT_YEARS = 7
-MIN_OFFER_AAV_M = 0.75
-MAX_OFFER_AAV_M = 15.0
-MAX_SIGNING_BONUS_M = 5.0
-MAX_PERFORMANCE_BONUS_M = 2.0
+#: Contract-term widget limits. These are LAST-RESORT fallbacks only (used
+#: if the engine module can't be imported). They are deliberately
+#: permissive so the UI can never be stricter than the engine's own
+#: validation. Widget ranges are sourced from the engine at runtime --
+#: see _engine_term_bounds() / _engine_salary_bounds() and
+#: _apply_engine_limits().
+_FALLBACK_MIN_YEARS = 1
+_FALLBACK_MAX_YEARS = 7
+_FALLBACK_MIN_AAV_M = 0.75
+_FALLBACK_MAX_AAV_M = 20.8  # 20% of the 2026-27 $104M cap
+
+
+def _resolve_game(game):
+    """The real game manager behind the screen's game reference."""
+    return getattr(game, "game_manager", None) or game
+
+
+def _engine_elc_bonus_bounds(base_salary):
+    """(max_signing_bonus, max_perf_bonus) in dollars for an ELC with the
+    given base salary. Engine: salary_cap_system.ELC_SIGNING_BONUS_PCT
+    (10% of base -- the real CBA's signing-bonus limit) and
+    ELC_PERF_BONUS_MAX ($1M/yr Schedule-A style), enforced by the
+    engine's handle_elc_offer."""
+    try:
+        import salary_cap_system as _scs
+        max_sb = int(round(base_salary * _scs.ELC_SIGNING_BONUS_PCT))
+        max_pb = int(_scs.ELC_PERF_BONUS_MAX)
+        return max(0, max_sb), max(0, max_pb)
+    except Exception:
+        return 5_000_000, 2_000_000
+
+
+def _engine_term_bounds(is_extension):
+    """(min_years, max_years) from salary_cap_system.max_contract_term.
+
+    New-CBA rule: 7 years to re-sign, 6 externally. Never mirrored here --
+    the engine is the single source of truth.
+    """
+    try:
+        from salary_cap_system import max_contract_term
+        return 1, int(max_contract_term(bool(is_extension)))
+    except Exception:
+        return (_FALLBACK_MIN_YEARS,
+                _FALLBACK_MAX_YEARS if is_extension else 6)
+
+
+def _engine_salary_bounds(game, is_elc=False):
+    """(min_salary, max_salary) in dollars, sourced from the engine.
+
+    Standard contracts: the same bounds as the engine's
+    _validate_contract_terms -- season-aware league minimum
+    (salary_cap_system.league_minimum_salary) and 20%-of-live-cap
+    (get_live_cap() * 0.20, i.e. salary_cap_system.current_cap when a
+    league cap system is attached).
+
+    ELCs: salary_cap_system.elc_band -- floor is the league minimum,
+    ceiling is the 9.3(a) max annual compensation for the signing
+    season (the same ceiling the engine's handle_elc_offer enforces).
+    """
+    gm = _resolve_game(game)
+    cap = None
+    try:
+        cap = int(gm.get_live_cap())
+    except Exception:
+        pass
+    if not cap:
+        try:
+            from salary_cap_system import DEFAULT_CAP
+            cap = int(DEFAULT_CAP)
+        except Exception:
+            cap = 104_000_000
+    try:
+        from salary_cap_system import league_minimum_salary
+        sy = getattr(getattr(gm, "league", None), "season_year", None)
+        min_sal = int(league_minimum_salary(sy))
+    except Exception:
+        min_sal = 775_000
+    if is_elc:
+        try:
+            from salary_cap_system import elc_max_annual_comp
+            sy = getattr(getattr(gm, "league", None), "season_year", None)
+            ceil = int(elc_max_annual_comp(sy))
+        except Exception:
+            ceil = int(0.20 * cap)
+        return min_sal, max(ceil, min_sal)
+    return min_sal, int(0.20 * cap)
 
 
 #: Shared contract-offer outcome wording. Use for both inline labels and
@@ -97,11 +175,13 @@ class ContractNegotiationScreen(BaseScreen):
         form = QFormLayout(form_box)
         self._offer_form = form  # for showing/hiding ELC-only rows
 
-        # Years slider 1-7
+        # Years slider -- max term sourced from the engine
+        # (salary_cap_system.max_contract_term: 7 to re-sign, 6 external)
         years_row = QHBoxLayout()
         self._years_slider = QSlider(Qt.Horizontal)
-        self._years_slider.setRange(MIN_CONTRACT_YEARS, MAX_CONTRACT_YEARS)
-        self._years_slider.setValue(4)
+        min_y, max_y = _engine_term_bounds(self._is_extension)
+        self._years_slider.setRange(min_y, max_y)
+        self._years_slider.setValue(min(4, max_y))
         self._years_slider.setTickPosition(QSlider.TicksBelow)
         self._years_slider.setTickInterval(1)
         self._years_slider.valueChanged.connect(self._update_preview)
@@ -111,12 +191,16 @@ class ContractNegotiationScreen(BaseScreen):
         years_row.addWidget(self._years_label)
         form.addRow("Term:", years_row)
 
-        # AAV stepper
+        # AAV stepper -- bounds sourced from the engine:
+        # season-aware league minimum, 20%-of-live-cap maximum
+        # (same bounds as _validate_contract_terms)
         aav_row = QHBoxLayout()
         self._aav_spin = QDoubleSpinBox()
-        self._aav_spin.setRange(MIN_OFFER_AAV_M, MAX_OFFER_AAV_M)
+        min_sal, max_sal = _engine_salary_bounds(self.game, self._is_elc)
+        min_m, max_m = min_sal / 1_000_000, max_sal / 1_000_000
+        self._aav_spin.setRange(min_m, max_m)
         self._aav_spin.setSingleStep(0.1)
-        self._aav_spin.setValue(3.0)
+        self._aav_spin.setValue(max(min_m, min(max_m, 3.0)))
         self._aav_spin.setPrefix("$")
         self._aav_spin.setSuffix("M")
         self._aav_spin.setDecimals(2)
@@ -131,21 +215,21 @@ class ContractNegotiationScreen(BaseScreen):
             ["None", "No-Trade Clause (NTC)", "No-Movement Clause (NMC)"])
         form.addRow("Clause:", self._clause_combo)
 
-        # Signing bonus
+        # Signing bonus -- engine: capped at 10% of base salary
+        # (ELC_SIGNING_BONUS_PCT). Max is re-derived from the AAV spin
+        # in _update_preview so it always matches the engine rule.
         self._sb_spin = QDoubleSpinBox()
-        self._sb_spin.setRange(0, MAX_SIGNING_BONUS_M)
+        self._sb_spin.setRange(0, 5.0)
         self._sb_spin.setSingleStep(0.1)
         self._sb_spin.setPrefix("$")
         self._sb_spin.setSuffix("M")
         form.addRow("Signing bonus:", self._sb_spin)
 
-        # Performance bonus
+        # Performance bonus -- engine: ELC_PERF_BONUS_MAX ($1M/yr,
+        # Schedule-A style). Not a local mirror.
         self._pb_spin = QDoubleSpinBox()
-        self._pb_spin.setRange(0, MAX_PERFORMANCE_BONUS_M)
-        self._pb_spin.setSingleStep(0.1)
-        self._pb_spin.setPrefix("$")
-        self._pb_spin.setSuffix("M")
-        form.addRow("Performance bonus:", self._pb_spin)
+        _, max_pb = _engine_elc_bonus_bounds(0)
+        self._pb_spin.setRange(0, max_pb / 1_000_000)
 
         self._layout.addWidget(form_box)
 
@@ -181,11 +265,36 @@ class ContractNegotiationScreen(BaseScreen):
         self._layout.addLayout(btn_row)
         self._layout.addStretch()
 
+    def _apply_engine_limits(self):
+        """Re-derive every offer widget's range from the engine's contract
+        rules for the current negotiation mode (extension vs external,
+        ELC vs standard). Called on refresh so the UI can never be
+        stricter than the engine's own validation."""
+        min_y, max_y = _engine_term_bounds(self._is_extension)
+        self._years_slider.setRange(min_y, max_y)
+        self._years_slider.setValue(
+            max(min_y, min(max_y, self._years_slider.value())))
+        min_sal, max_sal = _engine_salary_bounds(self.game, self._is_elc)
+        min_m, max_m = min_sal / 1_000_000, max_sal / 1_000_000
+        if min_m > max_m:
+            min_m = max_m
+        self._aav_spin.setRange(min_m, max_m)
+        cur = self._aav_spin.value()
+        self._aav_spin.setValue(max(min_m, min(max_m, cur)))
+        self._update_preview()
+
     def _update_preview(self):
         years = self._years_slider.value()
         self._years_label.setText(f"{years} year{'s' if years != 1 else ''}")
         aav = self._aav_spin.value()
         total = aav * years
+        if self._is_elc:
+            # Engine caps ELC signing bonus at 10% of base salary and
+            # performance bonuses at $1M/yr -- track the base spin so the
+            # bonus spinners always reflect the engine rule.
+            max_sb, max_pb = _engine_elc_bonus_bounds(int(aav * 1_000_000))
+            self._sb_spin.setMaximum(max_sb / 1_000_000)
+            self._pb_spin.setMaximum(max_pb / 1_000_000)
         # Cap fit check
         try:
             from salary_cap_system import cap_breakdown
@@ -372,11 +481,15 @@ class ContractNegotiationScreen(BaseScreen):
             self._agent_ask = counter
             self._demand_label.setText(
                 f"${aav:.2f}M × {years} years")
-            # Pre-fill our form near their ask for one-click accept
-            self._aav_spin.setValue(aav)
+            # Pre-fill our form near their ask for one-click accept --
+            # clamp to the engine-sourced widget bounds.
+            min_y, max_y = _engine_term_bounds(self._is_extension)
+            min_sal, max_sal = _engine_salary_bounds(self.game, self._is_elc)
+            self._aav_spin.setValue(
+                max(min_sal / 1_000_000,
+                    min(max_sal / 1_000_000, aav)))
             self._years_slider.setValue(
-                max(MIN_CONTRACT_YEARS,
-                    min(MAX_CONTRACT_YEARS, years)))
+                max(min_y, min(max_y, years)))
             QMessageBox.information(
                 self, "Counter-Offer",
                 offer_outcome_text("countered") +
@@ -494,6 +607,9 @@ class ContractNegotiationScreen(BaseScreen):
         except Exception:
             pass
         self._mode_label.setText(mode)
+        # Re-derive widget ranges from the engine for this mode
+        # (extension vs external term, ELC vs standard salary bounds).
+        self._apply_engine_limits()
         # Seed the agent demand from the player's ask if available
         try:
             ask = getattr(p, "contract_ask", None) or getattr(p, "ask", None)
@@ -502,10 +618,14 @@ class ContractNegotiationScreen(BaseScreen):
                 years = ask.get("years", 0) if isinstance(ask, dict) else 0
                 if aav and years:
                     self._demand_label.setText(f"${aav:.2f}M × {years} years")
-                    self._aav_spin.setValue(min(MAX_OFFER_AAV_M, aav))
+                    min_y, max_y = _engine_term_bounds(self._is_extension)
+                    min_sal, max_sal = _engine_salary_bounds(
+                        self.game, self._is_elc)
+                    self._aav_spin.setValue(
+                        max(min_sal / 1_000_000,
+                            min(max_sal / 1_000_000, aav)))
                     self._years_slider.setValue(
-                        max(MIN_CONTRACT_YEARS,
-                            min(MAX_CONTRACT_YEARS, years)))
+                        max(min_y, min(max_y, years)))
         except Exception:
             pass
         self._update_preview()
