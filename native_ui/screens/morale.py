@@ -34,6 +34,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 try:
     import reputation_system as _rs
@@ -62,14 +63,6 @@ def _role_str(s):
                            getattr(s, "role", "") or ""))
     except Exception:
         return ""
-
-
-def _safe(fn, default=None):
-    try:
-        v = fn()
-        return default if v is None else v
-    except Exception:
-        return default
 
 
 def _bar_color(v):
@@ -167,8 +160,8 @@ class AdviseCoachDialog(QDialog):
         layout = QVBoxLayout(self)
 
         sub = QLabel(
-            f"{_safe(lambda: getattr(coach, 'full_name', 'Coach'), 'Coach')} "
-            f"\u00b7 GM trust {_safe(lambda: int(getattr(coach, 'gm_trust', 70) or 70), 70)}/100 "
+            f"{safe_call(lambda: getattr(coach, 'full_name', 'Coach'), 'Coach')} "
+            f"\u00b7 GM trust {safe_call(lambda: int(getattr(coach, 'gm_trust', 70) or 70), 70)}/100 "
             "\u2014 whether he listens depends on personality; brash coaches take advice as an insult.")
         sub.setWordWrap(True)
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
@@ -209,8 +202,8 @@ class AdviseCoachDialog(QDialog):
         self._feature_pick = QComboBox()
         self._feature_pick.setMinimumWidth(200)
         for p in self._roster:
-            pid = _safe(lambda: str(getattr(p, "id", "")), "")
-            name = _safe(lambda: getattr(p, "full_name", "?"), "?")
+            pid = safe_call(lambda: str(getattr(p, "id", "")), "")
+            name = safe_call(lambda: getattr(p, "full_name", "?"), "?")
             self._feature_pick.addItem(name, pid)
         feat_layout.addWidget(self._feature_pick)
         req = QPushButton("Request")
@@ -228,7 +221,7 @@ class AdviseCoachDialog(QDialog):
         for p in self._roster:
             try:
                 if getattr(p, "usage_featured", False):
-                    featured = _safe(
+                    featured = safe_call(
                         lambda: getattr(p, "full_name", "?"), "?")
                     break
             except Exception:
@@ -282,7 +275,7 @@ class AdviseCoachDialog(QDialog):
         ptxt = f" (p={round(prob * 100)}%)" if prob is not None else ""
         word = "LISTENED" if listened else "IGNORED"
         color = "#4CAF50" if listened else "#F44336"
-        text = _safe(lambda: out.get("text", ""), "")
+        text = safe_call(lambda: out.get("text", ""), "")
         self._result.setText(
             f"<b style='color:{color}'>{word}{ptxt}</b>: {text}")
         parent_screen = self.parent()
@@ -370,7 +363,7 @@ class MoraleScreen(BaseScreen):
             return None, None, None
 
     def _date_str(self):
-        return _safe(lambda: self.game.current_date.isoformat(), "")
+        return safe_call(lambda: self.game.current_date.isoformat(), "")
 
     @staticmethod
     def _head_coach(team):
@@ -397,7 +390,7 @@ class MoraleScreen(BaseScreen):
                 return ctx
             st = {}
             if league is not None:
-                st = (_safe(lambda: dict(league.standings).get(
+                st = (safe_call(lambda: dict(league.standings).get(
                     getattr(team, "team_name", ""), {}), {}) or {})
             w = st.get("W", st.get("Wins", 0)) or 0
             l = st.get("L", st.get("Losses", 0)) or 0
@@ -407,7 +400,7 @@ class MoraleScreen(BaseScreen):
                 st.get("losing_streak", st.get("streak", 0)) or 0)
             if _rs is not None:
                 roster = list(getattr(team, "roster", None) or [])
-                leaders = (_safe(lambda: _rs.team_hierarchy(roster).get(
+                leaders = (safe_call(lambda: _rs.team_hierarchy(roster).get(
                     "Team Leaders", []), []) or [])
                 if leaders:
                     ctx["room_leadership"] = sum(
@@ -589,7 +582,7 @@ class MoraleScreen(BaseScreen):
             except Exception:
                 pass
         else:
-            vals = [_safe(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0)
+            vals = [safe_call(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0)
                     for p in roster]
             score = round(sum(vals) / len(vals)) if vals else 0
         self._headline.setText(
@@ -601,12 +594,12 @@ class MoraleScreen(BaseScreen):
             try:
                 _rs.ensure_reputation_fields(coach)
                 style = _rs.coach_style(coach)
-                name = _safe(lambda: getattr(coach, "full_name", "Coach"), "Coach")
-                trust = _safe(lambda: int(getattr(coach, "gm_trust", 70)), 70)
-                desc = _safe(lambda: style.get("description", ""), "")
+                name = safe_call(lambda: getattr(coach, "full_name", "Coach"), "Coach")
+                trust = safe_call(lambda: int(getattr(coach, "gm_trust", 70)), 70)
+                desc = safe_call(lambda: style.get("description", ""), "")
                 self._coach_body.setText(
                     f"<b style='font-size:15px'>{name}</b><br>"
-                    f"{_safe(lambda: style.get('label', ''), '')}<br>"
+                    f"{safe_call(lambda: style.get('label', ''), '')}<br>"
                     f"<span style='color:#9aa4b8'>{desc}</span><br>"
                     f"GM trust: {trust}/100")
             except Exception:
@@ -615,7 +608,7 @@ class MoraleScreen(BaseScreen):
         else:
             self._coach_body.setText("No head coach on staff.")
             coach = None
-        line_control = _safe(lambda: getattr(team, "line_control", "coach"), "coach")
+        line_control = safe_call(lambda: getattr(team, "line_control", "coach"), "coach")
         if "line_control" in self._action_buttons:
             self._action_buttons["line_control"].setText(
                 "Lines: YOU (GM)" if line_control == "gm" else "Lines: Coach")
@@ -696,11 +689,11 @@ class MoraleScreen(BaseScreen):
                     except Exception:
                         eng = ""
                     players.append({
-                        "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                        "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
                         "engagement": eng,
                         "response": resp.get("label", "Neutral"),
-                        "happiness": _safe(lambda: int(getattr(p, "happiness", 70) or 0), 70),
-                        "morale": _safe(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0),
+                        "happiness": safe_call(lambda: int(getattr(p, "happiness", 70) or 0), 70),
+                        "morale": safe_call(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0),
                         "tier": tier_of.get(id(p), "-"),
                     })
             except Exception:
@@ -708,10 +701,10 @@ class MoraleScreen(BaseScreen):
         if not players:
             for p in roster:
                 players.append({
-                    "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                    "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
                     "engagement": "", "response": "Neutral",
                     "happiness": 70,
-                    "morale": _safe(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0),
+                    "morale": safe_call(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0),
                     "tier": "-",
                 })
         self._response_table.setRowCount(len(players))
@@ -754,7 +747,7 @@ class MoraleScreen(BaseScreen):
                 hierarchy = _rs.team_hierarchy(roster)
                 for tier, ps in hierarchy.items():
                     names = ", ".join(
-                        _safe(lambda: getattr(p, "full_name", "?"), "?")
+                        safe_call(lambda: getattr(p, "full_name", "?"), "?")
                         for p in ps[:5])
                     hier_lines.append(f"<b>{tier}</b> ({len(ps)}): {names}")
             except Exception:
@@ -862,7 +855,7 @@ class MoraleScreen(BaseScreen):
                     p = by_id.get(pid)
                     if p is None:
                         continue
-                    members.append(_safe(
+                    members.append(safe_call(
                         lambda: getattr(p, "full_name", "?"), "?"))
                 members.sort()
                 card = QFrame()
@@ -986,7 +979,7 @@ class MoraleScreen(BaseScreen):
                 if p is None:
                     continue
                 arrivals.append({
-                    "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                    "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
                     "integration": _dr.integration_of(team, p),
                 })
             arrivals.sort(key=lambda a: a["integration"])
@@ -1109,8 +1102,12 @@ class MoraleScreen(BaseScreen):
         game exists.
         """
         try:
-            from .watch import _watch
+            import sys as _sys
+            _watch_mod = _sys.modules.get("native_ui.screens.watch")
+            _watch = getattr(_watch_mod, "_watch", None) if _watch_mod else None
         except Exception:
+            _watch = None
+        if _watch is None:
             return None, False
         try:
             thread = _watch.get("thread")
@@ -1184,11 +1181,11 @@ class MoraleScreen(BaseScreen):
         # Rivalry: is the next opponent a declared rival?
         try:
             if _rs is not None and league is not None:
-                rivalries = _safe(lambda: _rs._rivalry_store(league), []) or []
+                rivalries = safe_call(lambda: _rs._rivalry_store(league), []) or []
                 # Find next scheduled opponent.
                 opp = self._next_opponent(team, league)
                 if opp is not None:
-                    r = _safe(lambda: _rs.rivalry_between(
+                    r = safe_call(lambda: _rs.rivalry_between(
                         rivalries, team, opp))
                     ctx["rival"] = bool(r)
         except Exception:
@@ -1424,8 +1421,8 @@ class MoraleScreen(BaseScreen):
             return
         outcome = ""
         if isinstance(out, dict):
-            outcome = _safe(lambda: out.get("outcome", ""), "") or ""
-            lines = _safe(lambda: out.get("lines", []), []) or []
+            outcome = safe_call(lambda: out.get("outcome", ""), "") or ""
+            lines = safe_call(lambda: out.get("lines", []), []) or []
             if lines:
                 outcome = ("<br>".join(lines) + "<br>" + outcome
                            if outcome else "<br>".join(lines))
@@ -1523,7 +1520,7 @@ class MoraleScreen(BaseScreen):
         _gm, team, league = self._resolve()
         if team is None or league is None:
             return
-        my_name = _safe(lambda: getattr(team, "team_name", ""), "")
+        my_name = safe_call(lambda: getattr(team, "team_name", ""), "")
 
         # Team pickers
         teams = []
@@ -1551,7 +1548,7 @@ class MoraleScreen(BaseScreen):
         try:
             rivalries = list(getattr(league, "rivalries", []) or [])
             coach = self._head_coach(team)
-            cname = (_safe(lambda: getattr(coach, "full_name", ""), "")
+            cname = (safe_call(lambda: getattr(coach, "full_name", ""), "")
                      if coach else "")
             # Coach beefs
             if coach is not None:
@@ -1780,13 +1777,13 @@ class MoraleScreen(BaseScreen):
                       if axis <= 0.3 else "Balanced")
             except Exception:
                 ax = ""
-            name = _safe(lambda: getattr(coach, "name", getattr(
+            name = safe_call(lambda: getattr(coach, "name", getattr(
                 coach, "full_name", "Coach")), "Coach")
-            gm_trust = _safe(lambda: int(getattr(coach, "gm_trust", 70) or 70), 70)
-            shelf = _safe(lambda: int(getattr(coach, "shelf_weeks", 0) or 0), 0)
+            gm_trust = safe_call(lambda: int(getattr(coach, "gm_trust", 70) or 70), 70)
+            shelf = safe_call(lambda: int(getattr(coach, "shelf_weeks", 0) or 0), 0)
             self._carousel_current.setText(
                 f"<b style='font-size:15px'>{name}</b><br>"
-                f"{_safe(lambda: style.get('label', ''), '')}"
+                f"{safe_call(lambda: style.get('label', ''), '')}"
                 f"{f' ({ax})' if ax else ''}<br>"
                 f"<span style='color:#9aa4b8'>GM trust: {gm_trust}/100"
                 f"{f' \u00b7 message age {shelf} wks' if shelf else ''}</span>")
@@ -1983,8 +1980,8 @@ class MoraleScreen(BaseScreen):
                 matched = ranked[:3]
             for p in matched[:4]:
                 successors.append((
-                    _safe(lambda: str(getattr(p, "id", "")), ""),
-                    _safe(lambda: _dr._name(p), "?")))
+                    safe_call(lambda: str(getattr(p, "id", "")), ""),
+                    safe_call(lambda: _dr._name(p), "?")))
         except Exception:
             successors = []
 
@@ -2070,7 +2067,7 @@ class MoraleScreen(BaseScreen):
             dlg.exec()
             return
         if action == "line_control":
-            cur = _safe(lambda: getattr(team, "line_control", "coach"), "coach")
+            cur = safe_call(lambda: getattr(team, "line_control", "coach"), "coach")
             target = "coach" if cur == "gm" else "gm"
             outcome = self._apply_line_control(team, coach, roster, target)
             if outcome and getattr(self, "_coach_body", None) is not None:
