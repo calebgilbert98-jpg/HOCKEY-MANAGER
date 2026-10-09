@@ -220,6 +220,16 @@ _watch = {
     "id_meta": {}, "game": None,
 }
 
+# When set (by schedule.py's Watch action), _next_game() returns this
+# entry instead of auto-picking. Cleared after the sim starts.
+_target_entry = None
+
+
+def set_target_entry(entry):
+    """Pin the next watch sim to a specific schedule entry (dict)."""
+    global _target_entry
+    _target_entry = entry
+
 
 def _build_id_meta(home_team, away_team):
     meta = {}
@@ -243,7 +253,16 @@ def _build_id_meta(home_team, away_team):
 
 
 def _next_game(game):
-    """Next unplayed game: user's team first, else any league game."""
+    """Next unplayed game: user's team first, else any league game.
+
+    If set_target_entry() pinned a specific schedule entry (e.g. from
+    the schedule screen's Watch button), that entry wins.
+    """
+    global _target_entry
+    if _target_entry is not None:
+        entry = _target_entry
+        _target_entry = None  # one-shot
+        return entry
     try:
         from .schedule import (
             _schedule_entries, _game_played_state, _results_by_date)
@@ -686,6 +705,7 @@ class WatchScreen(BaseScreen):
         self._finished = False
         self._speed = 2.0
         self._follow_puck = False
+        self._follow_player_pid = None  # str(pid) the camera follows
         self._hold_until = 0.0
         self._skate = None          # latest skate snapshot
         self._score = {"home": 0, "away": 0}
@@ -749,6 +769,14 @@ class WatchScreen(BaseScreen):
         self._btn_camera.clicked.connect(self._toggle_camera)
         ctrl.addWidget(self._btn_camera)
 
+        self._btn_stats = QPushButton("📊 Stats")
+        self._btn_stats.setCheckable(True)
+        self._btn_stats.setCursor(Qt.PointingHandCursor)
+        self._btn_stats.setToolTip(
+            "Toggle the live stats overlay (goals, shots, hits, penalties)")
+        self._btn_stats.toggled.connect(self._toggle_stats_overlay)
+        ctrl.addWidget(self._btn_stats)
+
         ctrl.addStretch()
         self._btn_replay = QPushButton("📼 Past Games")
         self._btn_replay.setCursor(Qt.PointingHandCursor)
@@ -778,6 +806,19 @@ class WatchScreen(BaseScreen):
         self._view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._view.setMinimumHeight(420)
         vl.addWidget(self._view, 1)
+        # Click-to-follow: clicking a player dot makes the camera follow
+        # that skater (web parity). Click empty ice to release.
+        self._view.mousePressEvent = self._rink_click
+        # Stats overlay: floating panel over the rink (web parity).
+        self._stats_overlay = QLabel("", self._view)
+        self._stats_overlay.setStyleSheet(
+            "background: rgba(11, 15, 26, 0.88); color: #e8ecf4; "
+            "font-size: 13px; padding: 10px 14px; border-radius: 8px; "
+            "border: 1px solid #2a3350;")
+        self._stats_overlay.setWordWrap(True)
+        self._stats_overlay.move(12, 12)
+        self._stats_overlay.setMinimumWidth(220)
+        self._stats_overlay.hide()
         self._ticker = QLabel("Press “Watch Next Game” to start a live sim.")
         self._ticker.setObjectName("ticker")
         self._ticker.setAlignment(Qt.AlignCenter)
@@ -898,14 +939,93 @@ class WatchScreen(BaseScreen):
 
     def _toggle_camera(self):
         self._follow_puck = not self._follow_puck
+        # Clear player-follow when switching to puck/full-rink modes.
+        self._follow_player_pid = None
         self._btn_camera.setText("🎥 Camera: Follow Puck"
                                  if self._follow_puck
                                  else "🎥 Camera: Full Rink")
         self._apply_camera()
 
+    def _toggle_stats_overlay(self, checked):
+        """Show/hide the live stats overlay (web's 📊 toggle parity)."""
+        if checked:
+            self._update_stats_overlay()
+            self._stats_overlay.show()
+            self._stats_overlay.raise_()
+        else:
+            self._stats_overlay.hide()
+
+    def _rink_click(self, event):
+        """Click a player dot to follow them; click empty ice to release."""
+        try:
+            pos = self._view.mapToScene(event.pos())
+            best_pid, best_d = None, 6.0  # feet
+            for pid, item in self._dots.items():
+                d = ((item.pos().x() - pos.x()) ** 2 +
+                     (item.pos().y() - pos.y()) ** 2) ** 0.5
+                if d < best_d:
+                    best_d, best_pid = d, pid
+            if best_pid:
+                self._follow_player_pid = best_pid
+                self._follow_puck = False
+                with _watch_lock:
+                    meta = _watch["id_meta"]
+                name = meta.get(best_pid, {}).get("name", "Player")
+                self._btn_camera.setText(f"🎥 Following: {name}")
+                self._apply_camera()
+            else:
+                # Empty ice: release follow, back to full rink.
+                if self._follow_player_pid:
+                    self._follow_player_pid = None
+                    self._btn_camera.setText("🎥 Camera: Full Rink")
+                    self._apply_camera()
+        except Exception as e:
+            print(f"[watch] rink click failed: {e}")
+        # Don't call super() — we replaced the handler entirely, and the
+        # default does nothing useful for us (no selection/drag needed).
+
+    def _update_stats_overlay(self):
+        """Refresh the overlay text from live sim state."""
+        try:
+            with _watch_lock:
+                events = list(_watch["events"])
+                a = _watch["away_abbr"] or "AWY"
+                h = _watch["home_abbr"] or "HOM"
+            n_goals = n_shots = n_hits = n_pens = n_fights = 0
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                t = ev.get("type")
+                if t == "goal":
+                    n_goals += 1
+                elif t in ("shot", "missed_shot", "blocked_shot"):
+                    n_shots += 1
+                elif t == "hit":
+                    n_hits += 1
+                elif t == "penalty":
+                    n_pens += 1
+                elif t == "fight":
+                    n_fights += 1
+            s = self._score
+            self._stats_overlay.setText(
+                f"<b>{a} {s['away']} — {s['home']} {h}</b><br>"
+                f"{_period_label(self._period)} {_fmt_clock(self._clock)}<br>"
+                f"Shots: {n_shots}<br>"
+                f"Hits: {n_hits}<br>"
+                f"Penalties: {n_pens}<br>"
+                f"Fights: {n_fights}")
+        except Exception:
+            pass
+
     def _apply_camera(self):
         try:
-            if self._follow_puck and self._skate:
+            if self._follow_player_pid and self._follow_player_pid in self._dots:
+                # Follow a specific player (click-to-follow).
+                item = self._dots[self._follow_player_pid]
+                px, py = item.pos().x(), item.pos().y()
+                self._view.fitInView(QRectF(px - 45, py - 30, 90, 60),
+                                     Qt.KeepAspectRatio)
+            elif self._follow_puck and self._skate:
                 px, py = self._skate.get("puck", (100.0, 42.5))
                 self._view.fitInView(QRectF(px - 45, py - 30, 90, 60),
                                      Qt.KeepAspectRatio)
@@ -971,6 +1091,9 @@ class WatchScreen(BaseScreen):
             self._render_skate(latest)
             self._apply_camera()
         self._render_scorebug()
+        # Refresh the stats overlay if visible.
+        if self._btn_stats.isChecked():
+            self._update_stats_overlay()
         # Refresh the box tab periodically while it's visible.
         if (self._tabs.currentIndex() == self._box_tab_index and
                 now - self._last_box_refresh > 2.0):
@@ -1274,6 +1397,7 @@ class WatchScreen(BaseScreen):
                         fl = int(st.get("faceoffs_lost", 0) or 0)
                         skaters.append({
                             "name": nm,
+                            "player": st.get("player"),
                             "pos": _pos_short(st.get("player")),
                             "g": g, "a": a_, "p": g + a_,
                             "sog": int(st.get("shots_on_goal", 0) or 0),
@@ -1299,7 +1423,14 @@ class WatchScreen(BaseScreen):
                 for j, v in enumerate(
                         [s["name"], s["pos"], s["g"], s["a"], s["p"],
                          s["sog"], s["hits"], s["blk"], s["fo"]]):
-                    tbl.setItem(i, j, QTableWidgetItem(str(v)))
+                    item = QTableWidgetItem(str(v))
+                    if j == 0 and s.get("player") is not None:
+                        # Store the player object for click-through.
+                        item.setData(Qt.UserRole, s["player"])
+                    tbl.setItem(i, j, item)
+            # Click a player name to open their profile (web parity).
+            tbl.cellClicked.connect(
+                lambda r, c, _t=tbl: self._box_player_click(_t, r, c))
             self._box_layout.addWidget(tbl)
             if goalies:
                 gh = QLabel("Goaltenders")
@@ -1342,6 +1473,23 @@ class WatchScreen(BaseScreen):
             dlg.exec()
         except Exception as e:
             print(f"[watch] open boxscore failed: {e}")
+
+    def _box_player_click(self, table, row, col):
+        """Open the player profile when a box-score name is clicked."""
+        try:
+            if col != 0:
+                return
+            item = table.item(row, 0)
+            if item is None:
+                return
+            player = item.data(Qt.UserRole)
+            if player is None:
+                return
+            fn = getattr(self.main_window, "show_player", None)
+            if callable(fn):
+                fn(player)
+        except Exception as e:
+            print(f"[watch] box player click failed: {e}")
 
     @staticmethod
     def _empty(msg):

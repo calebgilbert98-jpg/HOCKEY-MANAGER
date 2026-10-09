@@ -170,6 +170,39 @@ class BeatDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
+        # Recall button: pull the selected scout off their beat.
+        recall_btn = QPushButton("Recall from Beat")
+        recall_btn.setToolTip(
+            "Remove the selected scout from their current regional beat.")
+        recall_btn.clicked.connect(self._recall)
+        layout.addRow(recall_btn)
+
+    def _recall(self):
+        """Recall the selected scout from their regional beat."""
+        scout = self._scout_combo.currentData()
+        if scout is None:
+            QMessageBox.warning(
+                self, "Recall", "Select a scout to recall.")
+            return
+        try:
+            gm = _resolve_gm(self.game)
+            import scouting as _sm
+            if hasattr(_sm, "set_scout_region"):
+                _sm.set_scout_region(gm, scout, None)
+            # Also clear on the scout object directly as fallback.
+            try:
+                setattr(scout, "region", None)
+                setattr(scout, "beat", None)
+            except Exception:
+                pass
+            QMessageBox.information(
+                self, "Recall",
+                f"{getattr(scout, 'full_name', getattr(scout, 'name', '?'))} "
+                "recalled from regional beat.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, "Recall", f"Failed: {e}")
+
     def get_selection(self):
         return (self._scout_combo.currentData(),
                 self._region_combo.currentText())
@@ -580,7 +613,9 @@ class ScoutingScreen(BaseScreen):
         filter_row.addWidget(self._db_pos)
 
         self._db_status = QComboBox()
-        self._db_status.addItems(["All", "Draft eligible", "Signed", "Free agent"])
+        self._db_status.addItems(
+            ["All players", "NHL rosters", "AHL rosters", "Prospects",
+             "Free agents", "Draft eligible"])
         self._db_status.currentIndexChanged.connect(self._on_db_filter)
         filter_row.addWidget(self._db_status)
 
@@ -591,13 +626,13 @@ class ScoutingScreen(BaseScreen):
 
         self._db_age = QComboBox()
         self._db_age.addItems(
-            ["All ages", "Under 21", "21-24", "25-29", "30+"])
+            ["Any age", "U18", "18-22", "23-29", "30+"])
         self._db_age.currentIndexChanged.connect(self._on_db_filter)
         filter_row.addWidget(self._db_age)
 
         self._db_ovr = QComboBox()
         self._db_ovr.addItems(
-            ["All ratings", "85+", "80-84", "75-79", "70-74", "Under 70"])
+            ["Any OVR", "90+", "85+", "80+", "70+"])
         self._db_ovr.currentIndexChanged.connect(self._on_db_filter)
         filter_row.addWidget(self._db_ovr)
 
@@ -613,6 +648,11 @@ class ScoutingScreen(BaseScreen):
             "Browse, create, edit and delete scouting profiles")
         manage_btn.clicked.connect(self._manage_profiles)
         filter_row.addWidget(manage_btn)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Reset all database filters")
+        clear_btn.clicked.connect(self._clear_db_filters)
+        filter_row.addWidget(clear_btn)
         db_layout.addLayout(filter_row)
 
         # Results table
@@ -795,8 +835,8 @@ class ScoutingScreen(BaseScreen):
         Covers draft prospects (+ rights re-entries), every league team's
         NHL roster / AHL roster / prospects (trade-target scouting), and
         the free-agent pool. Deduped by player id.
-        status is one of "draft", "signed", "free"; team_name is None for
-        prospects and free agents.
+        status is one of "draft", "nhl", "ahl", "prospects", "free";
+        team_name is None for prospects and free agents.
         """
         gm = _resolve_gm(self.game)
         league = _safe(lambda: gm.league)
@@ -818,19 +858,53 @@ class ScoutingScreen(BaseScreen):
         for t in _safe(
                 lambda: list(getattr(league, "teams", None) or []), []):
             tname = getattr(t, "team_name", "") or ""
-            for attr in ("roster", "ahl_roster", "prospects"):
-                for p in _safe(
-                        lambda: list(getattr(t, attr, None) or []), []):
-                    _add(p, "signed", tname)
+            # NHL roster
+            for p in _safe(
+                    lambda: list(getattr(t, "roster", None) or []), []):
+                _add(p, "nhl", tname)
+            # AHL roster
+            for p in _safe(
+                    lambda: list(getattr(t, "ahl_roster", None) or []), []):
+                _add(p, "ahl", tname)
+            # Prospects
+            for p in _safe(
+                    lambda: list(getattr(t, "prospects", None) or []), []):
+                _add(p, "prospects", tname)
         for p in _safe(
                 lambda: list(getattr(league, "free_agents", None) or []), []):
             _add(p, "free", None)
         return out
 
     # Combo-index -> (lo, hi) bands; unknown index = no band applied.
-    _DB_AGE_BANDS = {1: (0, 20), 2: (21, 24), 3: (25, 29), 4: (30, 200)}
-    _DB_OVR_BANDS = {1: (85, 100), 2: (80, 84), 3: (75, 79),
-                     4: (70, 74), 5: (0, 69)}
+    # Matches web UI: U18, 18-22, 23-29, 30+.
+    _DB_AGE_BANDS = {1: (0, 17), 2: (18, 22), 3: (23, 29), 4: (30, 200)}
+    # Matches web UI: 90+, 85+, 80+, 70+ (cumulative thresholds).
+    _DB_OVR_BANDS = {1: (90, 100), 2: (85, 100), 3: (80, 100), 4: (70, 100)}
+
+    def _clear_db_filters(self):
+        """Reset all database filters to defaults (web parity)."""
+        self._db_search.blockSignals(True)
+        self._db_pos.blockSignals(True)
+        self._db_status.blockSignals(True)
+        self._db_team.blockSignals(True)
+        self._db_age.blockSignals(True)
+        self._db_ovr.blockSignals(True)
+        try:
+            self._db_search.clear()
+            self._db_pos.setCurrentIndex(0)
+            self._db_status.setCurrentIndex(0)
+            self._db_team.setCurrentIndex(0)
+            self._db_age.setCurrentIndex(0)
+            self._db_ovr.setCurrentIndex(0)
+            self._db_profile.setCurrentIndex(0)
+        finally:
+            self._db_search.blockSignals(False)
+            self._db_pos.blockSignals(False)
+            self._db_status.blockSignals(False)
+            self._db_team.blockSignals(False)
+            self._db_age.blockSignals(False)
+            self._db_ovr.blockSignals(False)
+        self._on_db_filter()
 
     def _db_filtered(self):
         q = self._db_filter_q
@@ -852,11 +926,15 @@ class ScoutingScreen(BaseScreen):
                 continue
             if pos_idx == 3 and "G" not in ps:
                 continue
-            if status_idx == 1 and status != "draft":
+            if status_idx == 1 and status != "nhl":
                 continue
-            if status_idx == 2 and status != "signed":
+            if status_idx == 2 and status != "ahl":
                 continue
-            if status_idx == 3 and status != "free":
+            if status_idx == 3 and status != "prospects":
+                continue
+            if status_idx == 4 and status != "free":
+                continue
+            if status_idx == 5 and status != "draft":
                 continue
             # Team filter: the "no filter" sentinel is item 0 of the combo,
             # whatever its display text is. Comparing the selected text
