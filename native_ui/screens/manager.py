@@ -99,6 +99,11 @@ class ManagerScreen(BaseScreen):
         self._exp_combo = None
         self._rels_table = None
         self._rels_rows = []
+        self._squad_table = None
+        # Weekly training schedule widgets (rebuilt by refresh()).
+        self._training_preset_combo = None
+        self._training_unit_combos = {}
+        self._training_effects = None
         # Active press-conference session: survives refresh() so a presser
         # is parked (not lost) when the user navigates away and back.
         self._presser = None
@@ -180,6 +185,14 @@ class ManagerScreen(BaseScreen):
         opp_box, opp_lay = _section("Opposition Report")
         self._build_opposition(opp_lay)
         grid.addWidget(opp_box, 3, 0, 1, 2)
+
+        training_box, training_lay = _section("Weekly Training Schedule")
+        self._build_training(training_lay)
+        grid.addWidget(training_box, 4, 0, 1, 2)
+
+        squad_box, squad_lay = _section("Squad — Private Chats")
+        self._build_squad(squad_lay)
+        grid.addWidget(squad_box, 5, 0, 1, 2)
 
         scroll.setWidget(content)
         self._layout.addWidget(scroll, 1)
@@ -427,6 +440,119 @@ class ManagerScreen(BaseScreen):
                     pass
         QMessageBox.information(self, "Board",
                                 f"{headline}\n\n{body}")
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    # Weekly training schedule
+    # ------------------------------------------------------------------
+    def _training(self):
+        career = self._career()
+        return _safe(lambda: getattr(career, "training", None))
+
+    def _build_training(self, lay):
+        import manager_career as mc
+        training = self._training()
+        if training is None:
+            lbl = QLabel("Start a career to set the weekly training schedule.")
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+            return
+
+        hint = QLabel("Presets set every unit at once; customise per unit below. "
+                      "The schedule drives weekly development rate, injury risk "
+                      "and squad morale for your club.")
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        lay.addWidget(hint)
+
+        prow = QHBoxLayout()
+        plbl = QLabel("Preset:")
+        prow.addWidget(plbl)
+        self._training_preset_combo = QComboBox()
+        presets = list(mc.TRAINING_PRESETS.keys())
+        # Show "Custom" when the schedule was hand-tuned.
+        if training.preset_name not in presets:
+            presets = presets + ["Custom"]
+        self._training_preset_combo.addItems(presets)
+        self._training_preset_combo.setCurrentText(training.preset_name)
+        self._training_preset_combo.activated.connect(
+            self._on_training_preset_changed)
+        prow.addWidget(self._training_preset_combo, 1)
+        lay.addLayout(prow)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for c, h in enumerate(("Unit", "Intensity", "Focus")):
+            hl = QLabel(h)
+            hl.setObjectName("section-header")
+            grid.addWidget(hl, 0, c)
+        self._training_unit_combos = {}
+        for i, unit in enumerate(mc.TRAINING_UNITS, start=1):
+            ul = QLabel(unit)
+            grid.addWidget(ul, i, 0)
+            cur_int, cur_foc = _safe(
+                lambda u=unit: training.schedule.get(u, ("Normal", "Balanced")),
+                ("Normal", "Balanced"))
+            icombo = QComboBox()
+            icombo.addItems(list(mc.TRAINING_INTENSITIES))
+            icombo.setCurrentText(cur_int)
+            grid.addWidget(icombo, i, 1)
+            fcombo = QComboBox()
+            fcombo.addItems(list(mc.TRAINING_FOCI))
+            fcombo.setCurrentText(cur_foc)
+            grid.addWidget(fcombo, i, 2)
+            self._training_unit_combos[unit] = (icombo, fcombo)
+        lay.addLayout(grid)
+
+        apply_btn = QPushButton("Apply Custom Schedule")
+        apply_btn.clicked.connect(self._on_apply_custom_training)
+        lay.addWidget(apply_btn, alignment=Qt.AlignLeft)
+
+        fx = _safe(lambda: training.weekly_effects(), None) or {}
+        lines = []
+        dev = fx.get("development_mult", 1.0)
+        inj = fx.get("injury_risk_mult", 1.0)
+        mor = fx.get("morale_delta", 0)
+        lines.append(f"Development rate: x{dev}")
+        lines.append(f"Injury risk: x{inj}")
+        sign = "+" if mor >= 0 else ""
+        lines.append(f"Squad morale: {sign}{mor}")
+        for note in fx.get("notes", []) or []:
+            lines.append(note)
+        self._training_effects = QLabel("\n".join("\u2022 " + l for l in lines))
+        self._training_effects.setWordWrap(True)
+        lay.addWidget(self._training_effects)
+
+    def _on_training_preset_changed(self, index):
+        import manager_career as mc
+        training = self._training()
+        if training is None or self._training_preset_combo is None:
+            return
+        name = self._training_preset_combo.itemText(index)
+        if name not in mc.TRAINING_PRESETS:
+            return
+        try:
+            training.set_preset(name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Training",
+                                f"Could not apply preset: {exc}")
+            return
+        self.refresh()
+
+    def _on_apply_custom_training(self):
+        import manager_career as mc
+        training = self._training()
+        if training is None:
+            return
+        try:
+            for unit, (icombo, fcombo) in self._training_unit_combos.items():
+                training.set_unit(unit, icombo.currentText(),
+                                  fcombo.currentText())
+        except Exception as exc:
+            QMessageBox.warning(self, "Training",
+                                f"Could not apply schedule: {exc}")
+            return
+        # set_unit() flips preset_name to "Custom" itself.
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -1611,3 +1737,119 @@ class ManagerScreen(BaseScreen):
             bl.setWordWrap(True)
             bl.setStyleSheet("font-size: 13px;")
             lay.addWidget(bl)
+
+    # ------------------------------------------------------------------
+    # Squad — private player chats (port of manager_hub_window._build_squad_tab)
+    # ------------------------------------------------------------------
+    def _build_squad(self, lay):
+        """Squad list + private-chat buttons for the selected player."""
+        team = self._user_team()
+        if team is None:
+            lay.addWidget(QLabel("Start a career to manage your squad."))
+            return
+
+        cols = ["Player", "Pos", "Age", "Morale", "Mood", "Squad Status",
+                "Concern"]
+        t = QTableWidget()
+        t.setColumnCount(len(cols))
+        t.setHorizontalHeaderLabels(cols)
+        t.verticalHeader().setVisible(False)
+        t.setEditTriggers(QTableWidget.NoEditTriggers)
+        t.setSelectionBehavior(QTableWidget.SelectRows)
+        t.setSelectionMode(QTableWidget.SingleSelection)
+        t.setSortingEnabled(False)
+        t.setMaximumHeight(280)
+        lay.addWidget(t)
+        self._squad_table = t
+
+        # Chat buttons — one per CHAT_ACTIONS entry (mainline parity).
+        import manager_career as mc
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        for key, info in mc.CHAT_ACTIONS.items():
+            btn = QPushButton(info["label"])
+            btn.setToolTip(info.get("desc", ""))
+            btn.clicked.connect(
+                lambda _checked=False, k=key: self._do_chat(k))
+            btn_row.addWidget(btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        hint = QLabel("Select a player, then pick a private chat action. "
+                      "Chats lose their punch if repeated within 3 days.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9aa4b8; font-size: 12px;")
+        lay.addWidget(hint)
+
+        self._refresh_squad_table()
+
+    def _refresh_squad_table(self):
+        """Rebuild the squad table from the live roster (post-chat refresh)."""
+        t = self._squad_table
+        if t is None:
+            return
+        import manager_career as mc
+        try:
+            from game_classes import position_label as _pl
+        except Exception:
+            _pl = None
+        team = self._user_team()
+        roster = sorted(getattr(team, "roster", []) or [],
+                        key=lambda p: (getattr(p, "last_name", ""),
+                                       getattr(p, "first_name", "")))
+        t.setSortingEnabled(False)
+        t.setRowCount(len(roster))
+        for r, p in enumerate(roster):
+            name = (f"{getattr(p, 'first_name', '')} "
+                    f"{getattr(p, 'last_name', '')}").strip()
+            letter = getattr(p, "captaincy", None)
+            if letter:
+                name = f"{name} ({letter})"
+            pos = _safe(lambda: _pl(p)) if _pl else "?"
+            morale = getattr(p, "morale", 70) or 70
+            happiness = getattr(p, "happiness", 70) or 70
+            t.setItem(r, 0, QTableWidgetItem(name))
+            t.setItem(r, 1, QTableWidgetItem(str(pos or "?")))
+            t.setItem(r, 2, _NumericItem(str(getattr(p, "age", "") or ""),
+                                         getattr(p, "age", 0) or 0))
+            t.setItem(r, 3, QTableWidgetItem(
+                _safe(lambda: mc.morale_label(morale)) or str(morale)))
+            t.setItem(r, 4, QTableWidgetItem(
+                _safe(lambda: mc.happiness_label(happiness))
+                or str(happiness)))
+            t.setItem(r, 5, QTableWidgetItem(
+                str(getattr(p, "squad_status", "Rotation") or "Rotation")))
+            t.setItem(r, 6, QTableWidgetItem(
+                f"{getattr(p, 'playing_time_concern', 0) or 0}%"))
+            for c in range(7):
+                t.item(r, c).setData(Qt.UserRole + 1, p)
+        t.resizeColumnsToContents()
+        t.setSortingEnabled(True)
+
+    def _selected_squad_player(self):
+        t = self._squad_table
+        if t is None:
+            return None
+        items = t.selectedItems()
+        if not items:
+            return None
+        return items[0].data(Qt.UserRole + 1)
+
+    def _do_chat(self, action):
+        """Private chat with the selected player (mainline _do_chat parity)."""
+        p = self._selected_squad_player()
+        if p is None:
+            QMessageBox.information(self, "Squad", "Select a player first.")
+            return
+        import manager_career as mc
+        gm = self._gm()
+        today = (_safe(lambda: getattr(gm, "current_date", None))
+                 or _safe(lambda: getattr(self.game, "current_date", None)))
+        try:
+            text, _effects = mc.chat_with_player(p, action, today=today)
+        except Exception as exc:
+            QMessageBox.warning(self, "Private Chat",
+                                f"Chat failed: {exc}")
+            return
+        QMessageBox.information(self, "Private Chat", text)
+        self._refresh_squad_table()

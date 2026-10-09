@@ -580,11 +580,22 @@ class ScheduleScreen(BaseScreen):
 
     def _watch_game(self, g):
         try:
+            # Pin this specific game so the watch screen sims it
+            # instead of auto-picking the next game.
+            from .watch import set_target_entry
+            set_target_entry(g)
             self.navigate_to("watch")
-        except Exception:
-            QMessageBox.information(
+            # Auto-start the sim for the pinned game.
+            mw = self.main_window
+            scroll = mw._screens.get("watch") if mw else None
+            inner = scroll.widget() if scroll and hasattr(
+                scroll, "widget") else None
+            if inner is not None and hasattr(inner, "_start"):
+                inner._start()
+        except Exception as e:
+            QMessageBox.warning(
                 self, "Watch",
-                "The Watch screen has not been ported to the native UI yet.")
+                f"Could not open the Watch screen: {e}")
 
     def _quick_sim(self, g):
         resp = QMessageBox.question(

@@ -70,6 +70,27 @@ class EntityContextMenu(QMenu):
             menu.add_action("Sign Extension",
                             lambda p=player: EntityContextMenu._open_contracts(
                                 main_window, p))
+            # IR place/activate (ir_system.py) -- mirrors mainline
+            # player_context_menu._ir_place/_ir_activate.
+            try:
+                import ir_system as _irs
+                _ir_status = _irs.ir_status_of(player)
+            except Exception:
+                _ir_status = "None"
+            if _ir_status in ("IR", "LTIR"):
+                menu.add_action(
+                    f"Activate from {_ir_status}",
+                    lambda p=player: EntityContextMenu._ir_activate(
+                        main_window, p))
+            else:
+                menu.add_action(
+                    "Place on IR",
+                    lambda p=player: EntityContextMenu._ir_place(
+                        main_window, p, "IR"))
+                menu.add_action(
+                    "Place on LTIR",
+                    lambda p=player: EntityContextMenu._ir_place(
+                        main_window, p, "LTIR"))
             menu.addSeparator()
             menu.add_action("Place on Waivers",
                             lambda: EntityContextMenu._open_waivers(
@@ -200,6 +221,103 @@ class EntityContextMenu(QMenu):
                     widget.set_player(player)
                 except Exception:
                     pass
+
+    @staticmethod
+    def _ir_place(main_window, player, kind):
+        """Place a player on IR/LTIR via ir_system. Never raises.
+
+        Mirrors mainline player_context_menu._ir_place: calls
+        ir_system.place_on_ir / place_on_ltir, shows the result,
+        and refreshes the roster view.
+        """
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            game = getattr(main_window, "game", None)
+            team = getattr(game, "user_team", None) if game else None
+            if team is None:
+                QMessageBox.warning(main_window, "Injured Reserve",
+                                    "No team loaded.")
+                return
+            import ir_system as _irs
+            today = getattr(game, "current_date", None)
+            if kind == "LTIR":
+                ok, reason = _irs.place_on_ltir(team, player, today)
+            else:
+                ok, reason = _irs.place_on_ir(team, player, today)
+            name = getattr(player, "full_name", "?")
+            if ok:
+                try:
+                    _relief = _irs.ltir_relief(team) if kind == "LTIR" else 0
+                    _extra = (f" Cap relief pool is now ${_relief:,}, "
+                              f"raising your effective ceiling."
+                              if kind == "LTIR" else
+                              " He still counts against the cap, but not "
+                              "the 23-man roster.")
+                    QMessageBox.information(
+                        main_window, "Injured Reserve",
+                        f"{name} placed on {kind}.{_extra}")
+                except Exception:
+                    pass
+                # News it.
+                try:
+                    if hasattr(game, "add_news"):
+                        game.add_news(
+                            f"{name} placed on {kind}."
+                            if kind == "IR" else
+                            f"{name} placed on LTIR -- cap relief activated.")
+                except Exception:
+                    pass
+            else:
+                QMessageBox.warning(main_window, "Injured Reserve",
+                                    reason or f"Could not place on {kind}.")
+            # Refresh the roster view.
+            try:
+                screen = main_window._screens.get("roster")
+                if screen:
+                    widget = (screen.widget()
+                              if hasattr(screen, "widget") else screen)
+                    if hasattr(widget, "refresh"):
+                        widget.refresh()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[ctx] IR place failed: {e}")
+
+    @staticmethod
+    def _ir_activate(main_window, player):
+        """Activate a player off IR/LTIR via ir_system. Never raises.
+
+        Mirrors mainline player_context_menu._ir_activate.
+        """
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            game = getattr(main_window, "game", None)
+            team = getattr(game, "user_team", None) if game else None
+            if team is None:
+                QMessageBox.warning(main_window, "Injured Reserve",
+                                    "No team loaded.")
+                return
+            import ir_system as _irs
+            today = getattr(game, "current_date", None)
+            ok, reason = _irs.activate_player(team, player, today)
+            name = getattr(player, "full_name", "?")
+            if ok:
+                QMessageBox.information(main_window, "Injured Reserve",
+                                        f"{name} activated.")
+            else:
+                QMessageBox.warning(main_window, "Injured Reserve",
+                                    reason or "Could not activate.")
+            try:
+                screen = main_window._screens.get("roster")
+                if screen:
+                    widget = (screen.widget()
+                              if hasattr(screen, "widget") else screen)
+                    if hasattr(widget, "refresh"):
+                        widget.refresh()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[ctx] IR activate failed: {e}")
 
     @staticmethod
     def _release_staff(main_window, staff):

@@ -382,6 +382,69 @@ class MoraleScreen(BaseScreen):
             pass
         return None
 
+    def _team_context(self):
+        """Mirror mainline morale_window._team_context.
+
+        Builds the win_pct / room_leadership / losing_streak context that
+        reputation_system.set_line_control needs to decide consequences
+        (e.g. seizing the lines on a WINNING team enrages strong
+        personalities; on a losing team the room understands).
+        """
+        ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
+        try:
+            gm, team, league = self._resolve()
+            if team is None:
+                return ctx
+            st = {}
+            if league is not None:
+                st = (_safe(lambda: dict(league.standings).get(
+                    getattr(team, "team_name", ""), {}), {}) or {})
+            w = st.get("W", st.get("Wins", 0)) or 0
+            l = st.get("L", st.get("Losses", 0)) or 0
+            otl = st.get("OTL", 0) or 0
+            ctx["win_pct"] = w / max(1, w + l + otl)
+            ctx["losing_streak"] = int(
+                st.get("losing_streak", st.get("streak", 0)) or 0)
+            if _rs is not None:
+                roster = list(getattr(team, "roster", None) or [])
+                leaders = (_safe(lambda: _rs.team_hierarchy(roster).get(
+                    "Team Leaders", []), []) or [])
+                if leaders:
+                    ctx["room_leadership"] = sum(
+                        getattr(p, "leadership", 50) or 50
+                        for p in leaders) / len(leaders)
+        except Exception:
+            pass
+        return ctx
+
+    def _apply_line_control(self, team, coach, roster, target):
+        """Route line-control changes through reputation_system.set_line_control.
+
+        Mainline parity (morale_window._open_line_control_popup /
+        LineControlPopup): the engine computes the full consequence chain --
+        happiness shifts (strong personalities furious on a winning-team
+        seize), gm_trust deltas on discussed takeovers, team-event feed
+        entries, and coach line re-installation on give-back. The previous
+        native code flipped team.line_control directly, which skipped the
+        entire chain: no morale consequences, no happiness shifts, no feed
+        entry.
+
+        approach="seize" matches this toggle button's direct-takeover
+        semantics (mainline's nuclear option). Giving the pen back
+        (gm -> coach) is always amicable per mainline.
+        Returns the engine's outcome text for display, or "" / None on
+        failure.
+        """
+        if _rs is None:
+            return None
+        try:
+            out = _rs.set_line_control(
+                team, target, self._team_context(), roster,
+                coach=coach, approach="seize")
+            return (out or {}).get("text", "")
+        except Exception as e:
+            return f"Line control change failed: {e}"
+
     # ------------------------------------------------------------------
     # Room tab
     # ------------------------------------------------------------------
@@ -1818,7 +1881,13 @@ class MoraleScreen(BaseScreen):
             return
         if action == "line_control":
             cur = _safe(lambda: getattr(team, "line_control", "coach"), "coach")
-            team.line_control = "gm" if cur == "coach" else "coach"
+            target = "coach" if cur == "gm" else "gm"
+            outcome = self._apply_line_control(team, coach, roster, target)
+            if outcome and getattr(self, "_coach_body", None) is not None:
+                try:
+                    self._coach_body.setText(outcome)
+                except Exception:
+                    pass
             self.refresh()
             return
         if action == "back_room":

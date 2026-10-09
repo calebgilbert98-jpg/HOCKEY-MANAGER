@@ -55,9 +55,15 @@ class PlayerTable(QTableWidget):
         try:
             from .context_menu import EntityContextMenu
             row = self.rowAt(pos.y())
-            if row < 0 or row >= len(self._players):
+            if row < 0 or row >= self.rowCount():
                 return
-            player = self._players[row]
+            # Sort changes displayed row order, so self._players[row]
+            # would target the wrong player. Use the player reference
+            # stored on the name-column item instead.
+            item = self.item(row, 0)
+            player = item.data(Qt.UserRole + 1) if item is not None else None
+            if player is None:
+                return
             # Check if this is the user's team (for extra menu items)
             is_user = False
             try:
@@ -105,8 +111,12 @@ class PlayerTable(QTableWidget):
             self.setItem(row, col, item)
 
     def _on_double_click(self, row, col):
-        if 0 <= row < len(self._players):
-            self.player_clicked.emit(self._players[row])
+        # Sort changes displayed row order, so self._players[row] would
+        # emit the wrong player. Use the stored player reference instead.
+        item = self.item(row, 0)
+        player = item.data(Qt.UserRole + 1) if item is not None else None
+        if player is not None:
+            self.player_clicked.emit(player)
 
     @staticmethod
     def _pos_str(p):

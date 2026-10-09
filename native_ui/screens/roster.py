@@ -365,6 +365,20 @@ class RosterScreen(BaseScreen):
         self._headline.setObjectName("tile-title")
         self._layout.addWidget(self._headline)
 
+        # Captaincy-crisis banner (hidden unless a crisis is detected).
+        self._crisis_banner = QPushButton("")
+        self._crisis_banner.setCursor(Qt.PointingHandCursor)
+        self._crisis_banner.setStyleSheet(
+            "QPushButton { background: #3a1d1d; color: #f87171; "
+            "font-size: 13px; font-weight: 700; border: 1px solid #7f2d2d; "
+            "border-radius: 6px; padding: 8px; text-align: left; } "
+            "QPushButton:hover { background: #4a2424; }")
+        self._crisis_banner.setWordWrap(True)
+        self._crisis_banner.clicked.connect(
+            lambda: self._try_navigate("morale"))
+        self._crisis_banner.hide()
+        self._layout.addWidget(self._crisis_banner)
+
         self._tabs = QTabWidget()
         self._layout.addWidget(self._tabs)
 
@@ -534,6 +548,46 @@ class RosterScreen(BaseScreen):
         self._load_depth()
         self._load_cap()
         self._update_headline()
+        self._update_crisis_banner()
+
+    def _update_crisis_banner(self):
+        """Show a captaincy-crisis banner when the room is in crisis."""
+        try:
+            self._crisis_banner.hide()
+            team = self._user_team()
+            if team is None:
+                return
+            gm = self._resolve_gm()
+            league = _safe(lambda: getattr(gm, "league", None))
+            crisis = None
+            try:
+                import dressing_room as _dr
+                # Prefer a stored crisis flag; fall back to live detection.
+                dr = _dr.ensure_dressing_room_fields(team)
+                if dr.get("captaincy_crisis"):
+                    detail = dict(dr.get("captaincy_crisis_detail") or {})
+                    crisis = {"captain_name": detail.get("captain_name", ""),
+                              "severity": detail.get("severity", 1)}
+                else:
+                    hit = _dr.detect_captaincy_crisis(team, league)
+                    if hit is not None:
+                        crisis = {"captain_name": hit.get("captain_name", ""),
+                                  "severity": hit.get("severity", 1)}
+            except Exception:
+                crisis = None
+            if not crisis:
+                return
+            sev = "\U0001F534" * max(1, int(crisis.get("severity", 1) or 1))
+            cap = crisis.get("captain_name", "") or "your captain"
+            self._crisis_banner.setText(
+                f"{sev}  Captaincy crisis: {cap} is losing the room.  "
+                f"Click to open Morale →")
+            self._crisis_banner.show()
+        except Exception:
+            try:
+                self._crisis_banner.hide()
+            except Exception:
+                pass
 
     def _update_headline(self):
         counts = {k: len(self._views[k]["players"]) for k in self._views}
@@ -658,6 +712,20 @@ class RosterScreen(BaseScreen):
                        lambda: self._add_trade_block(player))
         menu.addAction("Contract Extension",
                        lambda: self._open_contracts(player))
+        # IR place/activate -- mirrors EntityContextMenu.player_menu.
+        try:
+            import ir_system as _irs
+            _ir_status = _irs.ir_status_of(player)
+        except Exception:
+            _ir_status = "None"
+        if _ir_status in ("IR", "LTIR"):
+            menu.addAction(f"Activate from {_ir_status}",
+                           lambda: self._ir_activate(player))
+        else:
+            menu.addAction("Place on IR",
+                           lambda: self._ir_place(player, "IR"))
+            menu.addAction("Place on LTIR",
+                           lambda: self._ir_place(player, "LTIR"))
         if key == "prospects" and getattr(player, "contract", None) is None:
             menu.addAction("Offer ELC",
                            lambda: self._open_contracts(player, elc=True))
@@ -695,6 +763,25 @@ class RosterScreen(BaseScreen):
                 self, "Contracts",
                 f"Offer {what} to {name} on the Contracts screen, "
                 f"which is not available in this build yet.")
+
+    def _ir_place(self, player, kind):
+        """Place a player on IR/LTIR. Delegates to the shared context-menu
+        helper so both right-click paths run the same code."""
+        try:
+            from ..widgets.context_menu import EntityContextMenu
+            EntityContextMenu._ir_place(self.main_window, player, kind)
+        except Exception as e:
+            QMessageBox.warning(self, "Injured Reserve",
+                                f"Could not place on {kind}: {e}")
+
+    def _ir_activate(self, player):
+        """Activate a player off IR/LTIR. Delegates to the shared helper."""
+        try:
+            from ..widgets.context_menu import EntityContextMenu
+            EntityContextMenu._ir_activate(self.main_window, player)
+        except Exception as e:
+            QMessageBox.warning(self, "Injured Reserve",
+                                f"Could not activate: {e}")
 
     # -- bulk moves ------------------------------------------------------------
 

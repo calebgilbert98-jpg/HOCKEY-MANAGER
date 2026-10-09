@@ -1755,3 +1755,13 @@ class FreeAgentsScreen(BaseScreen):
         self._render_players()
         self._render_staff()
         self._render_market()
+
+    def show_staff_tab(self):
+        """Select the Staff tab. Used by the Staff screen's Hire Staff button
+        (mainline parity: Staff Management's 'Hire Staff' tab redirected to
+        the Free Agency staff page). Never raises."""
+        try:
+            if hasattr(self, "_tabs"):
+                self._tabs.setCurrentIndex(1)
+        except Exception:
+            pass
