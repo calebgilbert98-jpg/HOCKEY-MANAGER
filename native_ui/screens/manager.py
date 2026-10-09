@@ -99,6 +99,10 @@ class ManagerScreen(BaseScreen):
         self._exp_combo = None
         self._rels_table = None
         self._rels_rows = []
+        # Weekly training schedule widgets (rebuilt by refresh()).
+        self._training_preset_combo = None
+        self._training_unit_combos = {}
+        self._training_effects = None
         # Active press-conference session: survives refresh() so a presser
         # is parked (not lost) when the user navigates away and back.
         self._presser = None
@@ -180,6 +184,10 @@ class ManagerScreen(BaseScreen):
         opp_box, opp_lay = _section("Opposition Report")
         self._build_opposition(opp_lay)
         grid.addWidget(opp_box, 3, 0, 1, 2)
+
+        training_box, training_lay = _section("Weekly Training Schedule")
+        self._build_training(training_lay)
+        grid.addWidget(training_box, 4, 0, 1, 2)
 
         scroll.setWidget(content)
         self._layout.addWidget(scroll, 1)
@@ -427,6 +435,119 @@ class ManagerScreen(BaseScreen):
                     pass
         QMessageBox.information(self, "Board",
                                 f"{headline}\n\n{body}")
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    # Weekly training schedule
+    # ------------------------------------------------------------------
+    def _training(self):
+        career = self._career()
+        return _safe(lambda: getattr(career, "training", None))
+
+    def _build_training(self, lay):
+        import manager_career as mc
+        training = self._training()
+        if training is None:
+            lbl = QLabel("Start a career to set the weekly training schedule.")
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+            return
+
+        hint = QLabel("Presets set every unit at once; customise per unit below. "
+                      "The schedule drives weekly development rate, injury risk "
+                      "and squad morale for your club.")
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        lay.addWidget(hint)
+
+        prow = QHBoxLayout()
+        plbl = QLabel("Preset:")
+        prow.addWidget(plbl)
+        self._training_preset_combo = QComboBox()
+        presets = list(mc.TRAINING_PRESETS.keys())
+        # Show "Custom" when the schedule was hand-tuned.
+        if training.preset_name not in presets:
+            presets = presets + ["Custom"]
+        self._training_preset_combo.addItems(presets)
+        self._training_preset_combo.setCurrentText(training.preset_name)
+        self._training_preset_combo.activated.connect(
+            self._on_training_preset_changed)
+        prow.addWidget(self._training_preset_combo, 1)
+        lay.addLayout(prow)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for c, h in enumerate(("Unit", "Intensity", "Focus")):
+            hl = QLabel(h)
+            hl.setObjectName("section-header")
+            grid.addWidget(hl, 0, c)
+        self._training_unit_combos = {}
+        for i, unit in enumerate(mc.TRAINING_UNITS, start=1):
+            ul = QLabel(unit)
+            grid.addWidget(ul, i, 0)
+            cur_int, cur_foc = _safe(
+                lambda u=unit: training.schedule.get(u, ("Normal", "Balanced")),
+                ("Normal", "Balanced"))
+            icombo = QComboBox()
+            icombo.addItems(list(mc.TRAINING_INTENSITIES))
+            icombo.setCurrentText(cur_int)
+            grid.addWidget(icombo, i, 1)
+            fcombo = QComboBox()
+            fcombo.addItems(list(mc.TRAINING_FOCI))
+            fcombo.setCurrentText(cur_foc)
+            grid.addWidget(fcombo, i, 2)
+            self._training_unit_combos[unit] = (icombo, fcombo)
+        lay.addLayout(grid)
+
+        apply_btn = QPushButton("Apply Custom Schedule")
+        apply_btn.clicked.connect(self._on_apply_custom_training)
+        lay.addWidget(apply_btn, alignment=Qt.AlignLeft)
+
+        fx = _safe(lambda: training.weekly_effects(), None) or {}
+        lines = []
+        dev = fx.get("development_mult", 1.0)
+        inj = fx.get("injury_risk_mult", 1.0)
+        mor = fx.get("morale_delta", 0)
+        lines.append(f"Development rate: x{dev}")
+        lines.append(f"Injury risk: x{inj}")
+        sign = "+" if mor >= 0 else ""
+        lines.append(f"Squad morale: {sign}{mor}")
+        for note in fx.get("notes", []) or []:
+            lines.append(note)
+        self._training_effects = QLabel("\n".join("\u2022 " + l for l in lines))
+        self._training_effects.setWordWrap(True)
+        lay.addWidget(self._training_effects)
+
+    def _on_training_preset_changed(self, index):
+        import manager_career as mc
+        training = self._training()
+        if training is None or self._training_preset_combo is None:
+            return
+        name = self._training_preset_combo.itemText(index)
+        if name not in mc.TRAINING_PRESETS:
+            return
+        try:
+            training.set_preset(name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Training",
+                                f"Could not apply preset: {exc}")
+            return
+        self.refresh()
+
+    def _on_apply_custom_training(self):
+        import manager_career as mc
+        training = self._training()
+        if training is None:
+            return
+        try:
+            for unit, (icombo, fcombo) in self._training_unit_combos.items():
+                training.set_unit(unit, icombo.currentText(),
+                                  fcombo.currentText())
+        except Exception as exc:
+            QMessageBox.warning(self, "Training",
+                                f"Could not apply schedule: {exc}")
+            return
+        # set_unit() flips preset_name to "Custom" itself.
         self.refresh()
 
     # ------------------------------------------------------------------
