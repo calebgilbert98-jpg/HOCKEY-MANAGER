@@ -293,6 +293,20 @@ class ContractNegotiationScreen(BaseScreen):
         except Exception:
             pass
 
+    def _set_clause_row_visible(self, visible):
+        """Trade-protection clauses only exist on standard contracts
+        (the engine's handle_elc_offer has no clause parameter).
+        Hide the clause picker in ELC mode so the UI never presents
+        a term the engine would silently ignore."""
+        try:
+            form = self._offer_form
+            self._clause_combo.setVisible(visible)
+            lbl = form.labelForField(self._clause_combo)
+            if lbl is not None:
+                lbl.setVisible(visible)
+        except Exception:
+            pass
+
     def _offer_accepted(self, result):
         """True iff the engine actually signed the deal.
 
@@ -360,7 +374,9 @@ class ContractNegotiationScreen(BaseScreen):
                 f"${aav:.2f}M × {years} years")
             # Pre-fill our form near their ask for one-click accept
             self._aav_spin.setValue(aav)
-            self._years_slider.setValue(max(1, min(7, years)))
+            self._years_slider.setValue(
+                max(MIN_CONTRACT_YEARS,
+                    min(MAX_CONTRACT_YEARS, years)))
             QMessageBox.information(
                 self, "Counter-Offer",
                 offer_outcome_text("countered") +
@@ -467,7 +483,9 @@ class ContractNegotiationScreen(BaseScreen):
             mode = "New Contract (Free Agent)"
         # Bonuses only exist on ELCs — hide the rows otherwise so the UI
         # never presents terms the engine would silently ignore.
+        # Clauses only exist on standard contracts — hide in ELC mode.
         self._set_bonus_rows_visible(self._is_elc)
+        self._set_clause_row_visible(not self._is_elc)
         try:
             pos = getattr(p, "position", "?")
             pos_s = getattr(pos, "value", str(pos))
@@ -484,8 +502,10 @@ class ContractNegotiationScreen(BaseScreen):
                 years = ask.get("years", 0) if isinstance(ask, dict) else 0
                 if aav and years:
                     self._demand_label.setText(f"${aav:.2f}M × {years} years")
-                    self._aav_spin.setValue(min(15.0, aav))
-                    self._years_slider.setValue(max(1, min(7, years)))
+                    self._aav_spin.setValue(min(MAX_OFFER_AAV_M, aav))
+                    self._years_slider.setValue(
+                        max(MIN_CONTRACT_YEARS,
+                            min(MAX_CONTRACT_YEARS, years)))
         except Exception:
             pass
         self._update_preview()

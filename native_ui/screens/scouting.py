@@ -94,11 +94,21 @@ class AssignDialog(QDialog):
 
         layout = QFormLayout(self)
 
+        # Searchable prospect picker: type to filter, count shown.
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search prospects by name…")
+        self._search_edit.textChanged.connect(self._filter_prospects)
+        layout.addRow("Search:", self._search_edit)
+
         self._prospect_combo = QComboBox()
         self._scout_combo = QComboBox()
+        self._all_prospects = []  # full list for filtering
         self._load_options()
 
+        self._match_label = QLabel()
+        self._update_match_label()
         layout.addRow("Prospect:", self._prospect_combo)
+        layout.addRow("", self._match_label)
         layout.addRow("Scout:", self._scout_combo)
 
         buttons = QDialogButtonBox(
@@ -109,22 +119,66 @@ class AssignDialog(QDialog):
 
     def _load_options(self):
         gm = _resolve_gm(self.game)
-        league = safe_call(lambda: gm.league)
+        league = safe_call(lambda: gm.league, context="scouting/load_league")
         team = _user_team(self.game)
 
-        prospects = safe_call(lambda: list(getattr(league, "draft_prospects", None) or []), [])
-        for p in prospects[:MAX_ASSIGNMENT_PROSPECTS]:
-            name = getattr(p, "full_name", "?")
-            self._prospect_combo.addItem(
-                f"{name} ({_pos_str(p)}, {_overall(p)} OVR)", p)
+        prospects = safe_call(
+            lambda: list(getattr(league, "draft_prospects", None) or []), [],
+            context="scouting/load_prospects")
+        # Keep the full list; the cap is applied only to the *displayed*
+        # options and is explained in the match label.
+        self._all_prospects = prospects
+        self._populate_prospect_combo("")
 
-        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
+                          context="scouting/load_staff")
         for s in staff:
             role = str(getattr(getattr(s, "role", None), "value",
                                getattr(s, "role", "") or ""))
             if "scout" in role.lower():
                 self._scout_combo.addItem(
                     getattr(s, "full_name", getattr(s, "name", "?")), s)
+
+    def _populate_prospect_combo(self, filter_text):
+        """Fill the prospect combo from the full list, filtered by text.
+
+        Preserves the current selection when it survives filtering.
+        """
+        prev = self._prospect_combo.currentData()
+        prev_id = str(getattr(prev, "id", "") or "") if prev is not None else None
+        self._prospect_combo.clear()
+        needle = (filter_text or "").strip().lower()
+        shown = 0
+        new_prev_index = -1
+        for p in self._all_prospects:
+            name = getattr(p, "full_name", "?")
+            if needle and needle not in name.lower():
+                continue
+            if shown >= MAX_ASSIGNMENT_PROSPECTS:
+                break
+            self._prospect_combo.addItem(
+                f"{name} ({_pos_str(p)}, {_overall(p)} OVR)", p)
+            if prev_id is not None and str(getattr(p, "id", "") or "") == prev_id:
+                new_prev_index = shown
+            shown += 1
+        if new_prev_index >= 0:
+            self._prospect_combo.setCurrentIndex(new_prev_index)
+        self._update_match_label()
+
+    def _filter_prospects(self, text):
+        self._populate_prospect_combo(text)
+
+    def _update_match_label(self):
+        total = len(self._all_prospects)
+        shown = self._prospect_combo.count()
+        if total > MAX_ASSIGNMENT_PROSPECTS:
+            self._match_label.setText(
+                f"Showing {shown} of {total} prospects "
+                f"(first {MAX_ASSIGNMENT_PROSPECTS} matches; refine search "
+                f"to see more).")
+        else:
+            self._match_label.setText(f"Showing {shown} of {total} prospects.")
+        self._match_label.setStyleSheet("color: #6b7488; font-size: 11px;")
 
     def get_selection(self):
         return (self._prospect_combo.currentData(),
@@ -795,10 +849,11 @@ class ScoutingScreen(BaseScreen):
     def _refresh_db_teams(self):
         """Populate the team filter from every league team (keeps selection)."""
         gm = _resolve_gm(self.game)
-        league = safe_call(lambda: gm.league)
+        league = safe_call(lambda: gm.league, context="scouting/load_league")
         names = sorted({
             getattr(t, "team_name", "") for t in
-            safe_call(lambda: list(getattr(league, "teams", None) or []), [])
+            safe_call(lambda: list(getattr(league, "teams", None) or []), [],
+                      context="scouting/load_teams")
             if getattr(t, "team_name", "")})
         prev = self._db_team.currentText()
         self._db_team.blockSignals(True)
@@ -990,7 +1045,8 @@ class ScoutingScreen(BaseScreen):
         # Assignments
         self._assign_list.clear()
         assignments = safe_call(
-            lambda: list((getattr(self.game, "scouting_assignments", None) or {}).items()), [])
+            lambda: list((getattr(self.game, "scouting_assignments", None) or {}).items()), [],
+            context="scouting/load_assignments")
         for player, scout in assignments:
             pname = getattr(player, "full_name", "?")
             sname = getattr(scout, "full_name", getattr(scout, "name", "?"))
@@ -1000,7 +1056,8 @@ class ScoutingScreen(BaseScreen):
 
         # Beats (from scouts with region set)
         self._beat_list.clear()
-        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
+                          context="scouting/load_staff")
         beats = 0
         for s in staff:
             region = getattr(s, "region", None) or getattr(s, "beat", None)
@@ -1014,7 +1071,8 @@ class ScoutingScreen(BaseScreen):
         # Reports
         self._report_list.clear()
         reports = safe_call(
-            lambda: list((getattr(team, "scouting_reports", None) or {}).values()), [])
+            lambda: list((getattr(team, "scouting_reports", None) or {}).values()), [],
+            context="scouting/load_reports")
         for r in reports[:50]:
             pname = getattr(getattr(r, "player", None), "full_name", "?")
             acc = getattr(r, "accuracy", "?")

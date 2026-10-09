@@ -59,25 +59,46 @@ def _resolve_gm(game):
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: getattr(gm, "user_team", None))
-            or safe_call(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: getattr(gm, "user_team", None),
+                      context="inbox/resolve_team")
+            or safe_call(lambda: getattr(game, "user_team", None),
+                         context="inbox/resolve_team"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: getattr(gm, "league", None))
-            or safe_call(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: getattr(gm, "league", None),
+                      context="inbox/resolve_league")
+            or safe_call(lambda: getattr(game, "league", None),
+                         context="inbox/resolve_league"))
 
 
 def _inbox_of(game):
     team = _user_team(game)
-    return safe_call(lambda: getattr(team, "inbox", None))
+    return safe_call(lambda: getattr(team, "inbox", None),
+                     context="inbox/resolve_inbox")
 
 
 def _all_messages(game):
     inbox = _inbox_of(game)
     return safe_call(lambda: list(getattr(inbox, "messages", None) or []),
-                 []) or []
+                     [], context="inbox/load_messages") or []
+
+
+def _try_all_messages(game):
+    """Return (ok, messages): ok=False when retrieval itself failed.
+
+    Distinguishes a genuinely empty inbox from a retrieval failure so
+    handlers can warn instead of reporting "no messages".
+    """
+    inbox = _inbox_of(game)
+    if inbox is None:
+        return False, []
+    try:
+        msgs = list(getattr(inbox, "messages", None) or [])
+        return True, msgs
+    except Exception:
+        return False, []
 
 
 def _msg_id(m):
@@ -643,7 +664,13 @@ class InboxScreen(BaseScreen):
         flags.addWidget(star)
         bang = QPushButton("❗")
         bang.setFlat(True)
+        bang.setCheckable(True)
+        bang.setChecked(important)
         bang.setToolTip("Important" if not important else "Unmark important")
+        bang.setAccessibleName(
+            "Mark as important" if not important else "Unmark important")
+        bang.setAccessibleDescription(
+            f"Message {'is' if important else 'is not'} marked important.")
         bang.setStyleSheet(
             f"color: {'#ef4444' if important else '#4a5468'}; font-size: 13px;")
         bang.clicked.connect(
@@ -697,8 +724,16 @@ class InboxScreen(BaseScreen):
         if inbox is None:
             return
         # Count unread before acting so we can report the result.
+        # Use the fallible variant: a retrieval failure must warn,
+        # not masquerade as "no unread messages".
+        ok, msgs = _try_all_messages(self.game)
+        if not ok:
+            QMessageBox.warning(
+                self, "Mark all read",
+                "Could not load messages. Please try again.")
+            return
         try:
-            unread = [m for m in _all_messages(self.game)
+            unread = [m for m in msgs
                       if not bool(getattr(m, "is_read", False))]
         except Exception:
             unread = []

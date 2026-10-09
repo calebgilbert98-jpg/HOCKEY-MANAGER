@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QGroupBox, QTabWidget, QCheckBox, QGridLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QProgressBar, QAbstractItemView,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, QEvent
 
@@ -323,8 +324,10 @@ class TacticsScreen(BaseScreen):
         except Exception:
             pass
         fam = safe_call(lambda: float(getattr(team, "tactics_familiarity", 85)), 85)
-        control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
-        roster_fit = safe_call(lambda: _tx.team_system_fit(team))
+        control = safe_call(lambda: _tx.get_tactics_control(team), "coach",
+                            context="tactics/get_control")
+        roster_fit = safe_call(lambda: _tx.team_system_fit(team),
+                               context="tactics/system_fit")
         self._status_chip(bar, "Identity", preset_name)
         fam_col = GOOD if fam >= 70 else WARN if fam >= 50 else BAD
         fam_lab = QLabel(
@@ -582,25 +585,49 @@ class TacticsScreen(BaseScreen):
         except Exception:
             pass
 
+    def _apply_system_change(self, cat, skey, operation):
+        """Apply a whiteboard system change through the canonical ownership flow.
+
+        - GM owns the whiteboard -> apply directly via ``tactics.set_team_system``.
+        - Coach owns it -> route through ``reputation_system.suggest_tactics_to_coach``
+          so personality reactions, trust deltas, room events and morale fire.
+        - Reputation service unavailable while the coach owns the whiteboard ->
+          block the mutation and show an actionable error instead of silently
+          bypassing coach consequences.
+        """
+        team = self._team
+        if _tx is None:
+            QMessageBox.warning(
+                self, "Tactics",
+                "The tactics engine is unavailable. No changes were made.")
+            return False
+        control = safe_call(
+            lambda: _tx.get_tactics_control(team), "coach",
+            context="tactics/get_control")
+        if control == "gm":
+            _tx.set_team_system(team, cat, skey)
+            return True
+        # Coach owns the whiteboard: the suggestion flow is mandatory.
+        if _rs is None:
+            QMessageBox.warning(
+                self, "Tactics",
+                "The coach owns the whiteboard, but the reputation service "
+                "is unavailable, so the change cannot be proposed to the "
+                "coach. No changes were made. Restart the application and "
+                "try again.")
+            return False
+        res = _rs.suggest_tactics_to_coach(
+            team, {cat: skey}, self._team_context()) or {}
+        text = res.get("text", "")
+        if text:
+            self._push_tactics_news(f"Tactics: {text}")
+        return bool(res.get("applied", False))
+
     def _install_module(self, pill):
         try:
             cat = pill._cat
             skey = pill.property("sys_key")
-            team = self._team
-            # Route through the coach-ownership flow: if the GM owns the
-            # whiteboard, apply directly; if the coach owns it, suggest
-            # (personality/trust consequences fire inside).
-            control = "coach"
-            if _tx is not None:
-                control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
-            if control == "gm" or _rs is None:
-                _tx.set_team_system(team, cat, skey)
-            else:
-                res = _rs.suggest_tactics_to_coach(
-                    team, {cat: skey}, self._team_context()) or {}
-                text = res.get("text", "")
-                if text:
-                    self._push_tactics_news(f"Tactics: {text}")
+            self._apply_system_change(cat, skey, "install_module")
         except Exception:
             pass
         self.refresh()
@@ -867,20 +894,8 @@ class TacticsScreen(BaseScreen):
             return
         try:
             if action[0] == "system":
-                team = self._team
                 cat, skey = action[1], action[2]
-                control = "coach"
-                if _tx is not None:
-                    control = safe_call(
-                        lambda: _tx.get_tactics_control(team), "coach")
-                if control == "gm" or _rs is None:
-                    _tx.set_team_system(team, cat, skey)
-                else:
-                    res = _rs.suggest_tactics_to_coach(
-                        team, {cat: skey}, self._team_context()) or {}
-                    text = res.get("text", "")
-                    if text:
-                        self._push_tactics_news(f"Tactics: {text}")
+                self._apply_system_change(cat, skey, "intel_action")
             elif action[0] == "coach_takeover":
                 self._coach_takeover()
         except Exception:
@@ -904,8 +919,10 @@ class TacticsScreen(BaseScreen):
             style = "Balanced"
         prefs = safe_call(lambda: _tx.ensure_coach_tactics(coach), {}) or {}
         mine = safe_call(lambda: _tx.team_tactics(team), {}) or {}
-        fit = safe_call(lambda: _tx.coach_tactics_fit(coach, team))
-        control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
+        fit = safe_call(lambda: _tx.coach_tactics_fit(coach, team),
+                        context="tactics/coach_fit")
+        control = safe_call(lambda: _tx.get_tactics_control(team), "coach",
+                            context="tactics/get_control")
         cname = str(safe_call(lambda: getattr(coach, "full_name", "Coach"),
                          "Coach"))
 
