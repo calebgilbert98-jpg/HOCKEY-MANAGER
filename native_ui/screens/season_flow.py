@@ -438,7 +438,7 @@ class SeasonFlowScreen(BaseScreen):
         if not self._running or auto is None:
             return
         try:
-            if not _safe(auto.should_auto_advance, False)():
+            if not _safe(auto.should_auto_advance, False):
                 return
             # Native improvement: never sim past blockers the user must
             # resolve -- stop and surface them instead.
