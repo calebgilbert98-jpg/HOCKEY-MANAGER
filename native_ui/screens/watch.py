@@ -468,12 +468,17 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
     with _watch_lock:
         events = list(_watch["events"])
         meta = dict(_watch["id_meta"])
+    # _record_game_result needs the winner as a team OBJECT (it reads
+    # winner.team_name to label recent_results W/L/OTL); without this key
+    # both teams get labeled as losers in the feed.
+    winner = home_team if hs > aws else away_team
     result = {
         "date": today,
         "home_team": home_team,
         "away_team": away_team,
         "home_score": hs,
         "away_score": aws,
+        "winner": winner,
         "watched": True,
         "overtime": period > 3,
         "shootout": bool(safe_call(lambda: getattr(sim, "shootout",
@@ -512,7 +517,6 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
     try:
         if gm is not None and not isinstance(home_team, str) \
                 and not isinstance(away_team, str):
-            winner = home_team if hs > aws else away_team
             went_to_ot = period > 3
             upd = getattr(gm, "_update_standings_fast", None)
             if callable(upd):
