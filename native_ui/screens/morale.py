@@ -1097,15 +1097,71 @@ class MoraleScreen(BaseScreen):
         scroll.setWidget(inner)
         return scroll
 
+    def _live_game_score(self, team):
+        """Get the live score for the user's team from the active game sim.
+
+        Returns (score_state, has_authoritative_score) where score_state is
+        one of "leading"|"trailing"|"tied", or (None, False) if no live game
+        with the user's team is in progress.
+
+        The authoritative source is watch.py's _watch dict, which tracks the
+        background GameSim thread. We do NOT fabricate a score when no live
+        game exists.
+        """
+        try:
+            from .watch import _watch
+        except Exception:
+            return None, False
+        try:
+            thread = _watch.get("thread")
+            sim = _watch.get("sim")
+            # No live sim running.
+            if sim is None:
+                return None, False
+            if thread is not None:
+                try:
+                    if not thread.is_alive():
+                        return None, False
+                except Exception:
+                    pass
+            # Check if the user's team is in this game.
+            my_name = getattr(team, "team_name", "")
+            home_name = _watch.get("home_name", "")
+            away_name = _watch.get("away_name", "")
+            is_home = (my_name and my_name == home_name)
+            is_away = (my_name and my_name == away_name)
+            if not (is_home or is_away):
+                return None, False
+            # Get the live score from the sim.
+            hs = int(getattr(sim, "home_score", 0) or 0)
+            aws = int(getattr(sim, "away_score", 0) or 0)
+            my_score = hs if is_home else aws
+            opp_score = aws if is_home else hs
+            if my_score > opp_score:
+                return "leading", True
+            elif my_score < opp_score:
+                return "trailing", True
+            else:
+                return "tied", True
+        except Exception:
+            return None, False
+        return None, False
+
     def _talk_derived_context(self):
         """Derive talk context from game state (not user input).
 
         Score state, rivalry, and streak are factual — the user must not
         be able to fabricate advantageous context for the tone/outcome
         calculation in give_talk().
+
+        Score state is derived from the authoritative live game sim when
+        available. If no live game is in progress, score_state is None
+        (unavailable) — we do NOT fabricate a "tied" default for
+        intermission talks.
         """
         _gm, team, league = self._resolve()
-        ctx = {"score_state": "tied", "rival": False, "streak": 0}
+        ctx = {"score_state": None, "rival": False, "streak": 0,
+               "score_authoritative": False}
         if team is None:
             return ctx
         # Streak: positive = winning streak, negative = losing streak.
@@ -1137,9 +1193,29 @@ class MoraleScreen(BaseScreen):
                     ctx["rival"] = bool(r)
         except Exception:
             pass
-        # Score state: pregame has no score (tied default). Intermission
-        # would need a live game — default tied if none in progress.
-        # (Live-game score lookup can be added when the sim exposes it.)
+        # Score state: derived from the authoritative live game sim when
+        # available. For pregame (no game in progress), the score is 0-0
+        # which is genuinely "tied". For intermission, we need a live game;
+        # if none exists, score_state stays None (unavailable) and we do
+        # NOT fabricate a tie.
+        try:
+            situation = ""
+            try:
+                situation = self._talk_situation.value() or "pregame"
+            except Exception:
+                pass
+            live_state, authoritative = self._live_game_score(team)
+            if authoritative and live_state:
+                ctx["score_state"] = live_state
+                ctx["score_authoritative"] = True
+            elif situation == "pregame":
+                # Pregame: no game has started, 0-0 is factual, not fabricated.
+                ctx["score_state"] = "tied"
+                ctx["score_authoritative"] = True
+            # Else: intermission with no live game — score_state stays None
+            # (unavailable). The UI will show this and block the talk.
+        except Exception:
+            pass
         return ctx
 
     def _next_opponent(self, team, league):
@@ -1212,8 +1288,12 @@ class MoraleScreen(BaseScreen):
         inp = self._talk_inputs()
         # Refresh the derived-context labels.
         try:
-            ss = inp["score_state"].capitalize()
-            self._talk_score_label.setText(f"Score: <b>{ss}</b>")
+            ss = inp["score_state"]
+            if ss is None:
+                self._talk_score_label.setText(
+                    "Score: <b>Unavailable</b> (no live game)")
+            else:
+                self._talk_score_label.setText(f"Score: <b>{ss.capitalize()}</b>")
             rv = "Yes — rivalry game" if inp["rival"] else "No rivalry"
             self._talk_rival_label.setText(f"Rivalry: <b>{rv}</b>")
             st = inp["streak"]
@@ -1282,6 +1362,11 @@ class MoraleScreen(BaseScreen):
                          "already heard today's words for this situation \u2014 "
                          "delivering again replaces the pending talk but grants "
                          "no further lift.</span>")
+            if inp["situation"] == "intermission" and inp["score_state"] is None:
+                html += ("<br><span style='color:#FF6B6B'>\u26a0 No live game "
+                         "in progress \u2014 score unavailable. Start watching "
+                         "a game for an intermission talk, or switch to "
+                         "Pregame.</span>")
             self._talk_preview.setText(html)
         except Exception as e:
             self._talk_preview.setText(f"Preview unavailable: {e}")
@@ -1316,11 +1401,22 @@ class MoraleScreen(BaseScreen):
         if team is None:
             return
         inp = self._talk_inputs()
+        # Do NOT feed a fabricated score to give_talk(). If this is an
+        # intermission talk with no live game, the score is unavailable —
+        # block the talk rather than inventing a "tied" default.
+        if inp["situation"] == "intermission" and inp["score_state"] is None:
+            self._talk_preview.setText(
+                "Cannot give an intermission talk: no live game in progress. "
+                "Start watching a game first, or choose Pregame.")
+            return
+        # For pregame, None can't happen (defaults to tied=0-0), but guard
+        # anyway to never pass None into give_talk.
+        score_state = inp["score_state"] or "tied"
         try:
             out = _dr.give_talk(
                 team, inp["tone"],
                 {"situation": inp["situation"],
-                 "score_state": inp["score_state"],
+                 "score_state": score_state,
                  "rival": inp["rival"], "streak": inp["streak"]},
                 inp["speaker"], day_key=self._date_str())
         except Exception as e:
