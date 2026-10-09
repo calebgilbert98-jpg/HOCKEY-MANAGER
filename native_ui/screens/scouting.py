@@ -52,8 +52,10 @@ _POSITION_GROUPS = [
     ("Goalies", ["G"]),
 ]
 
-#: Cap on prospects shown in the scout-assignment prospect picker.
-MAX_ASSIGNMENT_PROSPECTS = 200
+#: Prospects per page in the scout-assignment prospect picker. The picker is
+#: paged, not capped: every prospect in the (optionally filtered) list is
+#: reachable through the prev/next page buttons.
+ASSIGNMENT_PAGE_SIZE = 200
 
 
 def _resolve_gm(game):
@@ -103,13 +105,31 @@ class AssignDialog(QDialog):
         self._prospect_combo = QComboBox()
         self._scout_combo = QComboBox()
         self._all_prospects = []  # full list for filtering
-        self._load_options()
+        self._filtered = []       # current filter result (full-list order)
+        self._page = 0            # 0-based page into _filtered
 
         self._match_label = QLabel()
-        self._update_match_label()
+        self._match_label.setStyleSheet("color: #6b7488; font-size: 11px;")
         layout.addRow("Prospect:", self._prospect_combo)
         layout.addRow("", self._match_label)
+
+        # Pager: uncapped picker, ASSIGNMENT_PAGE_SIZE per page.
+        page_row = QHBoxLayout()
+        self._pick_prev = QPushButton("\u2190 Prev")
+        self._pick_prev.clicked.connect(self._pick_prev_page)
+        page_row.addWidget(self._pick_prev)
+        self._pick_page_label = QLabel("Page 1")
+        self._pick_page_label.setAlignment(Qt.AlignCenter)
+        page_row.addWidget(self._pick_page_label, 1)
+        self._pick_next = QPushButton("Next \u2192")
+        self._pick_next.clicked.connect(self._pick_next_page)
+        page_row.addWidget(self._pick_next)
+        layout.addRow("", page_row)
+
         layout.addRow("Scout:", self._scout_combo)
+
+        # Load options last: _apply_prospects needs the pager widgets above.
+        self._load_options()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -125,10 +145,10 @@ class AssignDialog(QDialog):
         prospects = safe_call(
             lambda: list(getattr(league, "draft_prospects", None) or []), [],
             context="scouting/load_prospects")
-        # Keep the full list; the cap is applied only to the *displayed*
-        # options and is explained in the match label.
+        # Keep the full list; the picker pages through all of it, so no
+        # prospect is hidden by a cap.
         self._all_prospects = prospects
-        self._populate_prospect_combo("")
+        self._apply_prospects("")
 
         staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
                           context="scouting/load_staff")
@@ -139,46 +159,62 @@ class AssignDialog(QDialog):
                 self._scout_combo.addItem(
                     getattr(s, "full_name", getattr(s, "name", "?")), s)
 
-    def _populate_prospect_combo(self, filter_text):
-        """Fill the prospect combo from the full list, filtered by text.
+    def _filter_prospects(self, text):
+        self._page = 0
+        self._apply_prospects(text)
 
-        Preserves the current selection when it survives filtering.
+    def _pick_prev_page(self):
+        if self._page > 0:
+            self._page -= 1
+            self._apply_prospects(self._search_edit.text())
+
+    def _pick_next_page(self):
+        self._page += 1
+        self._apply_prospects(self._search_edit.text())
+
+    def _apply_prospects(self, filter_text):
+        """Recompute the filtered list, clamp the page, fill the combo.
+
+        No cap on the total: every filtered prospect is reachable through
+        the prev/next page buttons. Preserves the current selection when
+        it is on the displayed page.
         """
         prev = self._prospect_combo.currentData()
-        prev_id = str(getattr(prev, "id", "") or "") if prev is not None else None
-        self._prospect_combo.clear()
+        prev_id = (str(getattr(prev, "id", "") or "")
+                   if prev is not None else None)
         needle = (filter_text or "").strip().lower()
-        shown = 0
-        new_prev_index = -1
-        for p in self._all_prospects:
-            name = getattr(p, "full_name", "?")
-            if needle and needle not in name.lower():
-                continue
-            if shown >= MAX_ASSIGNMENT_PROSPECTS:
-                break
-            self._prospect_combo.addItem(
-                f"{name} ({_pos_str(p)}, {_overall(p)} OVR)", p)
-            if prev_id is not None and str(getattr(p, "id", "") or "") == prev_id:
-                new_prev_index = shown
-            shown += 1
-        if new_prev_index >= 0:
-            self._prospect_combo.setCurrentIndex(new_prev_index)
-        self._update_match_label()
-
-    def _filter_prospects(self, text):
-        self._populate_prospect_combo(text)
-
-    def _update_match_label(self):
-        total = len(self._all_prospects)
-        shown = self._prospect_combo.count()
-        if total > MAX_ASSIGNMENT_PROSPECTS:
-            self._match_label.setText(
-                f"Showing {shown} of {total} prospects "
-                f"(first {MAX_ASSIGNMENT_PROSPECTS} matches; refine search "
-                f"to see more).")
-        else:
-            self._match_label.setText(f"Showing {shown} of {total} prospects.")
-        self._match_label.setStyleSheet("color: #6b7488; font-size: 11px;")
+        self._filtered = [
+            p for p in self._all_prospects
+            if not needle or needle in getattr(p, "full_name", "?").lower()
+        ]
+        total = len(self._filtered)
+        n_pages = max(
+            1, (total + ASSIGNMENT_PAGE_SIZE - 1) // ASSIGNMENT_PAGE_SIZE)
+        self._page = min(max(self._page, 0), n_pages - 1)
+        start = self._page * ASSIGNMENT_PAGE_SIZE
+        end = min(start + ASSIGNMENT_PAGE_SIZE, total)
+        self._prospect_combo.blockSignals(True)
+        try:
+            self._prospect_combo.clear()
+            new_prev_index = -1
+            for i, p in enumerate(self._filtered[start:end]):
+                self._prospect_combo.addItem(
+                    f"{getattr(p, 'full_name', '?')} "
+                    f"({_pos_str(p)}, {_overall(p)} OVR)", p)
+                if (prev_id is not None
+                        and str(getattr(p, "id", "") or "") == prev_id):
+                    new_prev_index = i
+            if new_prev_index >= 0:
+                self._prospect_combo.setCurrentIndex(new_prev_index)
+        finally:
+            self._prospect_combo.blockSignals(False)
+        self._pick_page_label.setText(
+            f"Page {self._page + 1} of {n_pages}")
+        self._pick_prev.setEnabled(self._page > 0)
+        self._pick_next.setEnabled(self._page < n_pages - 1)
+        shown_from = start + 1 if total else 0
+        self._match_label.setText(
+            f"Showing {shown_from}-{end} of {total} prospects.")
 
     def get_selection(self):
         return (self._prospect_combo.currentData(),
@@ -586,12 +622,21 @@ class ScoutingScreen(BaseScreen):
         self.tabs = QTabWidget()
         self._layout.addWidget(self.tabs, 1)
 
-        # --- Tab 1: Assignments & Reports ---
+        self.tabs.addTab(self._build_work_tab(), "Assignments & Reports")
+        self.tabs.addTab(self._build_staff_tab(), "Scouting Staff")
+        self.tabs.addTab(self._build_db_tab(), "Player Database")
+
+    def _build_work_tab(self):
+        """Tab 1: Assignments & Reports."""
         work = QWidget()
         work_layout = QVBoxLayout(work)
         work_layout.setSpacing(12)
+        self._build_assignment_section(work_layout)
+        self._build_beats_section(work_layout)
+        self._build_reports_section(work_layout)
+        return work
 
-        # Active assignments section
+    def _build_assignment_section(self, layout):
         assign_box = QGroupBox("Active Assignments")
         assign_layout = QVBoxLayout(assign_box)
         assign_btn_row = QHBoxLayout()
@@ -604,9 +649,9 @@ class ScoutingScreen(BaseScreen):
         assign_layout.addLayout(assign_btn_row)
         self._assign_list = QListWidget()
         assign_layout.addWidget(self._assign_list)
-        work_layout.addWidget(assign_box)
+        layout.addWidget(assign_box)
 
-        # Regional beats section
+    def _build_beats_section(self, layout):
         beat_box = QGroupBox("Regional Beats")
         beat_layout = QVBoxLayout(beat_box)
         beat_note = QLabel(
@@ -623,18 +668,17 @@ class ScoutingScreen(BaseScreen):
         beat_layout.addLayout(beat_btn_row)
         self._beat_list = QListWidget()
         beat_layout.addWidget(self._beat_list)
-        work_layout.addWidget(beat_box)
+        layout.addWidget(beat_box)
 
-        # Reports section
+    def _build_reports_section(self, layout):
         report_box = QGroupBox("Scouting Reports")
         report_layout = QVBoxLayout(report_box)
         self._report_list = QListWidget()
         report_layout.addWidget(self._report_list)
-        work_layout.addWidget(report_box)
+        layout.addWidget(report_box)
 
-        self.tabs.addTab(work, "Assignments & Reports")
-
-        # --- Tab 2: Scouting Staff ---
+    def _build_staff_tab(self):
+        """Tab 2: Scouting Staff."""
         staff_page = QWidget()
         staff_layout = QVBoxLayout(staff_page)
         self._staff_table = QTableWidget()
@@ -644,13 +688,18 @@ class ScoutingScreen(BaseScreen):
         self._staff_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._staff_table.setSelectionBehavior(QTableWidget.SelectRows)
         staff_layout.addWidget(self._staff_table)
-        self.tabs.addTab(staff_page, "Scouting Staff")
+        return staff_page
 
-        # --- Tab 3: Player Database ---
+    def _build_db_tab(self):
+        """Tab 3: Player Database."""
         db_page = QWidget()
         db_layout = QVBoxLayout(db_page)
+        self._build_db_filters(db_layout)
+        self._build_db_results(db_layout)
+        self._build_db_pagination(db_layout)
+        return db_page
 
-        # Filters
+    def _build_db_filters(self, layout):
         filter_row = QHBoxLayout()
         self._db_search = QLineEdit()
         self._db_search.setPlaceholderText("Search name…")
@@ -704,15 +753,15 @@ class ScoutingScreen(BaseScreen):
         clear_btn.setToolTip("Reset all database filters")
         clear_btn.clicked.connect(self._clear_db_filters)
         filter_row.addWidget(clear_btn)
-        db_layout.addLayout(filter_row)
+        layout.addLayout(filter_row)
 
-        # Results table
+    def _build_db_results(self, layout):
         self._db_table = PlayerTable()
         self._db_table.set_main_window(self.main_window)
         self._db_table.player_clicked.connect(self._open_prospect)
-        db_layout.addWidget(self._db_table, 1)
+        layout.addWidget(self._db_table, 1)
 
-        # Pagination
+    def _build_db_pagination(self, layout):
         page_row = QHBoxLayout()
         self._db_prev = QPushButton("← Prev")
         self._db_prev.clicked.connect(self._db_prev_page)
@@ -723,13 +772,11 @@ class ScoutingScreen(BaseScreen):
         self._db_next = QPushButton("Next →")
         self._db_next.clicked.connect(self._db_next_page)
         page_row.addWidget(self._db_next)
-        db_layout.addLayout(page_row)
+        layout.addLayout(page_row)
 
         self._db_count = QLabel("")
         self._db_count.setStyleSheet("color: #8b95ab; font-size: 12px;")
-        db_layout.addWidget(self._db_count)
-
-        self.tabs.addTab(db_page, "Player Database")
+        layout.addWidget(self._db_count)
 
     # --- Assignments ---
     def _new_assignment(self):
