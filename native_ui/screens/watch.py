@@ -477,6 +477,24 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                 gr.append(result)
     except Exception as e:
         print(f"[watch] record result failed: {e}")
+    # 3. Apply standings updates. The day-sim path skips watched games
+    #    entirely (game_manager.py: `if game.get('watched'): continue`),
+    #    so this path must perform the omitted postgame side effects.
+    #    Uses the canonical GameManager._update_standings_fast -- the
+    #    same method the day-sim calls for simmed games. The GameSim
+    #    already updated player stats live; this only touches
+    #    league.standings and team records/goals.
+    try:
+        if gm is not None and not isinstance(home_team, str) \
+                and not isinstance(away_team, str):
+            winner = home_team if hs > aws else away_team
+            went_to_ot = period > 3
+            upd = getattr(gm, "_update_standings_fast", None)
+            if callable(upd):
+                upd(home_team, away_team, winner, (hs, aws),
+                    went_to_ot=went_to_ot, preseason=False)
+    except Exception as e:
+        print(f"[watch] standings update failed: {e}")
 
 
 def _translate_events(events):

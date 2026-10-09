@@ -199,30 +199,63 @@ def _priority(game):
 
 
 def _claim_waiver(game, player):
-    """Execute a waiver claim immediately (same call the web bridge made
-    on the main thread). Returns (ok, message). Never raises."""
+    """Submit a waiver claim to the pending-claims queue.
+
+    Mirrors the desktop Tk UI (windows.py): the claim is QUEUED via
+    player.user_claim_pending and resolved at the next waiver run
+    (game_manager.process_waivers) in priority order -- never granted
+    instantly. Returns (ok, message). Never raises."""
     team = _user_team(game)
     if team is None:
         return False, "No team to claim with."
+    gm = _resolve_gm(game)
     wire = _safe(lambda: list(getattr(game, "waiver_list", None) or []),
                  []) or []
     if player not in wire:
         return False, "Player is no longer on the wire."
+    # Roster space check (matches desktop UI).
+    if len(_safe(lambda: list(getattr(team, "roster", None) or []), [])
+           or []) >= 23:
+        return False, ("Your NHL roster is full. Release or reassign a "
+                       "player before claiming from waivers.")
+    # Cap space check (matches desktop UI).
     try:
-        fn = getattr(game, "_execute_waiver_claim", None)
-        if not callable(fn):
-            return False, "Claim path unavailable."
-        fn(player, team)
+        salary = int(getattr(getattr(player, "contract", None),
+                             "salary", 0) or 0)
+        cap = _safe(lambda: getattr(team, "cap_space", 0), 0) or 0
+        if salary > cap:
+            return False, (f"You don't have enough cap space to add "
+                           f"${salary:,} in salary.")
+    except Exception:
+        pass
+    # Already pending check (matches desktop UI).
+    if _safe(lambda: bool(getattr(player, "user_claim_pending",
+                                  False)), False):
+        return True, (f"You already have a pending claim on "
+                      f"{_safe(lambda: getattr(player, 'full_name', 'him'), 'him')}. "
+                      f"It will be processed in waiver priority order.")
+    # Queue the claim -- do NOT call _execute_waiver_claim directly.
+    # That is the transfer primitive for when a claim WINS at
+    # process_waivers time. Calling it here bypasses priority
+    # resolution and lets a lower-priority club steal the player.
+    try:
+        player.user_claim_pending = True
     except Exception as e:
         return False, f"Claim failed: {e}"
-    mine = _safe(lambda: player in list(getattr(team, "roster", None)
-                                        or []), False)
-    same_club = (_safe(lambda: getattr(player, "team_name", ""), "")
-                 == _safe(lambda: getattr(team, "team_name", ""), ""))
-    if mine or same_club:
-        return True, ""
-    return False, ("Claim submitted, but he did not land on your roster "
-                   "(a higher-priority club may have won him).")
+    # News entry (matches desktop UI).
+    try:
+        tname = _safe(lambda: getattr(team, "team_name", ""), "")
+        pname = _safe(lambda: getattr(player, "full_name", ""), "")
+        add_news = getattr(gm, "add_news", None)
+        if callable(add_news) and tname and pname:
+            add_news(f"{tname} submitted a waiver claim for {pname}.")
+    except Exception:
+        pass
+    pname = _safe(lambda: getattr(player, "full_name", "him"), "him")
+    return True, (f"Waiver claim submitted for {pname}. It will be "
+                  f"processed at the next waiver run in priority order -- "
+                  f"a higher-priority club that also claims him gets him "
+                  f"first.")
 
 
 def _place_on_waivers(game, player):
@@ -491,8 +524,11 @@ class WaiversScreen(BaseScreen):
         btn.setText("Claiming…")
         ok, msg = _claim_waiver(self.game, player)
         if ok:
-            btn.setText("Claimed ✓")
-            self._status(f"Claimed {name} off the wire. ✓")
+            btn.setText("Pending ⏳")
+            self._status(f"Claim submitted for {name}. ⏳ "
+                         f"Processed at next waiver run in priority order.")
+            if msg:
+                self._status(msg)
             QTimer.singleShot(800, self.refresh)
         else:
             btn.setText("Claim")
