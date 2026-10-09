@@ -651,10 +651,10 @@ class TradesScreen(BaseScreen):
         self._give_pick_search.textChanged.connect(
             self._render_asset_lists)
         give_l.addWidget(self._give_pick_search)
-        self._give_picks = QListWidget()
-        self._give_picks.itemChanged.connect(
+        self._give_picks_list = QListWidget()
+        self._give_picks_list.itemChanged.connect(
             lambda item: self._on_asset_toggled(item, "give"))
-        give_l.addWidget(self._give_picks, 1)
+        give_l.addWidget(self._give_picks_list, 1)
 
         cols.addWidget(get_box, 1)
         cols.addWidget(give_box, 1)
@@ -1003,7 +1003,7 @@ class TradesScreen(BaseScreen):
         self._fill_list(self._give_players, self._my_players, "player",
                         self._give_pids,
                         query=getattr(give_pq, "text", lambda: "")())
-        self._fill_list(self._give_picks, self._my_picks, "pick",
+        self._fill_list(self._give_picks_list, self._my_picks, "pick",
                         self._give_picks,
                         query=getattr(give_kq, "text", lambda: "")())
         self._fill_list(self._get_players, self._partner_players, "player",
