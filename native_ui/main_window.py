@@ -51,6 +51,18 @@ def _team_abbr(team_name):
     return _TEAM_ABBR.get(team_name, team_name[:3].upper())
 
 
+def _standings_sort_key(t):
+    """Canonical standings sort key for Team objects.
+    
+    Matches the standings screen's tiebreak order: points desc, wins desc,
+    name asc (standings.py). Points = wins*2 + otl.
+    """
+    pts = (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
+    wins = getattr(t, "wins", 0) or 0
+    name = getattr(t, "team_name", "") or ""
+    return (-pts, -wins, name)
+
+
 class TopBar(QWidget):
     """Application header: brand + nav + inbox/save."""
 
@@ -787,7 +799,15 @@ class HubPage(QWidget):
         return True
 
     def _sched_played(self, g):
-        return bool(self._game_val(g, "played", default=False))
+        """Check if a schedule entry is completed.
+        
+        A game is completed if it was normally played OR if it was watched
+        (watched games are skipped by day-sim, so they're complete for
+        schedule purposes).
+        """
+        played = bool(self._game_val(g, "played", default=False))
+        watched = bool(self._game_val(g, "watched", default=False))
+        return played or watched
 
     def _sched_scores(self, g):
         """Return (home_score, away_score) or (None, None) if not played."""
@@ -935,14 +955,8 @@ class HubPage(QWidget):
                     div_teams = [t for t in (getattr(league, "teams", []) or [])
                                  if getattr(t, "division", "") == division]
 
-                    # Match the standings screen's tiebreak order: points
-                    # desc, wins desc, name asc (standings.py line 91).
-                    def _standings_key(t):
-                        pts = (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
-                        wins = getattr(t, "wins", 0) or 0
-                        name = getattr(t, "team_name", "") or ""
-                        return (-pts, -wins, name)
-                    div_teams.sort(key=_standings_key)
+                    # Use canonical standings sort (points desc, wins desc, name asc).
+                    div_teams.sort(key=_standings_sort_key)
                 rank = next((i + 1 for i, t in enumerate(div_teams) if t is team), None)
                 pts = wins * 2 + otl
                 self._strip["points"]._val.setText(str(pts))
@@ -1988,6 +2002,7 @@ class MainWindow(QMainWindow):
     # Centralized section<->screen mapping. show_section() maps section
     # names to screens; _SCREEN_TO_SECTION is the reverse for updating
     # the topbar when navigating directly via show_screen().
+    # Canonical topbar sections (uppercase) map to their default screens.
     _SECTION_MAP = {
         "CLUB": "team",
         "PERSONNEL": "staff",
@@ -1995,7 +2010,9 @@ class MainWindow(QMainWindow):
         "TRANSACTIONS": "trades",
         "FINANCES": "finances",
         "SYSTEMS": "systems_clutch",
-        # Lowercase aliases
+    }
+    # Lowercase aliases for convenient navigation (not topbar sections).
+    _SCREEN_ALIASES = {
         "hub": "hub",
         "roster": "roster",
         "lines": "lines",
@@ -2007,11 +2024,26 @@ class MainWindow(QMainWindow):
 
     @classmethod
     def _section_for_screen(cls, screen_name):
-        """Return the topbar section for a screen, or None if none."""
+        """Return the topbar section for a screen, or None if none.
+        
+        Only returns canonical uppercase section names. Screens without
+        a topbar section (e.g., hub, roster, inbox) return None, which
+        clears the topbar active state.
+        """
         for section, screen in cls._SECTION_MAP.items():
             if screen == screen_name:
                 return section
         return None
+
+    @classmethod
+    def _resolve_screen_name(cls, name):
+        """Resolve a section name or alias to a screen name."""
+        if name in cls._SECTION_MAP:
+            return cls._SECTION_MAP[name]
+        if name in cls._SCREEN_ALIASES:
+            return cls._SCREEN_ALIASES[name]
+        # Assume it's already a screen name
+        return name
 
     def show_screen(self, name):
         """Navigate to a registered screen, instantiating on first use."""
@@ -2086,7 +2118,7 @@ class MainWindow(QMainWindow):
 
     def show_section(self, name):
         self.topbar.set_active(name)
-        screen = self._SECTION_MAP.get(name, self._SECTION_MAP.get(name.lower(), "hub"))
+        screen = self._resolve_screen_name(name)
         self.show_screen(screen)
 
     def show_inbox(self):
