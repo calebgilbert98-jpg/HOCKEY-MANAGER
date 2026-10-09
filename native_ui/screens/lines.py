@@ -251,12 +251,13 @@ class LineEditorTab(QWidget):
             self._on_change()
 
     def _on_slot_click(self, slot):
-        # Emit signal to parent to open roster picker
+        # Emit signal to parent to open roster picker (pass this tab so the
+        # duplicate guard can scope to the tab's situation group)
         parent = self.parent()
         while parent and not hasattr(parent, "open_roster_picker"):
             parent = parent.parent()
         if parent:
-            parent.open_roster_picker(slot)
+            parent.open_roster_picker(slot, self)
 
     def get_slot_map(self):
         """Return {slot_id: player} for saving."""
@@ -361,6 +362,18 @@ class LinesScreen(BaseScreen):
         ("pk2", "PK2"),
     ]
 
+    # Situation groups: tabs within a group are never deployed at the same
+    # time as each other (only one ES line / one PP unit / one PK unit is on
+    # the ice at once), so a player may not appear twice inside one group.
+    # Players MAY appear across groups (ES line + PP unit, PP + PK, ...):
+    # the engine's own default lineup dresses its best forwards on both an
+    # ES line and PP1, and _get_on_ice only ever dresses one unit per group.
+    SITUATION_GROUPS = {
+        "es": ("line1", "line2", "line3", "line4"),
+        "pp": ("pp1", "pp2"),
+        "pk": ("pk1", "pk2"),
+    }
+
     def _build_body(self):
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -445,25 +458,66 @@ class LinesScreen(BaseScreen):
         if self.tabs.currentIndex() == 0:
             self._render_overview()
 
-    def _all_dressed_ids(self, exclude_tab=None):
-        """Player IDs currently dressed on any tab (optionally excluding one)."""
-        ids = set()
+    def _situation_group(self, tab_id):
+        """Situation group ('es', 'pp', 'pk') for a tab_id, or None."""
+        for group, tabs in self.SITUATION_GROUPS.items():
+            if tab_id in tabs:
+                return group
+        return None
+
+    def _group_tab_ids(self, tab_id):
+        """Tab IDs in the same situation group as tab_id (inclusive)."""
+        group = self._situation_group(tab_id)
+        if group is None:
+            return (tab_id,)
+        return self.SITUATION_GROUPS[group]
+
+    def _tab_id_for_slot(self, slot):
+        """Find which tab a LineSlot belongs to (by identity)."""
         for tab_id, tab in self._line_tabs.items():
+            if slot in tab._slots.values():
+                return tab_id
+        return None
+
+    def _all_dressed_ids(self, exclude_tab=None):
+        """Player IDs dressed in the same situation group as exclude_tab.
+
+        Only tabs that could be deployed simultaneously with exclude_tab
+        count as "used" — a player on an ES line is still available for a
+        PP unit, mirroring the engine (its default lineup dresses the best
+        forwards on both an ES line and PP1).
+        """
+        group_tabs = (self._group_tab_ids(exclude_tab)
+                      if exclude_tab else tuple(self._line_tabs))
+        ids = set()
+        for tab_id in group_tabs:
             if tab_id == exclude_tab:
+                continue
+            tab = self._line_tabs.get(tab_id)
+            if tab is None:
                 continue
             for player in tab.get_slot_map().values():
                 if player is not None:
                     ids.add(str(getattr(player, "id", id(player))))
         return ids
 
-    def _find_dressed_slot(self, player_id, exclude_slot=None):
-        """Return the slot_id where player_id is currently dressed, or None.
+    def _find_dressed_slot(self, player_id, exclude_slot=None, tab_id=None):
+        """Return the slot_id where player_id is dressed, or None.
 
-        exclude_slot: a LineSlot whose own occupant is ignored, so
-        re-picking the player already in the target slot is a no-op
-        rather than a duplicate.
+        Only searches tabs in the same situation group as tab_id: a player
+        may skate on an ES line and a PP unit (or PP and PK), but never
+        twice within one group. exclude_slot: a LineSlot whose own occupant
+        is ignored, so re-picking the player already in the target slot is
+        a no-op rather than a duplicate.
         """
-        for tab in self._line_tabs.values():
+        if tab_id is None and exclude_slot is not None:
+            tab_id = self._tab_id_for_slot(exclude_slot)
+        group_tabs = (self._group_tab_ids(tab_id)
+                      if tab_id else tuple(self._line_tabs))
+        for tid in group_tabs:
+            tab = self._line_tabs.get(tid)
+            if tab is None:
+                continue
             for sid, s in tab._slots.items():
                 if exclude_slot is not None and s is exclude_slot:
                     continue
@@ -518,11 +572,12 @@ class LinesScreen(BaseScreen):
             for tab_id, tab in self._line_tabs.items()
         }
 
-    def open_roster_picker(self, slot):
+    def open_roster_picker(self, slot, tab=None):
         """Open a dialog to pick a player for the slot.
 
         Web parity: search box, position filter pills (All/F/D/G),
-        streak filters (hot/cold), sort dropdown.
+        streak filters (hot/cold), sort dropdown. tab is the LineEditorTab
+        the slot belongs to (used to scope the duplicate guard).
         """
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Select player for {slot.slot_id}")
@@ -654,21 +709,25 @@ class LinesScreen(BaseScreen):
         layout.addWidget(hint)
 
         def _pick(player):
-            # One player, one slot (web parity: lines.js rejects a drop when
-            # the player is already dressed elsewhere). Re-picking the player
-            # already in this slot is a no-op, not a duplicate.
+            # One player, one slot per situation group: a player may skate
+            # on an ES line and a PP unit (or PP and PK), but never twice
+            # in the same group. Re-picking the player already in this slot
+            # is a no-op, not a duplicate.
             if player is not None:
                 pid = str(getattr(player, "id", id(player)))
                 cur = slot.player
                 cur_pid = (str(getattr(cur, "id", id(cur)))
                            if cur is not None else None)
                 if pid != cur_pid:
-                    dup_slot = self._find_dressed_slot(pid, exclude_slot=slot)
+                    tab_id = tab.tab_id if tab is not None else None
+                    dup_slot = self._find_dressed_slot(
+                        pid, exclude_slot=slot, tab_id=tab_id)
                     if dup_slot:
                         QMessageBox.warning(
                             dlg, "Lines",
                             f"{getattr(player, 'full_name', '?')} is already "
-                            f"dressed on {dup_slot} — one player, one slot.")
+                            f"dressed on {dup_slot} — one player per "
+                            f"situation group.")
                         return
             slot.set_player(player)
             self._on_slots_changed()
@@ -683,27 +742,35 @@ class LinesScreen(BaseScreen):
             full_map = {}
             for tab_id, tab in self._line_tabs.items():
                 full_map.update(tab.get_slot_map())
-            # One player, one slot: validate the whole map before writing.
-            # The picker rejects duplicates at selection time; this guards
-            # against tampered or programmatically-built state.
-            seen = {}
+            # One player, one slot per situation group: validate each group
+            # separately. The picker rejects duplicates at selection time;
+            # this guards against tampered or programmatically-built state.
+            # Cross-group reuse (ES + PP, PP + PK) is legal — only duplicates
+            # within a simultaneously-deployable group are rejected.
             dupes = []
-            for sid, player in full_map.items():
-                if player is None:
-                    continue
-                pid = str(getattr(player, "id", id(player)))
-                if pid in seen:
-                    dupes.append((getattr(player, "full_name", "?"),
-                                  seen[pid], sid))
-                else:
-                    seen[pid] = sid
+            for group, tab_ids in self.SITUATION_GROUPS.items():
+                seen = {}
+                for tab_id in tab_ids:
+                    tab = self._line_tabs.get(tab_id)
+                    if tab is None:
+                        continue
+                    for sid, player in tab.get_slot_map().items():
+                        if player is None:
+                            continue
+                        pid = str(getattr(player, "id", id(player)))
+                        if pid in seen:
+                            dupes.append((getattr(player, "full_name", "?"),
+                                          seen[pid], sid, group))
+                        else:
+                            seen[pid] = sid
             if dupes:
                 details = "; ".join(
-                    f"{name} on {a} and {b}" for name, a, b in dupes)
+                    f"{name} on {a} and {b} ({group})"
+                    for name, a, b, group in dupes)
                 QMessageBox.warning(
                     self, "Lines",
                     f"Cannot save: duplicate assignments — {details}. "
-                    "One player, one slot.")
+                    "One player per situation group.")
                 return
             # Convert native slot IDs (LW1, C1, RW1) to sim format (F1_LW, F1_C, F1_RW)
             # The sim reads F1_LW..F4_RW / D1_L..D3_R / G1..G2 keys
