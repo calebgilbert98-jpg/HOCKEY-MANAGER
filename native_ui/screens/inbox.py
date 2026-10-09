@@ -643,9 +643,9 @@ class InboxScreen(BaseScreen):
         flags.addWidget(star)
         bang = QPushButton("❗")
         bang.setFlat(True)
-        bang.setToolTip("Important")
-        bang.setStyleSheet("font-size: 13px;")
-        bang.setEnabled(important)
+        bang.setToolTip("Important" if not important else "Unmark important")
+        bang.setStyleSheet(
+            f"color: {'#ef4444' if important else '#4a5468'}; font-size: 13px;")
         bang.clicked.connect(
             lambda _c, i=mid: self._toggle_flag(i, "important"))
         flags.addWidget(bang)
@@ -693,12 +693,37 @@ class InboxScreen(BaseScreen):
         self._reload_list()
 
     def _on_mark_all_read(self):
+        inbox = _inbox_of(self.game)
+        if inbox is None:
+            return
+        # Count unread before acting so we can report the result.
         try:
-            inbox = _inbox_of(self.game)
-            if inbox is not None:
-                inbox.mark_all_read()
+            unread = [m for m in _all_messages(self.game)
+                      if not bool(getattr(m, "is_read", False))]
         except Exception:
-            pass
+            unread = []
+        if not unread:
+            QMessageBox.information(
+                self, "Mark all read", "No unread messages.")
+            return
+        confirm = QMessageBox.question(
+            self, "Mark all read",
+            f"Mark {len(unread)} message{'s' if len(unread) != 1 else ''} "
+            "as read?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            inbox.mark_all_read()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Mark all read failed",
+                f"Could not mark messages as read: {exc}")
+            return
+        QMessageBox.information(
+            self, "Mark all read",
+            f"{len(unread)} message{'s' if len(unread) != 1 else ''} "
+            "marked as read.")
         self.refresh()
 
     def _toggle_flag(self, mid, flag):
@@ -1055,20 +1080,16 @@ class InboxScreen(BaseScreen):
 
     # -- game day -----------------------------------------------------------
 
-    def _actions_gameday(self, layout, m, d, done):
-        self._ia_line(layout,
-                      f"Game Day: {d.get('away', '')} @ {d.get('home', '')}")
+    def _gameday_is_playable(self, d, done):
+        """Check if the gameday actions are still available."""
         team = _user_team(self.game)
         today = _today_iso(self.game)
-        preseason = _gameday_is_preseason(self.game, team, _today(self.game))
         stale = bool(d.get("game_date") and today
                      and d.get("game_date") != today)
-        if stale or done:
-            self._ia_note(layout, "This game has already been played — "
-                                  "these options are no longer available.")
-            return
+        return not (stale or done)
 
-        # pre-match presser
+    def _gameday_presser(self, layout, m, d):
+        """Render the pre-match presser section."""
         sec = self._ia_section(layout, "Pre-match presser")
         questions = d.get("presser") or []
         answered = d.get("presser_answered") or []
@@ -1102,7 +1123,8 @@ class InboxScreen(BaseScreen):
                     qrow.addStretch()
                     sec.addLayout(qrow)
 
-        # team talk
+    def _gameday_team_talk(self, layout, m, d):
+        """Render the dressing room team talk section."""
         sec = self._ia_section(layout, "Dressing room: team talk")
         talks = d.get("talk_options") or []
         if d.get("talk_chosen") is not None:
@@ -1125,7 +1147,8 @@ class InboxScreen(BaseScreen):
                 note.setStyleSheet("color: #9aa4b8; font-size: 12px;")
                 sec.addWidget(note)
 
-        # coach's instruction
+    def _gameday_instruction(self, layout, m, d):
+        """Render the coach's instruction section."""
         sec = self._ia_section(layout, "Coach's instruction")
         instrs = d.get("instruction_options") or []
         if d.get("instruction_chosen") is not None:
@@ -1146,7 +1169,10 @@ class InboxScreen(BaseScreen):
                 note.setStyleSheet("color: #9aa4b8; font-size: 12px;")
                 sec.addWidget(note)
 
-        # watch / quick
+    def _gameday_play_options(self, layout, m):
+        """Render the watch/quick-sim play options."""
+        team = _user_team(self.game)
+        preseason = _gameday_is_preseason(self.game, team, _today(self.game))
         sec = self._ia_section(layout, "How to play tonight")
         qrow = QHBoxLayout()
         qrow.setSpacing(8)
@@ -1166,6 +1192,18 @@ class InboxScreen(BaseScreen):
             self._ia_note(sec, "Preseason exhibitions aren't watchable — "
                                "they're quick-simmed and no stats are "
                                "recorded.")
+
+    def _actions_gameday(self, layout, m, d, done):
+        self._ia_line(layout,
+                      f"Game Day: {d.get('away', '')} @ {d.get('home', '')}")
+        if not self._gameday_is_playable(d, done):
+            self._ia_note(layout, "This game has already been played — "
+                                  "these options are no longer available.")
+            return
+        self._gameday_presser(layout, m, d)
+        self._gameday_team_talk(layout, m, d)
+        self._gameday_instruction(layout, m, d)
+        self._gameday_play_options(layout, m)
 
     def _presser_answer(self, m, q, a):
         try:
