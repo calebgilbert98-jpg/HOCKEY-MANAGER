@@ -414,27 +414,54 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
     find the game.
     """
     gm = _resolve_gm(game)
-    today = game_date or safe_call(lambda: getattr(gm, "current_date", None))
+    today = game_date or safe_call(
+        lambda: getattr(gm, "current_date", None),
+        context="watch/finish_sim:resolve_date")
     hn, an = _team_name(home_team), _team_name(away_team)
-    # 1. Flag the real schedule entry (dict entries only; tuples can't
-    #    carry flags -- same limitation as the web version).
+    # 1. Flag the real schedule entry. Dict entries get the flag in
+    #    place. Tuple entries are immutable and -- worse -- simulate_day
+    #    converts them to FRESH dicts (game_manager.py), which would drop
+    #    any flag. So replace a matching tuple in-place with an equivalent
+    #    dict carrying watched=True. simulate_day then takes the dict path
+    #    (same object, flag preserved) and its `game.get('watched')` guard
+    #    skips re-simming. This surpasses the web version, which skips
+    #    tuples entirely.
     try:
-        sched = safe_call(lambda: list(getattr(getattr(gm, "league", None),
-                                          "schedule", None) or []), []) or []
-        for g in sched:
-            try:
-                if not isinstance(g, dict):
+        league = safe_call(lambda: getattr(gm, "league", None), None,
+                           context="watch/finish_sim:resolve_league")
+        sched = safe_call(lambda: getattr(league, "schedule", None), None,
+                          context="watch/finish_sim:resolve_schedule")
+        if sched is not None:
+            for idx, g in enumerate(sched):
+                try:
+                    if isinstance(g, dict):
+                        if _date_key(g.get("date")) != _date_key(today):
+                            continue
+                        if _team_name(g.get("home_team")) == hn and \
+                                _team_name(g.get("away_team")) == an:
+                            g["watched"] = True
+                            g["watched_home_score"] = hs
+                            g["watched_away_score"] = aws
+                            break
+                    elif isinstance(g, tuple) and len(g) >= 3:
+                        # (date, home_team, away_team[, ...]) -- match and
+                        # promote to a watched dict in place.
+                        if _date_key(g[0]) != _date_key(today):
+                            continue
+                        if _team_name(g[1]) == hn and \
+                                _team_name(g[2]) == an:
+                            sched[idx] = {
+                                "date": g[0],
+                                "home_team": g[1],
+                                "away_team": g[2],
+                                "event_type": "GAME",
+                                "watched": True,
+                                "watched_home_score": hs,
+                                "watched_away_score": aws,
+                            }
+                            break
+                except Exception:
                     continue
-                if _date_key(g.get("date")) != _date_key(today):
-                    continue
-                if _team_name(g.get("home_team")) == hn and \
-                        _team_name(g.get("away_team")) == an:
-                    g["watched"] = True
-                    g["watched_home_score"] = hs
-                    g["watched_away_score"] = aws
-                    break
-            except Exception:
-                continue
     except Exception:
         pass
     # 2. Record the result (native objects, no JSON round-trip).
@@ -450,15 +477,19 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
         "watched": True,
         "overtime": period > 3,
         "shootout": bool(safe_call(lambda: getattr(sim, "shootout",
-                                              False), False)),
+                                              False), False,
+                                   context="watch/finish_sim:shootout")),
         "game_stats": dict(safe_call(lambda: getattr(sim, "game_stats",
-                                                None), {}) or {}),
+                                                None), {}) or {},
+                           context="watch/finish_sim:game_stats"),
         "event_log": _translate_events(events),
         "team_stats": _aggregate_team_stats(
-            safe_call(lambda: getattr(sim, "game_stats", None), {}) or {},
+            safe_call(lambda: getattr(sim, "game_stats", None), {},
+                      context="watch/finish_sim:team_stats") or {},
             meta, hn, an),
         "three_stars": _three_stars(
-            safe_call(lambda: getattr(sim, "game_stats", None), {}) or {},
+            safe_call(lambda: getattr(sim, "game_stats", None), {},
+                      context="watch/finish_sim:three_stars") or {},
             meta, hn, an),
     }
     try:
