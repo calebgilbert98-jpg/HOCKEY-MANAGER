@@ -8,9 +8,13 @@ writes into command-queue ops; here we call the same underlying
 
 - install a whiteboard module : ``tactics.set_team_system(team, cat, key)``
 - identity preset              : ``tactics.apply_identity_preset(team, preset)``
-- whiteboard ownership         : ``tactics.set_tactics_control(team, who)``
-- coach enforce                : ``tactics.set_tactics_control(team, "gm")``
-- coach takeover               : ``set_tactics_control(team, "coach")`` +
+- whiteboard ownership         : via ``reputation_system.take_over_tactics`` /
+                                 ``reputation_system.hand_back_tactics`` so
+                                 coach-personality reactions, trust deltas,
+                                 room events, morale shifts and news fire
+                                 (mainline parity -- never flip control raw)
+- coach enforce                : ``rs.take_over_tactics(team, ctx)``
+- coach takeover               : ``rs.hand_back_tactics(team)`` +
                                  ``tactics.install_coach_systems(team, coach)``
 - legacy slider pills         : plain ``setattr(team, tactic_*, value)``
 - weekly practice plan         : ``team.dressing_room["practice_plan"]``
@@ -171,6 +175,40 @@ class TacticsScreen(BaseScreen):
             if "head coach" in _staff_role_str(s).lower():
                 return s
         return None
+
+    def _team_context(self):
+        """Record/team-shape context for the personality engine.
+
+        Mirrors mainline tactics_window._team_context(): drives the
+        control_need reactions in take_over_tactics / enforce_tactics
+        (e.g. overruling an authoritarian on a winning team stings more).
+        """
+        ctx = {"win_pct": 0.5, "losing_streak": 0}
+        try:
+            gm = getattr(self.game, "game_manager", None) or self.game
+            league = getattr(gm, "league", None) or getattr(self.game, "league", None)
+            st = (getattr(league, "standings", {}) or {}).get(
+                getattr(self._team, "team_name", ""), {})
+            w = st.get("W", st.get("Wins", 0))
+            l = st.get("L", st.get("Losses", 0))
+            otl = st.get("OTL", 0)
+            ctx["win_pct"] = w / max(1, w + l + otl)
+            ctx["losing_streak"] = int(st.get("losing_streak", st.get("streak", 0)) or 0)
+        except Exception:
+            pass
+        return ctx
+
+    def _push_tactics_news(self, text):
+        """Post a tactics headline to the news feed (mainline parity)."""
+        if not text:
+            return
+        try:
+            add_news = getattr(self.main_window, "add_news", None) \
+                or getattr(self.game, "add_news", None)
+            if callable(add_news):
+                add_news(f"Tactics: {text}")
+        except Exception:
+            pass
 
     def _skaters(self, team):
         roster = _safe(lambda: list(team.roster), []) or []
@@ -958,13 +996,27 @@ class TacticsScreen(BaseScreen):
                     f"{style} preferences.")
 
         def _enforce():
-            try:
-                _tx.set_tactics_control(team, "gm")
-            except Exception:
-                pass
-            self._coach_suggest_out.setText(
+            # Route through the reputation/personality engine so the coach
+            # reacts per his makeup: trust deltas, room events, morale
+            # shifts and news all fire (mainline parity).
+            res = {}
+            if _rs is not None:
+                try:
+                    res = _rs.take_over_tactics(team, self._team_context()) or {}
+                except Exception:
+                    res = {}
+            if not res:
+                # Engine unavailable -- fall back to the raw control flip.
+                try:
+                    _tx.set_tactics_control(team, "gm")
+                except Exception:
+                    pass
+            self._coach_suggest_out.setText(res.get(
+                "text",
                 "Whiteboard is yours. He will coach your systems and stop "
-                "adjusting mid-game.")
+                "adjusting mid-game."))
+            if res.get("changed"):
+                self._push_tactics_news(res.get("text", ""))
             self.refresh()
 
         suggest_btn.clicked.connect(_suggest)
@@ -975,12 +1027,27 @@ class TacticsScreen(BaseScreen):
     def _coach_takeover(self):
         team = self._team
         coach = self._head_coach(team)
+        # Personality-safe handback: trust repair, morale shift and room
+        # event fire inside (mainline parity). hand_back_tactics flips
+        # control to "coach" internally.
+        res = {}
+        if _rs is not None:
+            try:
+                res = _rs.hand_back_tactics(team) or {}
+            except Exception:
+                res = {}
+        if not res:
+            try:
+                _tx.set_tactics_control(team, "coach")
+            except Exception:
+                pass
         try:
-            _tx.set_tactics_control(team, "coach")
             if coach is not None:
                 _tx.install_coach_systems(team, coach)
         except Exception:
             pass
+        if res.get("changed"):
+            self._push_tactics_news(res.get("text", ""))
 
     def _coach_takeover_refresh(self):
         self._coach_takeover()
@@ -990,12 +1057,27 @@ class TacticsScreen(BaseScreen):
         btn = self.sender()
         if btn is None:
             return
-        try:
-            who = btn.property("control_who")
-            _tx.set_tactics_control(self._team,
-                                    who if who in ("coach", "gm") else "coach")
-        except Exception:
-            pass
+        who = btn.property("control_who")
+        who = who if who in ("coach", "gm") else "coach"
+        # Route through the personality engine so trust/morale/room-event
+        # consequences fire (mainline parity); never flip control raw.
+        res = {}
+        if _rs is not None:
+            try:
+                if who == "gm":
+                    res = _rs.take_over_tactics(self._team,
+                                                self._team_context()) or {}
+                else:
+                    res = _rs.hand_back_tactics(self._team) or {}
+            except Exception:
+                res = {}
+        if not res:
+            try:
+                _tx.set_tactics_control(self._team, who)
+            except Exception:
+                pass
+        if res.get("changed"):
+            self._push_tactics_news(res.get("text", ""))
         self.refresh()
 
     # ------------------------------------------------------------ practice
