@@ -32,6 +32,7 @@ from PySide6.QtGui import (
 
 from .base import BaseScreen
 from ..dialogs.boxscore import BoxscoreDialog
+from native_ui.safe import safe_call
 
 
 # ----------------------------------------------------------------------
@@ -48,13 +49,6 @@ _PACE = {"goal": 2.0, "fight": 2.0, "penalty": 1.2, "period_end": 1.5,
          "period_start": 1.0, "milestone": 1.0}
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _resolve_gm(game):
     return getattr(game, "game_manager", None) or game
 
@@ -62,7 +56,7 @@ def _resolve_gm(game):
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
 
 
 def _abbr(name):
@@ -120,14 +114,14 @@ def _player_name(p):
 
 
 def _pos_short(p):
-    pos = _safe(lambda: getattr(p, "primary_position", None))
-    val = _safe(lambda: getattr(pos, "value", None)) or \
-        _safe(lambda: getattr(pos, "name", ""), "") or ""
+    pos = safe_call(lambda: getattr(p, "primary_position", None))
+    val = safe_call(lambda: getattr(pos, "value", None)) or \
+        safe_call(lambda: getattr(pos, "name", ""), "") or ""
     return str(val)
 
 
 def _is_goalie(p):
-    name = str(_safe(lambda: getattr(
+    name = str(safe_call(lambda: getattr(
         getattr(p, "primary_position", None), "name", ""), "") or "").upper()
     return "GOALIE" in name
 
@@ -234,7 +228,7 @@ def set_target_entry(entry):
 def _build_id_meta(home_team, away_team):
     meta = {}
     for idx, team in enumerate((home_team, away_team)):
-        roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or []
+        roster = safe_call(lambda: list(getattr(team, "roster", None) or []), []) or []
         for p in roster:
             try:
                 pid = getattr(p, "id", None)
@@ -244,7 +238,7 @@ def _build_id_meta(home_team, away_team):
                     "team": idx,
                     "name": _player_name(p),
                     "goalie": _is_goalie(p),
-                    "jersey": str(_safe(lambda: getattr(
+                    "jersey": str(safe_call(lambda: getattr(
                         p, "jersey_number", ""), "") or ""),
                 }
             except Exception:
@@ -270,10 +264,10 @@ def _next_game(game):
         return None
     try:
         gm = _resolve_gm(game)
-        user_team = _safe(lambda: getattr(gm, "user_team", None))
+        user_team = safe_call(lambda: getattr(gm, "user_team", None))
         my_name = _team_name(user_team)
-        today = _safe(lambda: getattr(gm, "current_date", None)) or \
-            _safe(lambda: getattr(game, "current_date", None))
+        today = safe_call(lambda: getattr(gm, "current_date", None)) or \
+            safe_call(lambda: getattr(game, "current_date", None))
         today = _date_key(today)
         by_date = _results_by_date(game)
         mine, other = [], []
@@ -306,7 +300,7 @@ def _team_obj(entry_team, gm):
     if not isinstance(entry_team, str):
         return entry_team
     want = entry_team.strip().lower()
-    teams = _safe(lambda: list(getattr(getattr(gm, "league", None),
+    teams = safe_call(lambda: list(getattr(getattr(gm, "league", None),
                                       "teams", None) or []), []) or []
     for t in teams:
         if _team_name(t).strip().lower() == want:
@@ -343,7 +337,7 @@ def _ensure_live_sim(game):
         q = queue.Queue()
         sim = GameSim(home, away, high_fidelity=True)
         try:
-            sim.league = _safe(lambda: getattr(gm, "league", None))
+            sim.league = safe_call(lambda: getattr(gm, "league", None))
         except Exception:
             pass
         game_date = _date_key(entry.get("date"))
@@ -382,9 +376,9 @@ def _ensure_live_sim(game):
                     pass
             finally:
                 try:
-                    hs = int(_safe(lambda: sim.home_score, 0) or 0)
-                    aws = int(_safe(lambda: sim.away_score, 0) or 0)
-                    per = int(_safe(lambda: sim.period, 3) or 3)
+                    hs = int(safe_call(lambda: sim.home_score, 0) or 0)
+                    aws = int(safe_call(lambda: sim.away_score, 0) or 0)
+                    per = int(safe_call(lambda: sim.period, 3) or 3)
                     q.put({"type": "game_end", "home_score": hs,
                            "away_score": aws, "period": per})
                     _finish_sim(game, sim, home, away, hs, aws,
@@ -420,12 +414,12 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
     find the game.
     """
     gm = _resolve_gm(game)
-    today = game_date or _safe(lambda: getattr(gm, "current_date", None))
+    today = game_date or safe_call(lambda: getattr(gm, "current_date", None))
     hn, an = _team_name(home_team), _team_name(away_team)
     # 1. Flag the real schedule entry (dict entries only; tuples can't
     #    carry flags -- same limitation as the web version).
     try:
-        sched = _safe(lambda: list(getattr(getattr(gm, "league", None),
+        sched = safe_call(lambda: list(getattr(getattr(gm, "league", None),
                                           "schedule", None) or []), []) or []
         for g in sched:
             try:
@@ -455,16 +449,16 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
         "away_score": aws,
         "watched": True,
         "overtime": period > 3,
-        "shootout": bool(_safe(lambda: getattr(sim, "shootout",
+        "shootout": bool(safe_call(lambda: getattr(sim, "shootout",
                                               False), False)),
-        "game_stats": dict(_safe(lambda: getattr(sim, "game_stats",
+        "game_stats": dict(safe_call(lambda: getattr(sim, "game_stats",
                                                 None), {}) or {}),
         "event_log": _translate_events(events),
         "team_stats": _aggregate_team_stats(
-            _safe(lambda: getattr(sim, "game_stats", None), {}) or {},
+            safe_call(lambda: getattr(sim, "game_stats", None), {}) or {},
             meta, hn, an),
         "three_stars": _three_stars(
-            _safe(lambda: getattr(sim, "game_stats", None), {}) or {},
+            safe_call(lambda: getattr(sim, "game_stats", None), {}) or {},
             meta, hn, an),
     }
     try:
@@ -1366,7 +1360,7 @@ class WatchScreen(BaseScreen):
                 self._box_layout.addWidget(self._empty(
                     "No live game — start one from the Visual tab."))
                 return
-            gs = _normalize_gs(_safe(lambda: getattr(sim, "game_stats",
+            gs = _normalize_gs(safe_call(lambda: getattr(sim, "game_stats",
                                                     None), {}) or {})
             if not gs:
                 self._box_layout.addWidget(self._empty(

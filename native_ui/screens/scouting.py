@@ -26,6 +26,7 @@ from PySide6.QtCore import Qt
 
 from .base import BaseScreen
 from ..widgets.player_table import PlayerTable
+from native_ui.safe import safe_call
 
 # Scouting profiles: custom attribute-weight filters (mainline parity).
 # The logic module is GUI-free; the dialogs below are the Qt port of
@@ -51,22 +52,18 @@ _POSITION_GROUPS = [
     ("Goalies", ["G"]),
 ]
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+#: Cap on prospects shown in the scout-assignment prospect picker.
+MAX_ASSIGNMENT_PROSPECTS = 200
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team)
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 def _pos_str(p):
@@ -112,16 +109,16 @@ class AssignDialog(QDialog):
 
     def _load_options(self):
         gm = _resolve_gm(self.game)
-        league = _safe(lambda: gm.league)
+        league = safe_call(lambda: gm.league)
         team = _user_team(self.game)
 
-        prospects = _safe(lambda: list(getattr(league, "draft_prospects", None) or []), [])
-        for p in prospects[:200]:
+        prospects = safe_call(lambda: list(getattr(league, "draft_prospects", None) or []), [])
+        for p in prospects[:MAX_ASSIGNMENT_PROSPECTS]:
             name = getattr(p, "full_name", "?")
             self._prospect_combo.addItem(
                 f"{name} ({_pos_str(p)}, {_overall(p)} OVR)", p)
 
-        staff = _safe(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
         for s in staff:
             role = str(getattr(getattr(s, "role", None), "value",
                                getattr(s, "role", "") or ""))
@@ -153,7 +150,7 @@ class BeatDialog(QDialog):
         self._region_combo.addItems(self.REGIONS)
 
         team = _user_team(game)
-        staff = _safe(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
         for s in staff:
             role = str(getattr(getattr(s, "role", None), "value",
                                getattr(s, "role", "") or ""))
@@ -798,10 +795,10 @@ class ScoutingScreen(BaseScreen):
     def _refresh_db_teams(self):
         """Populate the team filter from every league team (keeps selection)."""
         gm = _resolve_gm(self.game)
-        league = _safe(lambda: gm.league)
+        league = safe_call(lambda: gm.league)
         names = sorted({
             getattr(t, "team_name", "") for t in
-            _safe(lambda: list(getattr(league, "teams", None) or []), [])
+            safe_call(lambda: list(getattr(league, "teams", None) or []), [])
             if getattr(t, "team_name", "")})
         prev = self._db_team.currentText()
         self._db_team.blockSignals(True)
@@ -839,7 +836,7 @@ class ScoutingScreen(BaseScreen):
         team_name is None for prospects and free agents.
         """
         gm = _resolve_gm(self.game)
-        league = _safe(lambda: gm.league)
+        league = safe_call(lambda: gm.league)
         out = []
         seen = set()
 
@@ -852,25 +849,25 @@ class ScoutingScreen(BaseScreen):
             out.append((p, status, team_name))
 
         for attr in ("draft_prospects", "draft_reentries"):
-            for p in _safe(
+            for p in safe_call(
                     lambda: list(getattr(league, attr, None) or []), []):
                 _add(p, "draft", None)
-        for t in _safe(
+        for t in safe_call(
                 lambda: list(getattr(league, "teams", None) or []), []):
             tname = getattr(t, "team_name", "") or ""
             # NHL roster
-            for p in _safe(
+            for p in safe_call(
                     lambda: list(getattr(t, "roster", None) or []), []):
                 _add(p, "nhl", tname)
             # AHL roster
-            for p in _safe(
+            for p in safe_call(
                     lambda: list(getattr(t, "ahl_roster", None) or []), []):
                 _add(p, "ahl", tname)
             # Prospects
-            for p in _safe(
+            for p in safe_call(
                     lambda: list(getattr(t, "prospects", None) or []), []):
                 _add(p, "prospects", tname)
-        for p in _safe(
+        for p in safe_call(
                 lambda: list(getattr(league, "free_agents", None) or []), []):
             _add(p, "free", None)
         return out
@@ -992,7 +989,7 @@ class ScoutingScreen(BaseScreen):
 
         # Assignments
         self._assign_list.clear()
-        assignments = _safe(
+        assignments = safe_call(
             lambda: list((getattr(self.game, "scouting_assignments", None) or {}).items()), [])
         for player, scout in assignments:
             pname = getattr(player, "full_name", "?")
@@ -1003,7 +1000,7 @@ class ScoutingScreen(BaseScreen):
 
         # Beats (from scouts with region set)
         self._beat_list.clear()
-        staff = _safe(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
         beats = 0
         for s in staff:
             region = getattr(s, "region", None) or getattr(s, "beat", None)
@@ -1016,7 +1013,7 @@ class ScoutingScreen(BaseScreen):
 
         # Reports
         self._report_list.clear()
-        reports = _safe(
+        reports = safe_call(
             lambda: list((getattr(team, "scouting_reports", None) or {}).values()), [])
         for r in reports[:50]:
             pname = getattr(getattr(r, "player", None), "full_name", "?")

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QEvent
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 try:
     import tactics as _tx
@@ -41,13 +42,6 @@ except Exception:
 
 
 # ---------------------------------------------------------------- helpers
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _staff_role_str(s):
     """Staff role as a display string, enum-aware."""
@@ -171,7 +165,7 @@ class TacticsScreen(BaseScreen):
         return self._team
 
     def _head_coach(self, team):
-        for s in _safe(lambda: list(getattr(team, "staff", [])), []) or []:
+        for s in safe_call(lambda: list(getattr(team, "staff", [])), []) or []:
             if "head coach" in _staff_role_str(s).lower():
                 return s
         return None
@@ -211,9 +205,9 @@ class TacticsScreen(BaseScreen):
             pass
 
     def _skaters(self, team):
-        roster = _safe(lambda: list(team.roster), []) or []
+        roster = safe_call(lambda: list(team.roster), []) or []
         return [p for p in roster
-                if not str(_safe(lambda: getattr(p, "primary_position", ""),
+                if not str(safe_call(lambda: getattr(p, "primary_position", ""),
                                  "")).upper().startswith("G")]
 
     def _build_body(self):
@@ -320,7 +314,7 @@ class TacticsScreen(BaseScreen):
         # ---- status bar
         bar = QHBoxLayout()
         bar.setSpacing(16)
-        active = _safe(lambda: _tx.matching_identity(team))
+        active = safe_call(lambda: _tx.matching_identity(team))
         preset_name = "Custom mix"
         try:
             if active:
@@ -328,9 +322,9 @@ class TacticsScreen(BaseScreen):
                     "name", active)
         except Exception:
             pass
-        fam = _safe(lambda: float(getattr(team, "tactics_familiarity", 85)), 85)
-        control = _safe(lambda: _tx.get_tactics_control(team), "coach")
-        roster_fit = _safe(lambda: _tx.team_system_fit(team))
+        fam = safe_call(lambda: float(getattr(team, "tactics_familiarity", 85)), 85)
+        control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
+        roster_fit = safe_call(lambda: _tx.team_system_fit(team))
         self._status_chip(bar, "Identity", preset_name)
         fam_col = GOOD if fam >= 70 else WARN if fam >= 50 else BAD
         fam_lab = QLabel(
@@ -380,7 +374,7 @@ class TacticsScreen(BaseScreen):
 
             cur = catalog.get(current, {})
             cur_name = cur.get("name", current or "—")
-            cur_trade = _safe(lambda: _tx.system_tradeoffs(cat, current), "")
+            cur_trade = safe_call(lambda: _tx.system_tradeoffs(cat, current), "")
             running = QLabel(
                 f"Running: <b>{cur_name}</b>"
                 + (f" <span style='color:{DIM};'>({cur_trade})</span>"
@@ -432,9 +426,9 @@ class TacticsScreen(BaseScreen):
             desc.setStyleSheet(f"color: {DIM}; font-size: 12px;")
             box_lay.addWidget(desc)
             row = QHBoxLayout()
-            current = _safe(lambda: getattr(team, attr, default), default)
-            if not _safe(lambda: hasattr(team, attr), False):
-                _safe(lambda: setattr(team, attr, current))
+            current = safe_call(lambda: getattr(team, attr, default), default)
+            if not safe_call(lambda: hasattr(team, attr), False):
+                safe_call(lambda: setattr(team, attr, current))
             for v in values:
                 pill = self._make_pill(v, active=(v == current))
                 pill.setProperty("tactic_attr", attr)
@@ -449,7 +443,7 @@ class TacticsScreen(BaseScreen):
 
         # ---- expected impact
         self._section("Expected Impact", lay)
-        engine = _safe(lambda: _tx.resolve_team_tactics(team), {}) or {}
+        engine = safe_call(lambda: _tx.resolve_team_tactics(team), {}) or {}
         eng_lab = QLabel("Engine multipliers from the seven modules:")
         eng_lab.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         lay.addWidget(eng_lab)
@@ -474,7 +468,7 @@ class TacticsScreen(BaseScreen):
         badges.addStretch(1)
         lay.addLayout(badges)
 
-        id_lines = _safe(lambda: _tx.describe_team_tactics(team), []) or []
+        id_lines = safe_call(lambda: _tx.describe_team_tactics(team), []) or []
         id_lab = QLabel("Identity: " + (" · ".join(id_lines) if id_lines else "—"))
         id_lab.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         id_lab.setWordWrap(True)
@@ -489,7 +483,7 @@ class TacticsScreen(BaseScreen):
     def _system_detail_text(self, cat, skey, current, catalog, team):
         s = catalog.get(skey, {})
         blurb = s.get("blurb", "")
-        trade = _safe(lambda: _tx.system_tradeoffs(cat, skey), "")
+        trade = safe_call(lambda: _tx.system_tradeoffs(cat, skey), "")
         ex = s.get("exemplars", []) or []
         fit_txt = ""
         try:
@@ -521,12 +515,12 @@ class TacticsScreen(BaseScreen):
         lay.addWidget(lab)
 
     def _impact_lines(self, team):
-        es = _safe(lambda: getattr(team, 'tactic_even_strength', 'Balanced'), 'Balanced')
-        pp = _safe(lambda: getattr(team, 'tactic_power_play', 'Offensive'), 'Offensive')
-        pk = _safe(lambda: getattr(team, 'tactic_penalty_kill', 'Defensive'), 'Defensive')
-        lm = _safe(lambda: getattr(team, 'tactic_line_matching', 'Standard'), 'Standard')
-        fc = _safe(lambda: getattr(team, 'tactic_forecheck', '2-1-2'), '2-1-2')
-        off = _safe(lambda: getattr(team, 'tactic_offense', 'Spread'), 'Spread')
+        es = safe_call(lambda: getattr(team, 'tactic_even_strength', 'Balanced'), 'Balanced')
+        pp = safe_call(lambda: getattr(team, 'tactic_power_play', 'Offensive'), 'Offensive')
+        pk = safe_call(lambda: getattr(team, 'tactic_penalty_kill', 'Defensive'), 'Defensive')
+        lm = safe_call(lambda: getattr(team, 'tactic_line_matching', 'Standard'), 'Standard')
+        fc = safe_call(lambda: getattr(team, 'tactic_forecheck', '2-1-2'), '2-1-2')
+        off = safe_call(lambda: getattr(team, 'tactic_offense', 'Spread'), 'Spread')
         atk = (_ES_ATTACK.get(es, 1.0) - 1.0) * 100
         allowed = (_ES_DEFENSE.get(es, 1.0) - 1.0) * 100
         pp_mult = _PP_MULT.get(pp, 1.05)
@@ -582,7 +576,7 @@ class TacticsScreen(BaseScreen):
             skey = pill.property("sys_key")
             team = self._team
             catalog = _tx.CATALOGS.get(cat, {})
-            current = _safe(lambda: _tx.team_tactics(team).get(cat))
+            current = safe_call(lambda: _tx.team_tactics(team).get(cat))
             pill._detail.setText(
                 self._system_detail_text(cat, skey, current, catalog, team))
         except Exception:
@@ -598,7 +592,7 @@ class TacticsScreen(BaseScreen):
             # (personality/trust consequences fire inside).
             control = "coach"
             if _tx is not None:
-                control = _safe(lambda: _tx.get_tactics_control(team), "coach")
+                control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
             if control == "gm" or _rs is None:
                 _tx.set_team_system(team, cat, skey)
             else:
@@ -634,7 +628,7 @@ class TacticsScreen(BaseScreen):
         sub.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         sub.setWordWrap(True)
         lay.addWidget(sub)
-        active = _safe(lambda: _tx.matching_identity(team))
+        active = safe_call(lambda: _tx.matching_identity(team))
         for key, p in _tx.IDENTITY_PRESETS.items():
             box = QGroupBox(p.get("name", key))
             box.setStyleSheet("QGroupBox { font-weight: bold; font-size: 15px; }")
@@ -750,7 +744,7 @@ class TacticsScreen(BaseScreen):
                 mine = _tx.team_tactics(team)
                 style = "Balanced"
                 if _rs is not None:
-                    style = _safe(
+                    style = safe_call(
                         lambda: _rs.coach_style(coach).get("label", "Balanced"),
                         "Balanced")
                 mism = []
@@ -762,7 +756,7 @@ class TacticsScreen(BaseScreen):
                             f"{CATEGORY_LABELS.get(cat, cat)}: he wants "
                             f"{cat_dict.get(want, {}).get('name', want)}")
                 fit = _tx.coach_tactics_fit(coach, team)
-                cname = str(_safe(lambda: getattr(coach, "full_name",
+                cname = str(safe_call(lambda: getattr(coach, "full_name",
                                                  "Coach"), "Coach"))
                 if mism:
                     cards.append({
@@ -782,8 +776,8 @@ class TacticsScreen(BaseScreen):
 
         # 3. Opponent intel
         try:
-            league = _safe(lambda: self._gm.league)
-            teams = _safe(lambda: list(league.teams), []) or []
+            league = safe_call(lambda: self._gm.league)
+            teams = safe_call(lambda: list(league.teams), []) or []
             hits = []
             for ai in teams:
                 if ai is team:
@@ -791,7 +785,7 @@ class TacticsScreen(BaseScreen):
                 if not getattr(ai, "tactical_intel", None):
                     continue
                 for cat, sys_key, heat in _tx.damaging_user_systems(ai, team):
-                    aname = _safe(lambda: getattr(ai, "team_name", "?"), "?")
+                    aname = safe_call(lambda: getattr(ai, "team_name", "?"), "?")
                     sname = _tx.CATALOGS.get(cat, {}).get(
                         sys_key, {}).get("name", sys_key)
                     hits.append((heat, aname, CATEGORY_LABELS.get(cat, cat),
@@ -822,7 +816,7 @@ class TacticsScreen(BaseScreen):
 
         # 4. Familiarity
         try:
-            fam = float(_safe(lambda: getattr(team, "tactics_familiarity",
+            fam = float(safe_call(lambda: getattr(team, "tactics_familiarity",
                                              85), 85))
             if fam < 70:
                 cards.append({
@@ -877,7 +871,7 @@ class TacticsScreen(BaseScreen):
                 cat, skey = action[1], action[2]
                 control = "coach"
                 if _tx is not None:
-                    control = _safe(
+                    control = safe_call(
                         lambda: _tx.get_tactics_control(team), "coach")
                 if control == "gm" or _rs is None:
                     _tx.set_team_system(team, cat, skey)
@@ -903,16 +897,16 @@ class TacticsScreen(BaseScreen):
             lay.addStretch(1)
             return
         try:
-            style = ("Balanced" if _rs is None else _safe(
+            style = ("Balanced" if _rs is None else safe_call(
                 lambda: _rs.coach_style(coach).get("label", "Balanced"),
                 "Balanced"))
         except Exception:
             style = "Balanced"
-        prefs = _safe(lambda: _tx.ensure_coach_tactics(coach), {}) or {}
-        mine = _safe(lambda: _tx.team_tactics(team), {}) or {}
-        fit = _safe(lambda: _tx.coach_tactics_fit(coach, team))
-        control = _safe(lambda: _tx.get_tactics_control(team), "coach")
-        cname = str(_safe(lambda: getattr(coach, "full_name", "Coach"),
+        prefs = safe_call(lambda: _tx.ensure_coach_tactics(coach), {}) or {}
+        mine = safe_call(lambda: _tx.team_tactics(team), {}) or {}
+        fit = safe_call(lambda: _tx.coach_tactics_fit(coach, team))
+        control = safe_call(lambda: _tx.get_tactics_control(team), "coach")
+        cname = str(safe_call(lambda: getattr(coach, "full_name", "Coach"),
                          "Coach"))
 
         # Whiteboard control
@@ -1124,7 +1118,7 @@ class TacticsScreen(BaseScreen):
             self._int_labels = dict(_PRACTICE_INT_FALLBACK)
 
     def _practice_plan(self):
-        plan = _safe(lambda: (getattr(self._team, "dressing_room", None)
+        plan = safe_call(lambda: (getattr(self._team, "dressing_room", None)
                               or {}).get("practice_plan")) or {}
         return plan
 

@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt
 
 from .base import BaseScreen
 from ..widgets.player_table import PlayerTable
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
@@ -28,13 +29,6 @@ _POSITION_ABBR = {
 }
 
 _SLOT_RE = re.compile(r"^([A-Z]+?)(\d*)$")
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
 
 
 def _clean_position(pos):
@@ -116,7 +110,7 @@ def _health_badges(p):
             badges.append(st)
     except Exception:
         pass
-    if _safe(lambda: bool(getattr(p, "is_injured", False)), False):
+    if safe_call(lambda: bool(getattr(p, "is_injured", False)), False):
         if "IR" not in badges and "LTIR" not in badges:
             badges.append("INJ")
     try:
@@ -143,19 +137,19 @@ def _morale_label(v):
 def _player_salary(p):
     """Per-player cap hit: contract salary first (matches finances screen),
     then direct .salary. The direct Player.salary attr is legacy/unset."""
-    c = _safe(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None))
     if c is not None:
-        hit = _safe(lambda: int(getattr(c, "salary", 0) or 0), 0)
+        hit = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0)
         if hit:
             return hit
-    return _safe(lambda: int(getattr(p, "salary", 0) or 0), 0) or 0
+    return safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0) or 0
 
 
 def _contract_years(p):
-    c = _safe(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None))
     if c is None:
         return 0
-    return _safe(lambda: int(getattr(c, "years_remaining", 0) or 0), 0)
+    return safe_call(lambda: int(getattr(c, "years_remaining", 0) or 0), 0)
 
 
 def _jersey_validation(team, player, number):
@@ -209,7 +203,7 @@ def _unit_label(slot_prefix, idx):
 def _group_lineup(lineup):
     """Group lineup dict into ordered units of slots (player objects)."""
     buckets = {}
-    for slot, player in (_safe(lambda: list(lineup.items()), []) or []):
+    for slot, player in (safe_call(lambda: list(lineup.items()), []) or []):
         try:
             slot = str(slot or "")
             m = _SLOT_RE.match(slot)
@@ -277,31 +271,31 @@ class RosterTable(PlayerTable):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
 
     def _set_row(self, row, p):
-        c = _safe(lambda: getattr(p, "contract", None))
+        c = safe_call(lambda: getattr(p, "contract", None))
         ovr = _player_ovr(p)
         sal = _player_salary(p)
         # Morale is 1-100 on the Player (the old x10 display mapping was a bug
         # and was removed; the hub already shows the raw 1-100 value).
-        morale100 = _safe(lambda: int(getattr(p, "morale", 0) or 0), 0)
+        morale100 = safe_call(lambda: int(getattr(p, "morale", 0) or 0), 0)
         vals = {
-            "jersey": str(_safe(lambda: getattr(p, "jersey_number", ""), "")),
-            "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
-            "pos": _clean_position(_safe(lambda: getattr(
+            "jersey": str(safe_call(lambda: getattr(p, "jersey_number", ""), "")),
+            "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
+            "pos": _clean_position(safe_call(lambda: getattr(
                 p, "primary_position", ""), "")),
-            "age": str(_safe(lambda: getattr(p, "age", "?"), "?")),
+            "age": str(safe_call(lambda: getattr(p, "age", "?"), "?")),
             "ovr": str(ovr),
             "tier": _tier_label(ovr),
-            "pot": str(_safe(lambda: getattr(p, "potential", "?"), "?")),
+            "pot": str(safe_call(lambda: getattr(p, "potential", "?"), "?")),
             "salary": _fmt_money(sal),
             "yrs": str(_contract_years(p)) if c is not None else "--",
             "morale": str(morale100),
             "health": ", ".join(_health_badges(p)) or "Healthy",
         }
         numeric = {
-            "jersey": _safe(lambda: int(getattr(p, "jersey_number", 0) or 0), 0),
-            "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+            "jersey": safe_call(lambda: int(getattr(p, "jersey_number", 0) or 0), 0),
+            "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
             "ovr": ovr,
-            "pot": _safe(lambda: int(getattr(p, "potential", 0) or 0), 0),
+            "pot": safe_call(lambda: int(getattr(p, "potential", 0) or 0), 0),
             "salary": sal,
             "yrs": _contract_years(p),
             "morale": morale100,
@@ -526,20 +520,20 @@ class RosterScreen(BaseScreen):
     # -- data ---------------------------------------------------------------
 
     def _resolve_gm(self):
-        return _safe(lambda: getattr(self.game, "game_manager", None)) or self.game
+        return safe_call(lambda: getattr(self.game, "game_manager", None)) or self.game
 
     def _user_team(self):
         gm = self._resolve_gm()
-        return (_safe(lambda: gm.user_team)
-                or _safe(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: gm.user_team)
+                or safe_call(lambda: getattr(self.game, "user_team", None)))
 
     def _team_lists(self):
         team = self._user_team()
         if team is None:
             return [], [], []
-        nhl = _safe(lambda: list(team.roster), []) or []
-        ahl = _safe(lambda: list(getattr(team, "ahl_roster", [])), []) or []
-        pros = _safe(lambda: list(getattr(team, "prospects", [])), []) or []
+        nhl = safe_call(lambda: list(team.roster), []) or []
+        ahl = safe_call(lambda: list(getattr(team, "ahl_roster", [])), []) or []
+        pros = safe_call(lambda: list(getattr(team, "prospects", [])), []) or []
         return nhl, ahl, pros
 
     def refresh(self):
@@ -559,7 +553,7 @@ class RosterScreen(BaseScreen):
             if team is None:
                 return
             gm = self._resolve_gm()
-            league = _safe(lambda: getattr(gm, "league", None))
+            league = safe_call(lambda: getattr(gm, "league", None))
             crisis = None
             try:
                 import dressing_room as _dr
@@ -636,11 +630,11 @@ class RosterScreen(BaseScreen):
         out = []
         for p in self._views[key]["players"]:
             if f["pos"] != "All":
-                pos = _clean_position(_safe(lambda: getattr(
+                pos = _clean_position(safe_call(lambda: getattr(
                     p, "primary_position", ""), ""))
                 if _pos_group(pos) != f["pos"]:
                     continue
-            age = _safe(lambda: int(getattr(p, "age", 0) or 0), 0)
+            age = safe_call(lambda: int(getattr(p, "age", 0) or 0), 0)
             if f["age"] == "U23" and age >= 23:
                 continue
             if f["age"] == "23-29" and (age < 23 or age > 29):
@@ -650,7 +644,7 @@ class RosterScreen(BaseScreen):
             if f["ovr"] != "All" and _player_ovr(p) < int(f["ovr"].rstrip("+")):
                 continue
             if f["search"]:
-                name = _safe(lambda: getattr(p, "full_name", ""), "")
+                name = safe_call(lambda: getattr(p, "full_name", ""), "")
                 if f["search"].lower() not in str(name).lower():
                     continue
             out.append(p)
@@ -673,8 +667,8 @@ class RosterScreen(BaseScreen):
         player = table.row_player(row)
         if player is None:
             return
-        cur = _safe(lambda: int(getattr(player, "jersey_number", 0) or 0), 0)
-        name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+        cur = safe_call(lambda: int(getattr(player, "jersey_number", 0) or 0), 0)
+        name = safe_call(lambda: getattr(player, "full_name", "?"), "?")
         n, ok = QInputDialog.getInt(
             self, "Jersey Number",
             f"Number for {name} (current #{cur}).\n"
@@ -770,7 +764,7 @@ class RosterScreen(BaseScreen):
                 raise RuntimeError("contracts screen has no set_player")
         except Exception:
             what = "an entry-level contract" if elc else "a contract extension"
-            name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+            name = safe_call(lambda: getattr(player, "full_name", "?"), "?")
             QMessageBox.information(
                 self, "Contracts",
                 f"Offer {what} to {name} on the Contracts screen, "
@@ -851,9 +845,9 @@ class RosterScreen(BaseScreen):
         if team is None:
             return 0, ["no team"]
         src_map = {
-            "nhl": _safe(lambda: list(team.roster), []) or [],
-            "ahl": _safe(lambda: list(getattr(team, "ahl_roster", [])), []) or [],
-            "prospects": _safe(lambda: list(getattr(team, "prospects", [])), []) or [],
+            "nhl": safe_call(lambda: list(team.roster), []) or [],
+            "ahl": safe_call(lambda: list(getattr(team, "ahl_roster", [])), []) or [],
+            "prospects": safe_call(lambda: list(getattr(team, "prospects", [])), []) or [],
         }
         src = src_map.get(frm, [])
         # Team.add_player roster_type values ("roster" = NHL).
@@ -861,8 +855,8 @@ class RosterScreen(BaseScreen):
                        "prospects": "prospects"}.get(to)
         if roster_type is None:
             return 0, ["bad destination"]
-        by_id = {str(_safe(lambda: getattr(p, "id", ""), "")): p for p in src}
-        wanted = [by_id.get(str(_safe(lambda: getattr(p, "id", ""), "")))
+        by_id = {str(safe_call(lambda: getattr(p, "id", ""), "")): p for p in src}
+        wanted = [by_id.get(str(safe_call(lambda: getattr(p, "id", ""), "")))
                   for p in players]
         wanted = [p for p in wanted if p is not None]
         try:
@@ -875,11 +869,11 @@ class RosterScreen(BaseScreen):
         is_demotion = frm == "nhl" and to == "ahl"
         is_junior_return = frm in ("nhl", "ahl") and to == "prospects"
         for player in wanted:
-            name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+            name = safe_call(lambda: getattr(player, "full_name", "?"), "?")
             # --- 23-man NHL roster limit: EVERY move into the NHL,
             # --- regardless of source (promotion OR recall).
             if to == "nhl" and len(
-                    _safe(lambda: list(team.roster), []) or []) >= 23:
+                    safe_call(lambda: list(team.roster), []) or []) >= 23:
                 errors.append(f"{name}: NHL roster full (23)")
                 continue
             if is_promotion:
@@ -985,7 +979,7 @@ class RosterScreen(BaseScreen):
     # -- depth chart -------------------------------------------------------------
 
     def _lines_units(self, team):
-        lineup = _safe(lambda: getattr(team, "lineup", None), None) or {}
+        lineup = safe_call(lambda: getattr(team, "lineup", None), None) or {}
         if not lineup or not lineup.get("Forwards"):
             # Fresh game: use the game's own best-lines algorithm.
             try:
@@ -1032,8 +1026,8 @@ class RosterScreen(BaseScreen):
             for i, slot in enumerate(unit["slots"]):
                 p = slot["player"]
                 if p is not None:
-                    name = _safe(lambda: getattr(p, "full_name", "?"), "?")
-                    pos = _clean_position(_safe(lambda: getattr(
+                    name = safe_call(lambda: getattr(p, "full_name", "?"), "?")
+                    pos = _clean_position(safe_call(lambda: getattr(
                         p, "primary_position", ""), ""))
                     btn = QPushButton(
                         f"{slot['slot']}: {name}  ({pos} · {_player_ovr(p)} OVR)")
@@ -1069,7 +1063,7 @@ class RosterScreen(BaseScreen):
                 "Buyouts": bd.get("seeded_buyout", 0),
             }
         except Exception:
-            cap = _safe(lambda: getattr(team, "salary_cap", 104_000_000),
+            cap = safe_call(lambda: getattr(team, "salary_cap", 104_000_000),
                         104_000_000) or 104_000_000
             nhl, _, _ = self._team_lists()
             total = sum(_player_salary(p) for p in nhl)
@@ -1094,19 +1088,19 @@ class RosterScreen(BaseScreen):
         nhl, _, _ = self._team_lists()
         contracts = []
         for p in nhl:
-            c = _safe(lambda: getattr(p, "contract", None))
+            c = safe_call(lambda: getattr(p, "contract", None))
             clauses = []
-            if c is not None and _safe(
+            if c is not None and safe_call(
                     lambda: bool(getattr(c, "no_movement_clause", False)),
                     False):
                 clauses.append("NMC")
-            elif c is not None and _safe(
+            elif c is not None and safe_call(
                     lambda: bool(getattr(c, "no_trade_clause", False)),
                     False):
                 clauses.append("NTC")
             contracts.append({
-                "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
-                "pos": _clean_position(_safe(lambda: getattr(
+                "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
+                "pos": _clean_position(safe_call(lambda: getattr(
                     p, "primary_position", ""), "")),
                 "salary": _player_salary(p),
                 "yrs": _contract_years(p) if c is not None else "--",

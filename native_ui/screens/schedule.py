@@ -21,18 +21,12 @@ from PySide6.QtGui import QColor
 from .base import BaseScreen
 from ..dialogs.boxscore import BoxscoreDialog
 from ..dialogs.daily_results import DailyResultsDialog
+from native_ui.safe import safe_call
 
 
 # ----------------------------------------------------------------------
 # Game-data helpers (ported from web_ui/screens/schedule.py, Flask removed)
 # ----------------------------------------------------------------------
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
     return getattr(game, "game_manager", None) or game
@@ -41,7 +35,7 @@ def _resolve_gm(game):
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
 
 
 def _abbr(name):
@@ -91,7 +85,7 @@ def _results_by_date(game):
     except Exception:
         pass
     by_date = {}
-    results = _safe(lambda: list(getattr(game, "game_results", None) or []), []) or []
+    results = safe_call(lambda: list(getattr(game, "game_results", None) or []), []) or []
     for r in results:
         try:
             k = _date_key(r.get("date"))
@@ -116,9 +110,9 @@ def _match_result(results, home_name, away_name):
 def _schedule_entries(game):
     """Normalized schedule entries (tuple or dict formats)."""
     gm = _resolve_gm(game)
-    league = _safe(lambda: getattr(gm, "league", None)) or \
-        _safe(lambda: getattr(game, "league", None))
-    sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
+    league = safe_call(lambda: getattr(gm, "league", None)) or \
+        safe_call(lambda: getattr(game, "league", None))
+    sched = safe_call(lambda: list(getattr(league, "schedule", None) or []), []) or []
     for item in sched:
         try:
             if isinstance(item, tuple) and len(item) >= 3:
@@ -165,11 +159,11 @@ def _game_played_state(entry, game, by_date):
 def _load_games(game):
     """Full season schedule: past + future, with scores. Never raises."""
     gm = _resolve_gm(game)
-    user_team = _safe(lambda: getattr(gm, "user_team", None)) or \
-        _safe(lambda: getattr(game, "user_team", None))
-    my_name = _safe(lambda: getattr(user_team, "team_name", ""), "") or ""
-    today = _safe(lambda: getattr(gm, "current_date", None)) or \
-        _safe(lambda: getattr(game, "current_date", None))
+    user_team = safe_call(lambda: getattr(gm, "user_team", None)) or \
+        safe_call(lambda: getattr(game, "user_team", None))
+    my_name = safe_call(lambda: getattr(user_team, "team_name", ""), "") or ""
+    today = safe_call(lambda: getattr(gm, "current_date", None)) or \
+        safe_call(lambda: getattr(game, "current_date", None))
     today_key = _date_key(today)
     by_date = _results_by_date(game)
 
@@ -229,16 +223,16 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
     """
     try:
         gm = _resolve_gm(game)
-        league = _safe(lambda: getattr(gm, "league", None)) or \
-            _safe(lambda: getattr(game, "league", None))
+        league = safe_call(lambda: getattr(gm, "league", None)) or \
+            safe_call(lambda: getattr(game, "league", None))
         if league is None or not date_iso or not home_name or not away_name:
             return
         try:
             gdate = date.fromisoformat(str(date_iso)[:10])
         except Exception:
             return
-        today = _safe(lambda: getattr(gm, "current_date", None)) or \
-            _safe(lambda: getattr(game, "current_date", None))
+        today = safe_call(lambda: getattr(gm, "current_date", None)) or \
+            safe_call(lambda: getattr(game, "current_date", None))
         try:
             today_key = today.date() if hasattr(today, "date") else today
         except Exception:
@@ -249,7 +243,7 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
         if gdate >= today_key:
             return
         # Find the scheduled entry and make sure it was never played.
-        sched = _safe(lambda: list(getattr(league, "schedule", None) or []),
+        sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
                       []) or []
         entry = None
         for item in sched:
@@ -285,7 +279,7 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
                     return
         except Exception:
             pass
-        teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+        teams = safe_call(lambda: list(getattr(league, "teams", None) or []), []) or []
         home_team = next((t for t in teams
                           if _team_name(t) == home_name), None)
         away_team = next((t for t in teams
@@ -298,7 +292,7 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
         home_score = int(getattr(sim, "home_score", 0) or 0)
         away_score = int(getattr(sim, "away_score", 0) or 0)
         winner = home_team if home_score > away_score else away_team
-        notable = _safe(lambda: list(getattr(sim, "notable_events", None) or []),
+        notable = safe_call(lambda: list(getattr(sim, "notable_events", None) or []),
                         []) or []
         went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
                       for e in notable)
@@ -311,15 +305,15 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
             "home_score": home_score,
             "away_score": away_score,
             "winner": winner,
-            "events": _safe(lambda: list(getattr(sim, "game_log", None) or []),
+            "events": safe_call(lambda: list(getattr(sim, "game_log", None) or []),
                             []) or [],
             "notable_events": notable,
             "player_ratings": {},
-            "event_log": _safe(lambda: list(getattr(sim, "event_log", None) or []),
+            "event_log": safe_call(lambda: list(getattr(sim, "event_log", None) or []),
                                []) or [],
-            "game_stats": _safe(lambda: dict(getattr(sim, "game_stats", None) or {}),
+            "game_stats": safe_call(lambda: dict(getattr(sim, "game_stats", None) or {}),
                                 {}) or {},
-            "team_stats": _safe(lambda: dict(getattr(sim, "team_stats", None) or {}),
+            "team_stats": safe_call(lambda: dict(getattr(sim, "team_stats", None) or {}),
                                 {}) or {},
             "overtime": went_ot,
             "shootout": went_so,
@@ -329,7 +323,7 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
         if callable(rec):
             rec(game_result)
         else:
-            _safe(lambda: getattr(game, "game_results", None).append(game_result))
+            safe_call(lambda: getattr(game, "game_results", None).append(game_result))
         # Stamp the schedule entry so the page shows Final.
         try:
             if isinstance(entry, dict):
@@ -337,45 +331,16 @@ def _sim_missed_game(game, date_iso, home_name, away_name):
                 entry["away_score"] = away_score
         except Exception:
             pass
-        # Team records (mirrors _update_team_stats_from_game).
-        # Also update league.standings (canonical day-sim parity):
-        # the standings table is a separate dict from team.wins/losses.
+        # Apply standings updates via the canonical GameManager method --
+        # the same call the day-sim makes for simmed games (and the same
+        # pattern watch.py uses for watched games). This replaces the
+        # manual team-record/standings duplication that used to live here.
         try:
-            home_team.goals_for = getattr(home_team, "goals_for", 0) + home_score
-            home_team.goals_against = getattr(home_team, "goals_against", 0) + away_score
-            away_team.goals_for = getattr(away_team, "goals_for", 0) + away_score
-            away_team.goals_against = getattr(away_team, "goals_against", 0) + home_score
-            if home_score > away_score:
-                winner, loser = home_team, away_team
-                home_team.update_record("WIN")
-                away_team.update_record("LOSS", overtime=went_ot)
-            elif away_score > home_score:
-                winner, loser = away_team, home_team
-                away_team.update_record("WIN")
-                home_team.update_record("LOSS", overtime=went_ot)
-            else:
-                winner, loser = home_team, away_team
-                home_team.update_record("TIE")
-                away_team.update_record("TIE")
-            # Sync league.standings (day-sim parity: winner gets 2 pts,
-            # OT/SO loser gets 1 pt).
-            st = getattr(league, "standings", None)
-            if isinstance(st, dict):
-                for tname in (getattr(winner, "team_name", None),
-                              getattr(loser, "team_name", None)):
-                    if tname and tname not in st:
-                        st[tname] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-                wname = getattr(winner, "team_name", None)
-                lname = getattr(loser, "team_name", None)
-                if wname and wname in st:
-                    st[wname]["W"] = st[wname].get("W", 0) + 1
-                    st[wname]["Points"] = st[wname].get("Points", 0) + 2
-                if lname and lname in st:
-                    if went_ot or went_so:
-                        st[lname]["OTL"] = st[lname].get("OTL", 0) + 1
-                        st[lname]["Points"] = st[lname].get("Points", 0) + 1
-                    else:
-                        st[lname]["L"] = st[lname].get("L", 0) + 1
+            upd = getattr(gm, "_update_standings_fast", None)
+            if callable(upd):
+                upd(home_team, away_team, winner,
+                    (home_score, away_score),
+                    went_to_ot=(went_ot or went_so), preseason=False)
         except Exception:
             pass
         try:
