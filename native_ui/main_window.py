@@ -192,10 +192,21 @@ class HubPage(QWidget):
         self._ticker_items = []
         self._ticker_pos = 0
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(30, 12, 30, 0)
-        outer.setSpacing(0)
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(30, 12, 30, 0)
+        self._outer.setSpacing(0)
 
+
+        self._build_header()
+        self._build_hero()
+        self._build_tiles()
+        self._build_strip()
+        self._build_panels()
+        self._build_ticker()
+        self._build_footer()
+
+    def _build_header(self):
+        """Build the franchise header (team name, pills, record)."""
         # ---- franchise header ----
         fhead = QHBoxLayout()
         fhead.setSpacing(16)
@@ -224,15 +235,18 @@ class HubPage(QWidget):
         self.record_label.setObjectName("hub-record")
         self.record_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
         fhead.addWidget(self.record_label)
-        outer.addLayout(fhead)
+        self._outer.addLayout(fhead)
 
         # thin rule
         rule = QFrame()
         rule.setObjectName("hub-rule")
         rule.setFixedHeight(1)
-        outer.addWidget(rule)
-        outer.addSpacing(10)
+        self._outer.addWidget(rule)
+        self._outer.addSpacing(10)
 
+
+    def _build_hero(self):
+        """Build the CONTINUE SEASON hero banner."""
         # ---- hero CONTINUE SEASON banner ----
         self.hero = QFrame()
         self.hero.setObjectName("hub-hero")
@@ -272,9 +286,12 @@ class HubPage(QWidget):
         hero_foot.addWidget(self.auto_note)
         hero_foot.addStretch()
         hero_l.addLayout(hero_foot)
-        outer.addWidget(self.hero)
-        outer.addSpacing(12)
+        self._outer.addWidget(self.hero)
+        self._outer.addSpacing(12)
 
+
+    def _build_tiles(self):
+        """Build primary and secondary navigation tiles."""
         # ---- primary tiles: ROSTER / INBOX / SCHEDULE / TEAM STATS ----
         tile_grid = QGridLayout()
         tile_grid.setSpacing(12)
@@ -295,14 +312,14 @@ class HubPage(QWidget):
         self.inbox_badge.setAlignment(Qt.AlignCenter)
         self.inbox_badge.hide()
         self._nav_tiles["inbox"]._badge_holder.addWidget(self.inbox_badge)
-        outer.addLayout(tile_grid)
-        outer.addSpacing(14)
+        self._outer.addLayout(tile_grid)
+        self._outer.addSpacing(14)
 
         # ---- MORE label ----
         more = QLabel("MORE")
         more.setObjectName("hub-more-label")
-        outer.addWidget(more)
-        outer.addSpacing(8)
+        self._outer.addWidget(more)
+        self._outer.addSpacing(8)
 
         # ---- secondary tiles ----
         more_grid = QGridLayout()
@@ -334,9 +351,12 @@ class HubPage(QWidget):
             more_grid.addWidget(tile, 1, i)
             self._nav_tiles[key] = tile
         # 6 tiles fill the 6-column grid (matches HTML hub layout)
-        outer.addLayout(more_grid)
-        outer.addSpacing(12)
+        self._outer.addLayout(more_grid)
+        self._outer.addSpacing(12)
 
+
+    def _build_strip(self):
+        """Build the 8-block stat strip."""
         # ---- stat strip (8 blocks) ----
         strip = QHBoxLayout()
         strip.setSpacing(8)
@@ -351,9 +371,12 @@ class HubPage(QWidget):
             cell = self._make_strip_cell(label)
             strip.addWidget(cell, 1)
             self._strip[key] = cell
-        outer.addLayout(strip)
-        outer.addSpacing(12)
+        self._outer.addLayout(strip)
+        self._outer.addSpacing(12)
 
+
+    def _build_panels(self):
+        """Build the panels grid."""
         # ---- panels grid (4 columns, matching HTML .th-panels) ----
         panels = QGridLayout()
         panels.setSpacing(12)
@@ -384,10 +407,13 @@ class HubPage(QWidget):
         panels.setColumnStretch(1, 13)
         panels.setColumnStretch(2, 15)
         panels.setColumnStretch(3, 10)
-        outer.addLayout(panels)
+        self._outer.addLayout(panels)
 
-        outer.addStretch()
+        self._outer.addStretch()
 
+
+    def _build_ticker(self):
+        """Build the scrolling ticker."""
         # ---- ticker (bottom, scrolling marquee) ----
         tick_wrap = QHBoxLayout()
         tick_wrap.setSpacing(0)
@@ -400,8 +426,11 @@ class HubPage(QWidget):
         self.ticker.setCursor(Qt.PointingHandCursor)
         self.ticker.mousePressEvent = lambda e: self._main.show_screen("news")
         tick_wrap.addWidget(self.ticker, 1)
-        outer.addLayout(tick_wrap)
+        self._outer.addLayout(tick_wrap)
 
+
+    def _build_footer(self):
+        """Build the footer hints bar."""
         # ---- footer hints bar (mirrors web footer.hints) ----
         foot = QHBoxLayout()
         foot.setContentsMargins(0, 6, 0, 8)
@@ -421,7 +450,7 @@ class HubPage(QWidget):
         self.exit_btn.setCursor(Qt.PointingHandCursor)
         self.exit_btn.clicked.connect(self._on_hub_exit)
         foot.addWidget(self.exit_btn)
-        outer.addLayout(foot)
+        self._outer.addLayout(foot)
 
         # loading overlay ("LOADING FRANCHISE…" — mirrors web spinner)
         self._loading = QLabel("\u27f3 LOADING FRANCHISE\u2026")
