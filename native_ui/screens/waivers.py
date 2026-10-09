@@ -6,7 +6,10 @@ Native port of the web UI waivers screen (web_ui/templates/waivers.html
 game object DIRECTLY -- no Flask/HTTP, no command queue, no JSON.
 
 Game methods used (all real, same as the web bridge called):
-  - game._execute_waiver_claim(player, team)   (claim)
+  - _claim_waiver() queues via player.user_claim_pending (host/SP)
+    or routes "claim_waivers" to the host (MP client) -- never calls
+    _execute_waiver_claim directly (that is the transfer primitive for
+    when a claim WINS at process_waivers time)
   - game.add_news(...)                         (placement notice)
   - game.waiver_list / team.roster             (reads)
   - waiver_logic.is_waiver_eligible(p)         (exempt read)
@@ -198,17 +201,57 @@ def _priority(game):
     return {"order": rows, "my_rank": rank, "basis": basis or ""}
 
 
+def _mp_state(game):
+    """(host, client) multiplayer objects if an MP session is active."""
+    host = _safe(lambda: getattr(game, "mp_host", None))
+    client = _safe(lambda: getattr(game, "mp_client", None))
+    return host, client
+
+
+def _is_mp_client(game):
+    """True when this machine is a non-host multiplayer client."""
+    host, client = _mp_state(game)
+    return (client is not None
+            and host is None
+            and _safe(lambda: client.connected(), False))
+
+
 def _claim_waiver(game, player):
     """Submit a waiver claim to the pending-claims queue.
 
-    Mirrors the desktop Tk UI (windows.py): the claim is QUEUED via
-    player.user_claim_pending and resolved at the next waiver run
-    (game_manager.process_waivers) in priority order -- never granted
-    instantly. Returns (ok, message). Never raises."""
+    Mirrors the desktop Tk UI (windows.py): the claim is QUEUED and
+    resolved at the next waiver run (game_manager.process_waivers) in
+    priority order -- never granted instantly. Returns (ok, message).
+    Never raises.
+
+    Multiplayer routing:
+      - MP client: sends "claim_waivers" action to the host. The host
+        runs GameManager._mp_claim_waivers which appends the team's name
+        to player.mp_claim_teams (per-team claim tracking). Never sets
+        local state -- the next STATE_SYNC refreshes the UI.
+      - Host / single-player: sets player.user_claim_pending = True
+        (the legacy host flag, checked only for the host's own club
+        at process_waivers time).
+    """
     team = _user_team(game)
     if team is None:
         return False, "No team to claim with."
     gm = _resolve_gm(game)
+    # MP client: route to host, do not mutate local state.
+    if _is_mp_client(game):
+        _host, client = _mp_state(game)
+        pid = _safe(lambda: str(getattr(player, "id", "")), "")
+        tname = _safe(lambda: getattr(team, "team_name", ""), "")
+        try:
+            client.send_action("claim_waivers",
+                               {"player_id": pid, "team_id": tname})
+        except Exception as e:
+            return False, (f"Couldn't reach the host ({e}). Nothing "
+                           "changed -- try again.")
+        pname = _safe(lambda: getattr(player, "full_name", "him"), "him")
+        return True, (f"Waiver claim sent for {pname}. The host will "
+                      f"process it at the next waiver run in priority "
+                      f"order.")
     wire = _safe(lambda: list(getattr(game, "waiver_list", None) or []),
                  []) or []
     if player not in wire:
