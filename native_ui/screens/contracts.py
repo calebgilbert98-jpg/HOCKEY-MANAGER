@@ -33,6 +33,7 @@ from PySide6.QtGui import QIntValidator, QFont
 
 from .base import BaseScreen
 from ..widgets.player_table import PlayerTable
+from .contract_negotiation import offer_outcome_text
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +638,32 @@ def _offer_result_accepted(result):
         return str(result.get("verdict", "")).lower() in ("accept",
                                                           "accepted")
     return False
+
+
+#: Engine/UI status aliases mapped onto the canonical keys of
+#: contract_negotiation.OFFER_OUTCOME_TEXT. The negotiation map uses
+#: "refused" for outright rejections and the ELC path reports dict
+#: verdict "counter"; both must render through the shared classifier.
+_STATUS_ALIASES = {
+    "accept": "accepted",
+    "counter": "countered",
+    "refused": "rejected",
+}
+
+
+def _outcome_text(status):
+    """Shared player-facing wording for a contract-offer outcome status.
+
+    Normalizes engine/UI aliases ("counter", "refused", "accept") onto the
+    canonical classifier keys, then delegates to
+    contract_negotiation.offer_outcome_text. Never raises.
+    """
+    key = _STATUS_ALIASES.get(str(status or "").lower(),
+                              str(status or "").lower())
+    try:
+        return offer_outcome_text(key)
+    except Exception:
+        return "Offer status unavailable."
 
 
 def _neg_kind_for(game, pid):
@@ -1309,21 +1336,30 @@ class ExtensionDialog(QDialog):
         status = st.get("status")
         if status == "accepted":
             self._note_lbl.setStyleSheet("color: #3fb950;")
-            self._note_lbl.setText(
-                "Signed ✓ — the extension is filed with the league office.")
+            self._note_lbl.setText(_outcome_text("accepted"))
             QTimer.singleShot(900, self.accept)
         elif status == "countered":
-            # Hand the open talks to the negotiation dialog.
-            self.open_negotiation.emit(self._pid)
-            self.accept()
+            # Retain the outcome in the panel (shared classifier wording),
+            # then hand the open talks to the negotiation dialog after a
+            # short delay — same delayed-handoff pattern as the free-agent
+            # offer panel.
+            self._note_lbl.setStyleSheet("color: #eab308;")
+            self._note_lbl.setText(_outcome_text("countered"))
+            self._submit_btn.setEnabled(False)
+            QTimer.singleShot(1200, self._hand_off_negotiation)
         else:
             self._note_lbl.setStyleSheet("color: #e5484d;")
+            note = st.get("note") or ""
             self._note_lbl.setText(
-                "Extension refused: " +
-                (st.get("note") or
-                 "the player rejected the offer outright."))
+                _outcome_text("rejected") + (f" {note}" if note else ""))
             self._submit_btn.setEnabled(True)
             self._submit_btn.setText("Extend")
+
+    def _hand_off_negotiation(self):
+        """Emit open_negotiation and close. Called after the countered
+        outcome text has been visible in the panel for a beat."""
+        self.open_negotiation.emit(self._pid)
+        self.accept()
 
     def _submit_elc(self):
         game, p = self._game, self._player
@@ -1372,7 +1408,8 @@ class ExtensionDialog(QDialog):
         note = (res or {}).get("note") or ""
         if verdict == "accepted":
             self._note_lbl.setStyleSheet("color: #3fb950;")
-            self._note_lbl.setText(note or "Signed.")
+            self._note_lbl.setText(
+                _outcome_text("accepted") + (f" {note}" if note else ""))
             QTimer.singleShot(900, self.accept)
         elif verdict == "counter":
             counter = (res or {}).get("counter") or {}
@@ -1393,7 +1430,8 @@ class ExtensionDialog(QDialog):
             self._submit_btn.setText("Offer ELC")
         else:
             self._note_lbl.setStyleSheet("color: #e5484d;")
-            self._note_lbl.setText(note or "The ELC offer was rejected.")
+            self._note_lbl.setText(
+                _outcome_text("rejected") + (f" {note}" if note else ""))
             self._submit_btn.setEnabled(True)
             self._submit_btn.setText("Offer ELC")
 

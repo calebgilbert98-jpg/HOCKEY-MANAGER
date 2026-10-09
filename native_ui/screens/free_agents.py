@@ -691,6 +691,26 @@ class OfferDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
+        self._build_header(layout)
+        self._build_term_section(layout)
+        self._build_aav_section(layout)
+        self._build_clause_section(layout)
+        self._build_bonus_section(layout)
+        self._build_cap_note(layout)
+        self._build_actions(layout)
+
+        # 250ms-debounced demand preview.
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(250)
+        self._debounce.timeout.connect(self._refresh_preview)
+
+        self._load_static()
+        self._refresh_preview()
+
+    # -- dialog sections (extracted from __init__) ---------------------
+
+    def _build_header(self, layout):
         title = QLabel("Sign free agent")
         title.setObjectName("dialog-title")
         layout.addWidget(title)
@@ -702,7 +722,7 @@ class OfferDialog(QDialog):
         self._ask_lbl.setWordWrap(True)
         layout.addWidget(self._ask_lbl)
 
-        # --- term (years slider) ---
+    def _build_term_section(self, layout):
         years_row = QHBoxLayout()
         years_row.addWidget(QLabel("Term"))
         self._years_slider = QSlider(Qt.Horizontal)
@@ -717,7 +737,7 @@ class OfferDialog(QDialog):
         years_row.addWidget(self._years_val)
         layout.addLayout(years_row)
 
-        # --- AAV (spinbox in $M; arrows are the stepper) ---
+    def _build_aav_section(self, layout):
         aav_row = QHBoxLayout()
         aav_row.addWidget(QLabel("AAV (cap hit/yr)"))
         self._aav_spin = QDoubleSpinBox()
@@ -735,7 +755,7 @@ class OfferDialog(QDialog):
         self._aav_hint.setStyleSheet("color: #8b95ab; font-size: 12px;")
         layout.addWidget(self._aav_hint)
 
-        # --- trade protection clause ---
+    def _build_clause_section(self, layout):
         clause_row = QHBoxLayout()
         clause_row.addWidget(QLabel("Trade protection"))
         self._clause_combo = QComboBox()
@@ -765,7 +785,7 @@ class OfferDialog(QDialog):
         self._clause_size_box.setVisible(False)
         layout.addWidget(self._clause_size_box)
 
-        # --- signing bonus ---
+    def _build_bonus_section(self, layout):
         sb_row = QHBoxLayout()
         sb_row.addWidget(QLabel("Signing bonus"))
         self._sb_edit = QLineEdit("0")
@@ -780,7 +800,7 @@ class OfferDialog(QDialog):
         self._sb_hint.setStyleSheet("color: #8b95ab; font-size: 12px;")
         layout.addWidget(self._sb_hint)
 
-        # --- cap preview + note ---
+    def _build_cap_note(self, layout):
         self._cap_lbl = QLabel("")
         self._cap_lbl.setWordWrap(True)
         layout.addWidget(self._cap_lbl)
@@ -790,7 +810,7 @@ class OfferDialog(QDialog):
         self._note_lbl.setStyleSheet("color: #e5484d;")
         layout.addWidget(self._note_lbl)
 
-        # --- actions ---
+    def _build_actions(self, layout):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         cancel = QPushButton("Cancel")
@@ -802,15 +822,6 @@ class OfferDialog(QDialog):
         self._submit_btn.clicked.connect(self._on_submit)
         btn_row.addWidget(self._submit_btn)
         layout.addLayout(btn_row)
-
-        # 250ms-debounced demand preview.
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(250)
-        self._debounce.timeout.connect(self._refresh_preview)
-
-        self._load_static()
-        self._refresh_preview()
 
     # -- setup ----------------------------------------------------------
 
@@ -992,9 +1003,15 @@ class OfferDialog(QDialog):
             self._note_lbl.setText(offer_outcome_text("accepted"))
             QTimer.singleShot(900, self.accept)
         elif status in ("countered", "awaiting_agent"):
-            # Hand the open talks to the negotiation dialog.
-            self.negotiation_requested.emit(self._pid)
-            self.accept()
+            # Retain the outcome in the panel (shared classifier wording),
+            # then hand the open talks to the negotiation dialog after a
+            # short delay — same delayed-handoff pattern as the accepted
+            # path, so the player sees what happened before the handoff.
+            self._note_lbl.setStyleSheet("color: #eab308;")
+            self._note_lbl.setText(offer_outcome_text(status))
+            self._submit_btn.setEnabled(False)
+            self._submit_btn.setText("Sending…")
+            QTimer.singleShot(1200, self._hand_off_negotiation)
         else:
             self._note_lbl.setStyleSheet("color: #e5484d;")
             self._note_lbl.setText(
@@ -1002,6 +1019,12 @@ class OfferDialog(QDialog):
                 (st.get("note") or ""))
             self._submit_btn.setEnabled(True)
             self._submit_btn.setText("Submit Offer")
+
+    def _hand_off_negotiation(self):
+        """Emit negotiation_requested and close. Called after the outcome
+        text has been visible in the panel for a beat."""
+        self.negotiation_requested.emit(self._pid)
+        self.accept()
 
 
 class AnalysisDialog(QDialog):
@@ -1340,7 +1363,13 @@ class FreeAgentsScreen(BaseScreen):
         self._tabs = QTabWidget()
         self._layout.addWidget(self._tabs, 1)
 
-        # --- Players tab ---
+        self._tabs.addTab(self._build_players_tab(), "Players")
+        self._tabs.addTab(self._build_staff_tab(), "Staff")
+        self._tabs.addTab(self._build_market_tab(), "Market Overview")
+
+        self.refresh()
+
+    def _build_players_tab(self):
         ptab = QWidget()
         pl = QVBoxLayout(ptab)
         pl.setSpacing(8)
@@ -1383,9 +1412,9 @@ class FreeAgentsScreen(BaseScreen):
         self._fa_list.setContentsMargins(4, 4, 4, 4)
         self._fa_scroll.setWidget(self._fa_body)
         pl.addWidget(self._fa_scroll, 1)
-        self._tabs.addTab(ptab, "Players")
+        return ptab
 
-        # --- Staff tab ---
+    def _build_staff_tab(self):
         stab = QWidget()
         sl = QVBoxLayout(stab)
         sl.setSpacing(8)
@@ -1410,9 +1439,9 @@ class FreeAgentsScreen(BaseScreen):
         self._staff_list.setContentsMargins(4, 4, 4, 4)
         self._staff_scroll.setWidget(self._staff_body)
         sl.addWidget(self._staff_scroll, 1)
-        self._tabs.addTab(stab, "Staff")
+        return stab
 
-        # --- Market tab ---
+    def _build_market_tab(self):
         mtab = QWidget()
         ml = QVBoxLayout(mtab)
         ml.setSpacing(10)
@@ -1430,9 +1459,7 @@ class FreeAgentsScreen(BaseScreen):
         mrow2.addWidget(self._mk_top, 1)
         ml.addLayout(mrow2)
         ml.addStretch()
-        self._tabs.addTab(mtab, "Market Overview")
-
-        self.refresh()
+        return mtab
 
     def _make_pills(self, keys, on_change, labels=None):
         from PySide6.QtWidgets import QButtonGroup
