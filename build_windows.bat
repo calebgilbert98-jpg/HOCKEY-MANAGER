@@ -18,7 +18,12 @@ if errorlevel 1 (
 )
 
 echo [1/4] Installing pinned dependencies...
-pip install --quiet PySide6==6.12.0 pyinstaller==6.22.3 Pillow==11.0.0
+echo   Upgrading pip first...
+python -m pip install --quiet --upgrade pip
+echo   Removing any broken PySide6 install...
+python -m pip uninstall --quiet -y PySide6 PySide6-Addons PySide6-Essentials 2>nul
+echo   Installing pinned versions...
+pip install --quiet --force-reinstall --no-cache-dir PySide6==6.12.0 pyinstaller==6.22.3 Pillow==11.0.0
 if errorlevel 1 (
     echo ERROR: pip install failed
     pause
