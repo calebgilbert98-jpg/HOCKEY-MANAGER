@@ -3,8 +3,10 @@
 Launches the PySide6/Qt native interface. The game logic runs in-process;
 the UI calls it directly (no Flask, no browser, no HTTP).
 
-Requires PySide6, installed via the repo requirements file:
-    pip install -r requirements.txt
+Requires PySide6. Install the native dependencies first:
+    pip install -r requirements-native.txt
+(or ensure PySide6 is installed via the native build workflow's pinned
+requirements).
 """
 import sys
 import os
@@ -12,7 +14,18 @@ import os
 # Ensure repo root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from native_ui.main_window import run
+try:
+    from native_ui.main_window import run
+except ImportError as e:
+    print("=" * 70)
+    print("ERROR: PySide6 is required to run the native UI but is not installed.")
+    print()
+    print("Install the native dependencies with:")
+    print("    pip install -r requirements-native.txt")
+    print()
+    print(f"(ImportError: {e})")
+    print("=" * 70)
+    sys.exit(1)
 
 
 def main():

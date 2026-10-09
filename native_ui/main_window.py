@@ -7,6 +7,7 @@ into the game logic.
 import sys
 import os
 import re
+import threading
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -905,9 +906,14 @@ class HubPage(QWidget):
                     div_teams = [t for t in (getattr(league, "teams", []) or [])
                                  if getattr(t, "division", "") == division]
 
-                    def _pts(t):
-                        return (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
-                    div_teams.sort(key=_pts, reverse=True)
+                    # Match the standings screen's tiebreak order: points
+                    # desc, wins desc, name asc (standings.py line 91).
+                    def _standings_key(t):
+                        pts = (getattr(t, "wins", 0) or 0) * 2 + (getattr(t, "otl", 0) or 0)
+                        wins = getattr(t, "wins", 0) or 0
+                        name = getattr(t, "team_name", "") or ""
+                        return (-pts, -wins, name)
+                    div_teams.sort(key=_standings_key)
                 rank = next((i + 1 for i, t in enumerate(div_teams) if t is team), None)
                 pts = wins * 2 + otl
                 self._strip["points"]._val.setText(str(pts))
@@ -937,14 +943,23 @@ class HubPage(QWidget):
                         return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
 
                     if _teams:
-                        _by_off = sorted(
-                            _teams, key=lambda t: getattr(t, "goals_for", 0) or 0,
-                            reverse=True)
+                        # Rank by per-game rates (not raw totals) so teams
+                        # with different games played are comparable.
+                        def _gf_pg(t):
+                            gp = getattr(t, "games_played", 0) or 0
+                            gf = getattr(t, "goals_for", 0) or 0
+                            return (gf / gp) if gp > 0 else 0.0
+
+                        def _ga_pg(t):
+                            gp = getattr(t, "games_played", 0) or 0
+                            ga = getattr(t, "goals_against", 0) or 0
+                            return (ga / gp) if gp > 0 else float("inf")
+
+                        _by_off = sorted(_teams, key=_gf_pg, reverse=True)
                         _orank = next(
                             (i + 1 for i, t in enumerate(_by_off) if t is team),
                             None)
-                        _by_def = sorted(
-                            _teams, key=lambda t: getattr(t, "goals_against", 0) or 0)
+                        _by_def = sorted(_teams, key=_ga_pg)
                         _drank = next(
                             (i + 1 for i, t in enumerate(_by_def) if t is team),
                             None)
@@ -999,9 +1014,9 @@ class HubPage(QWidget):
             except Exception:
                 pass
 
-            # ---- next game (date-driven: the schedule carries no 'played'
-            # flag; games sim when their date == current_date, so upcoming
-            # means date > today and involving the user's team) ----
+            # ---- next game (date-driven) ----
+            # A game dated today is "next" only if it hasn't been played yet;
+            # the engine sims games when their date == current_date.
             next_txt = "Next: \u2014"
             next_game = None
             try:
@@ -1016,7 +1031,10 @@ class HubPage(QWidget):
                         gd = self._sched_date(g)
                         if gd is None:
                             continue
-                        if today is not None and gd <= today:
+                        if today is not None and gd < today:
+                            continue
+                        if (today is not None and gd == today
+                                and self._sched_played(g)):
                             continue
                         home, away = self._sched_teams(g)
                         if team_name and team_name in (home, away):
@@ -1326,7 +1344,18 @@ class HubPage(QWidget):
                     else:
                         mine = hs if home == team_name else aws
                         theirs = aws if home == team_name else hs
-                        wl = "W" if mine > theirs else ("OTL" if abs(mine - theirs) == 1 else "L")
+                        # OTL is determined by the game going to overtime/
+                        # shootout, not by score margin (a 1-goal regulation
+                        # loss is a regulation loss).
+                        went_ot = bool(
+                            self._game_val(g, "overtime", "went_to_ot",
+                                           "shootout", default=False))
+                        if mine > theirs:
+                            wl = "W"
+                        elif went_ot:
+                            wl = "OTL"
+                        else:
+                            wl = "L"
                         results.append((gd, ds, where, opp_abbr, "%d-%d" % (mine, theirs), wl))
                 except Exception:
                     continue
@@ -1432,7 +1461,10 @@ class HubPage(QWidget):
         self._clear_panel(panel)
         try:
             roster = getattr(team, "roster", None) or []
-            mors = [float(getattr(p, "morale", 70) or 70) for p in roster]
+            mors = [
+                float(70 if getattr(p, "morale", None) is None else p.morale)
+                for p in roster
+            ]
             if not mors:
                 panel._body.addWidget(self._hub_empty_label("\u2014"))
                 return
@@ -1529,8 +1561,11 @@ class HubPage(QWidget):
                     if "GOALIE" in pos.upper():
                         continue
                     name = getattr(p, "full_name", "?") or "?"
-                    pts = (int(getattr(p, "goals", 0) or 0)
-                           + int(getattr(p, "assists", 0) or 0))
+                    # Season totals are authoritative in p.stats; legacy
+                    # attributes can be stale.
+                    stats = getattr(p, "stats", None) or {}
+                    pts = (int(stats.get("goals", 0) or 0)
+                           + int(stats.get("assists", 0) or 0))
                     for m in (25, 50, 75, 100):
                         if pts < m <= pts + 8:
                             hits.append((m - pts, name, "%d PTS from %d" % (m - pts, m)))
@@ -1596,9 +1631,18 @@ class HubPage(QWidget):
                     if not is_read:
                         unread += 1
                     prefix = ""
-                    if getattr(m, "requires_response", False):
+                    # Messages may be dicts or objects; check both.
+                    requires_response = (
+                        m.get("requires_response", False) if isinstance(m, dict)
+                        else getattr(m, "requires_response", False)
+                    )
+                    is_urgent = (
+                        m.get("is_urgent", False) if isinstance(m, dict)
+                        else getattr(m, "is_urgent", False)
+                    )
+                    if requires_response:
                         prefix += "\U0001f534 "
-                    if getattr(m, "is_urgent", False):
+                    if is_urgent:
                         prefix += "\U0001f7e1 "
                     left = prefix + subject
                     row = self._hub_row(left, sender, left_bold=not is_read)
@@ -1911,8 +1955,44 @@ class MainWindow(QMainWindow):
         """Register a screen class for lazy instantiation."""
         self._screen_classes[name] = screen_class
 
+    # --- Navigation ---
+    # Centralized section<->screen mapping. show_section() maps section
+    # names to screens; _SCREEN_TO_SECTION is the reverse for updating
+    # the topbar when navigating directly via show_screen().
+    _SECTION_MAP = {
+        "CLUB": "team",
+        "PERSONNEL": "staff",
+        "LEAGUE": "standings",
+        "TRANSACTIONS": "trades",
+        "FINANCES": "finances",
+        "SYSTEMS": "systems_clutch",
+        # Lowercase aliases
+        "hub": "hub",
+        "roster": "roster",
+        "lines": "lines",
+        "team": "team",
+        "league": "standings",
+        "transactions": "trades",
+        "inbox": "inbox",
+    }
+
+    @classmethod
+    def _section_for_screen(cls, screen_name):
+        """Return the topbar section for a screen, or None if none."""
+        for section, screen in cls._SECTION_MAP.items():
+            if screen == screen_name:
+                return section
+        return None
+
     def show_screen(self, name):
         """Navigate to a registered screen, instantiating on first use."""
+        # Keep the topbar selection in sync with direct navigation.
+        try:
+            section = self._section_for_screen(name)
+            if section is not None and hasattr(self, "topbar"):
+                self.topbar.set_active(section)
+        except Exception:
+            pass
         if name in self._screens:
             self.stack.setCurrentWidget(self._screens[name])
             # Refresh the screen if it has a refresh method
@@ -1975,27 +2055,9 @@ class MainWindow(QMainWindow):
         tb.setStyleSheet("QToolBar { border: none; padding: 0; margin: 0; }")
         return tb
 
-    # --- Navigation ---
     def show_section(self, name):
         self.topbar.set_active(name)
-        # Map section names to screens (handle uppercase nav button names)
-        section_map = {
-            "CLUB": "team",
-            "PERSONNEL": "staff",
-            "LEAGUE": "standings",
-            "TRANSACTIONS": "trades",
-            "FINANCES": "finances",
-            "SYSTEMS": "systems_clutch",
-            # Lowercase aliases
-            "hub": "hub",
-            "roster": "roster",
-            "lines": "lines",
-            "team": "team",
-            "league": "standings",
-            "transactions": "trades",
-            "inbox": "inbox",
-        }
-        screen = section_map.get(name, section_map.get(name.lower(), "hub"))
+        screen = self._SECTION_MAP.get(name, self._SECTION_MAP.get(name.lower(), "hub"))
         self.show_screen(screen)
 
     def show_inbox(self):
@@ -2024,42 +2086,62 @@ class MainWindow(QMainWindow):
         self.show_screen(screen)
 
     def on_continue(self):
-        """Direct Python call -- no HTTP round-trip."""
+        """Direct Python call -- no HTTP round-trip.
+
+        The day simulation runs in a worker thread via run_threaded so the
+        UI stays responsive (progress dialog with cancel). _ui_notify calls
+        from the worker are marshaled to the UI thread automatically.
+        """
         if not self.game:
             return
         try:
             label, blockers = self.game.get_continue_state()
             if blockers:
                 self.show_blockers(blockers)
-            else:
-                # Advance the day with a non-modal loading toast so the app
-                # doesn't look frozen during long sims (mainline parity:
-                # day_sim_loading.py). The toast never blocks input.
-                overlay = None
-                try:
-                    from native_ui.dialogs.sim_progress import (
-                        DaySimLoadingOverlay)
-                    overlay = DaySimLoadingOverlay(self)
-                    overlay.set_status("Simulating day...")
-                except Exception as e:
-                    print(f"[native] day-sim overlay failed (non-fatal): {e}")
-                try:
-                    if hasattr(self.game, "simulate_day"):
-                        self.game.simulate_day()
-                finally:
-                    if overlay is not None:
-                        try:
-                            overlay.destroy()
-                        except Exception:
-                            pass
-                # Refresh current screen
-                current = self.stack.currentWidget() if hasattr(self, "stack") else None
-                if current and hasattr(current, "refresh"):
-                    current.refresh()
-                elif hasattr(self, "hub"):
-                    self.hub.refresh(self.game)
+                return
+            # Heavy-sim confirmation + fallback save (standard pattern).
+            try:
+                from native_ui.dialogs.sim_progress import (
+                    run_threaded, create_fallback_save, ask_heavy_sim)
+            except Exception as e:
+                print(f"[native] sim progress import failed: {e}")
+                # Fall back to synchronous sim if the dialog is unavailable.
+                if hasattr(self.game, "simulate_day"):
+                    self.game.simulate_day()
+                self._refresh_after_continue()
+                return
+
+            create_fallback_save(self.game, "continue")
+
+            def _do_sim(cancel_event, progress):
+                # Runs OFF the UI thread. Must not touch widgets.
+                if hasattr(self.game, "simulate_day"):
+                    self.game.simulate_day()
+
+            def _on_done(cancelled, error):
+                # Runs ON the UI thread.
+                if error is not None:
+                    print(f"[native] continue failed: {error}")
+                elif not cancelled:
+                    self._refresh_after_continue()
+
+            # For a single day the sim is usually fast; run_threaded handles
+            # both fast and slow cases with a responsive progress dialog.
+            run_threaded(self, "Simulating day...", _do_sim,
+                         on_done=_on_done, status="Simulating day...")
         except Exception as e:
             print(f"[native] continue failed: {e}")
+
+    def _refresh_after_continue(self):
+        """Refresh the current screen after a day sim completes."""
+        try:
+            current = self.stack.currentWidget() if hasattr(self, "stack") else None
+            if current and hasattr(current, "refresh"):
+                current.refresh()
+            elif hasattr(self, "hub"):
+                self.hub.refresh(self.game)
+        except Exception as e:
+            print(f"[native] refresh after continue failed: {e}")
 
     # --- GameManager._ui_notify dispatch (Priority 1 bug #4) ---
     # GameManager routes every UI notification through _ui_notify(kind, ...).
@@ -2071,8 +2153,55 @@ class MainWindow(QMainWindow):
     #
     # Kinds that expect a return value: "ask_game_mode" ('quick'/'watch'),
     # "game_day_bundle" (bool, was-opened).
+    #
+    # Thread-safety: simulate_day() may run in a worker thread (via
+    # run_threaded in on_continue). _ui_notify handlers show modals and
+    # navigate screens, which MUST run on the UI thread. When called from
+    # a worker, marshal to the UI thread and block for the result.
     def _ui_notify(self, kind, *args, **kwargs):
         """Dispatch a GameManager notification to the native UI."""
+        try:
+            from PySide6.QtCore import QThread
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            ui_thread = app.thread() if app is not None else None
+            if (ui_thread is not None
+                    and QThread.currentThread() != ui_thread):
+                return self._ui_notify_from_worker(kind, *args, **kwargs)
+        except Exception:
+            pass  # Fall through to direct dispatch on any threading issue
+        return self._ui_notify_on_ui_thread(kind, *args, **kwargs)
+
+    def _ui_notify_from_worker(self, kind, *args, **kwargs):
+        """Marshal a _ui_notify call from a worker thread to the UI thread.
+
+        Blocks the worker until the UI thread completes the handler and
+        returns its result. Uses QTimer.singleShot(0) which is processed
+        by the UI thread's event loop (including modal dialog loops).
+        """
+        from PySide6.QtCore import QTimer
+        result_box = {}
+        error_box = {}
+        done = threading.Event()
+
+        def _run_on_ui():
+            try:
+                result_box["value"] = self._ui_notify_on_ui_thread(
+                    kind, *args, **kwargs)
+            except Exception as e:  # noqa: BLE001 -- reported to caller
+                error_box["error"] = e
+            finally:
+                done.set()
+
+        QTimer.singleShot(0, _run_on_ui)
+        done.wait()
+        if "error" in error_box:
+            print(f"[native] _ui_notify {kind!r} failed: {error_box['error']}")
+            return None
+        return result_box.get("value")
+
+    def _ui_notify_on_ui_thread(self, kind, *args, **kwargs):
+        """Original _ui_notify dispatch logic. Must run on the UI thread."""
         try:
             handler = getattr(self, "_notify_" + str(kind), None)
             if handler is None:
