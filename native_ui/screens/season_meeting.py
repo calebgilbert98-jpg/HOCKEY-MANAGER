@@ -477,7 +477,8 @@ class SeasonMeetingScreen(BaseScreen):
             from coach_meeting_window import (
                 _expectation_reaction, _rookie_reaction,
                 _tactics_reaction, _lines_reaction,
-                _tactics_owner_reaction,
+                _tactics_owner_reaction, _deployer_reaction,
+                apply_trust_delta,
             )
             from coach_season_meeting import coach_assessment
         except ImportError:
@@ -530,13 +531,23 @@ class SeasonMeetingScreen(BaseScreen):
                 lambda: _tactics_owner_reaction(
                     self.team, self.coach, key, self._rng)[:3],
                 ("", 0, ""))
-            nxt = "deployer"
+            ch = self.draft["choices"]
+            if ch.get("lines_owner") == "gm" and ch.get("tactics_owner") == "gm":
+                nxt = "deployer"
+            else:
+                nxt = "closing"
         elif stage == "deployer":
-            self.draft["choices"]["deployer_stance"] = key
-            # Deployer reaction may not exist; use generic
-            text = "Understood."
+            self.draft["deployer_choice"] = key
+            res = _safe(
+                lambda: _deployer_reaction(
+                    self.team, self.coach, key, self._rng),
+                ("", 0, "", "", False))
+            text, delta, note, deployer_note, misaligned = res
+            self.draft["deployer_note"] = deployer_note
             nxt = "closing"
 
+        if delta:
+            apply_trust_delta(self.coach, delta)
         if text:
             self._log("coach", text,
                       trust_delta=delta if delta else None)
