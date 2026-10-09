@@ -520,20 +520,27 @@ class RosterScreen(BaseScreen):
     # -- data ---------------------------------------------------------------
 
     def _resolve_gm(self):
-        return safe_call(lambda: getattr(self.game, "game_manager", None)) or self.game
+        return (safe_call(lambda: getattr(self.game, "game_manager", None),
+                          context="roster/resolve_gm")
+                or self.game)
 
     def _user_team(self):
         gm = self._resolve_gm()
-        return (safe_call(lambda: gm.user_team)
-                or safe_call(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: gm.user_team,
+                          context="roster/user_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None),
+                             context="roster/user_team_fallback"))
 
     def _team_lists(self):
         team = self._user_team()
         if team is None:
             return [], [], []
-        nhl = safe_call(lambda: list(team.roster), []) or []
-        ahl = safe_call(lambda: list(getattr(team, "ahl_roster", [])), []) or []
-        pros = safe_call(lambda: list(getattr(team, "prospects", [])), []) or []
+        nhl = safe_call(lambda: list(team.roster), [],
+                        context="roster/team_lists") or []
+        ahl = safe_call(lambda: list(getattr(team, "ahl_roster", [])),
+                        [], context="roster/team_lists") or []
+        pros = safe_call(lambda: list(getattr(team, "prospects", [])),
+                         [], context="roster/team_lists") or []
         return nhl, ahl, pros
 
     def refresh(self):
@@ -840,14 +847,34 @@ class RosterScreen(BaseScreen):
         consistent (direct list surgery skipped all of these -- and the old
         src.remove() even operated on a list() copy, duplicating players
         instead of moving them).
+
+        Affiliate sync: none needed. AHL clubs are level-2 Team shells that
+        own no players of their own -- ahl_league.py reads the farm roster
+        dynamically as ahl_team.parent_team.ahl_roster (the NHL club's own
+        list, the sole source of truth). Mutating the NHL club's lists in
+        place via the Team APIs keeps the affiliate view current
+        automatically.
+
+        NHL capacity uses roster_limits.active_roster_count (excludes
+        IR/LTIR, on-waivers, emergency fillers, and players without active
+        contracts) against roster_limits.ACTIVE_ROSTER_MAX.
+
+        Waiver eligibility is tri-state: eligible -> 2-day wire placement
+        (player stays rostered); exempt -> direct demotion via the Team
+        APIs; unknown (lookup failure) -> the demotion is BLOCKED with a
+        visible error instead of silently bypassing waivers.
         """
         team = self._user_team()
         if team is None:
             return 0, ["no team"]
         src_map = {
-            "nhl": safe_call(lambda: list(team.roster), []) or [],
-            "ahl": safe_call(lambda: list(getattr(team, "ahl_roster", [])), []) or [],
-            "prospects": safe_call(lambda: list(getattr(team, "prospects", [])), []) or [],
+            "nhl": safe_call(lambda: list(team.roster), [],
+                             context="roster/move_src_lists") or [],
+            "ahl": safe_call(lambda: list(getattr(team, "ahl_roster", [])),
+                             [], context="roster/move_src_lists") or [],
+            "prospects": safe_call(
+                lambda: list(getattr(team, "prospects", [])), [],
+                context="roster/move_src_lists") or [],
         }
         src = src_map.get(frm, [])
         # Team.add_player roster_type values ("roster" = NHL).
@@ -855,8 +882,11 @@ class RosterScreen(BaseScreen):
                        "prospects": "prospects"}.get(to)
         if roster_type is None:
             return 0, ["bad destination"]
-        by_id = {str(safe_call(lambda: getattr(p, "id", ""), "")): p for p in src}
-        wanted = [by_id.get(str(safe_call(lambda: getattr(p, "id", ""), "")))
+        by_id = {str(safe_call(lambda: getattr(p, "id", ""), "",
+                                   context="roster/move_player_lookup")): p
+                 for p in src}
+        wanted = [by_id.get(str(safe_call(lambda: getattr(p, "id", ""),
+                                          context="roster/move_player_lookup")))
                   for p in players]
         wanted = [p for p in wanted if p is not None]
         try:
@@ -869,13 +899,26 @@ class RosterScreen(BaseScreen):
         is_demotion = frm == "nhl" and to == "ahl"
         is_junior_return = frm in ("nhl", "ahl") and to == "prospects"
         for player in wanted:
-            name = safe_call(lambda: getattr(player, "full_name", "?"), "?")
-            # --- 23-man NHL roster limit: EVERY move into the NHL,
-            # --- regardless of source (promotion OR recall).
-            if to == "nhl" and len(
-                    safe_call(lambda: list(team.roster), []) or []) >= 23:
-                errors.append(f"{name}: NHL roster full (23)")
-                continue
+            name = safe_call(lambda: getattr(player, "full_name", "?"), "?",
+                             context="roster/move_player_name")
+            # --- NHL active-roster limit: EVERY move into the NHL,
+            # --- regardless of source (promotion OR recall). Canonical
+            # --- count excludes IR/LTIR, on-waivers, emergency fillers,
+            # --- and players without active contracts.
+            if to == "nhl":
+                try:
+                    import roster_limits as _rl
+                    _active_n = _rl.active_roster_count(team)
+                    _active_max = _rl.ACTIVE_ROSTER_MAX
+                except Exception:
+                    _active_n = len(
+                        safe_call(lambda: list(team.roster), [],
+                                  context="roster/active_count_fallback")
+                        or [])
+                    _active_max = 23
+                if _active_n >= _active_max:
+                    errors.append(f"{name}: NHL roster full ({_active_max})")
+                    continue
             if is_promotion:
                 if to == "ahl" and _gc is not None:
                     try:
@@ -915,12 +958,20 @@ class RosterScreen(BaseScreen):
                 # _demote_exempt): eligible players go on the 2-day wire
                 # and STAY rostered -- the move does not complete here.
                 # Exempt players go straight down via the Team APIs below.
-                _eligible = False
+                #
+                # Tri-state: eligible -> wire; exempt -> direct demotion;
+                # unknown (lookup failure) -> BLOCK with a visible error.
+                # Treating "unknown" as exempt would silently bypass
+                # waivers, so it must never fall through to the direct
+                # demotion path.
                 try:
                     import waiver_logic as _wl
                     _eligible = bool(_wl.is_waiver_eligible(player))
-                except Exception:
-                    _eligible = False
+                except Exception as e:
+                    errors.append(
+                        f"{name}: waiver eligibility check failed "
+                        f"({e or 'unknown error'}) -- demotion blocked")
+                    continue
                 if _eligible:
                     try:
                         from .waivers import _place_on_waivers as _pow
