@@ -31,6 +31,7 @@ Game methods used (same paths the web bridge's /api/command ops took):
   - app.advance_day() (gameday Quick Sim; fallback _on_continue_pressed)
 """
 
+from native_ui.safe import safe_call
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QSplitter, QScrollArea, QFrame,
@@ -45,13 +46,6 @@ from .base import BaseScreen
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _fmt_money(v):
     try:
         return f"${int(v or 0):,}"
@@ -60,34 +54,34 @@ def _fmt_money(v):
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: getattr(gm, "user_team", None))
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: getattr(gm, "user_team", None))
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: getattr(gm, "league", None))
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: getattr(gm, "league", None))
+            or safe_call(lambda: getattr(game, "league", None)))
 
 
 def _inbox_of(game):
     team = _user_team(game)
-    return _safe(lambda: getattr(team, "inbox", None))
+    return safe_call(lambda: getattr(team, "inbox", None))
 
 
 def _all_messages(game):
     inbox = _inbox_of(game)
-    return _safe(lambda: list(getattr(inbox, "messages", None) or []),
+    return safe_call(lambda: list(getattr(inbox, "messages", None) or []),
                  []) or []
 
 
 def _msg_id(m):
-    return _safe(lambda: str(getattr(m, "id", "")), "")
+    return safe_call(lambda: str(getattr(m, "id", "")), "")
 
 
 def _find_message(game, mid):
@@ -99,13 +93,13 @@ def _find_message(game, mid):
 
 
 def _user_team_name(game):
-    return _safe(lambda: getattr(_user_team(game), "team_name", ""), "") or ""
+    return safe_call(lambda: getattr(_user_team(game), "team_name", ""), "") or ""
 
 
 def _today(game):
     gm = _resolve_gm(game)
-    t = (_safe(lambda: getattr(gm, "current_date", None))
-         or _safe(lambda: getattr(game, "current_date", None)))
+    t = (safe_call(lambda: getattr(gm, "current_date", None))
+         or safe_call(lambda: getattr(game, "current_date", None)))
     return t
 
 
@@ -181,11 +175,11 @@ def _matches_search(m, q):
 def _indicator(m):
     """red = action needed, gold = urgent/important, blue = unread."""
     try:
-        if bool(_safe(lambda: m.is_overdue(), False)):
+        if bool(safe_call(lambda: m.is_overdue(), False)):
             return "red"
         if bool(getattr(m, "requires_response", False)):
             return "red"
-        prio = _safe(lambda: int(getattr(m, "priority", 1) or 1), 1)
+        prio = safe_call(lambda: int(getattr(m, "priority", 1) or 1), 1)
         if bool(getattr(m, "is_urgent", False)) or prio >= 4:
             return "gold"
         if bool(getattr(m, "is_important", False)) or prio >= 3:
@@ -202,7 +196,7 @@ _IND_COLORS = {"red": "#ef4444", "gold": "#f59e0b", "blue": "#3B82F6"}
 
 def _date_label(m):
     try:
-        age = int(_safe(lambda: m.get_age_days(), 0) or 0)
+        age = int(safe_call(lambda: m.get_age_days(), 0) or 0)
     except Exception:
         age = 0
     if age <= 0:
@@ -216,7 +210,7 @@ def _date_label(m):
 
 
 def _snippet(m, n=120):
-    return _safe(
+    return safe_call(
         lambda: (getattr(m, "content", "") or "").replace("\n", " "
                 ).strip()[:n], "")
 
@@ -253,8 +247,8 @@ def _gameday_is_preseason(game, team, today):
         if team is None or today is None:
             return False
         gm = _resolve_gm(game)
-        league = _safe(lambda: getattr(gm, "league", None))
-        tname = _safe(lambda: getattr(team, "team_name", ""))
+        league = safe_call(lambda: getattr(gm, "league", None))
+        tname = safe_call(lambda: getattr(team, "team_name", ""))
         for item in (getattr(league, "schedule", None) or []):
             try:
                 if isinstance(item, dict):
@@ -292,7 +286,7 @@ def _story_developing(game):
     items = []
     gm = _resolve_gm(game)
     league = _user_league(game)
-    now = _safe(lambda: getattr(gm, "current_date", None))
+    now = safe_call(lambda: getattr(gm, "current_date", None))
     try:
         for n in (getattr(league, "media_narratives", None) or []):
             try:
@@ -311,7 +305,7 @@ def _story_developing(game):
     except Exception:
         pass
     try:
-        ms = _safe(lambda: getattr(gm, "media_system", None))
+        ms = safe_call(lambda: getattr(gm, "media_system", None))
         for s in (getattr(ms, "storylines", None) or []):
             try:
                 try:
@@ -371,8 +365,8 @@ def _story_feed(game, limit=60):
         return out
 
     def _d(m):
-        return (_safe(lambda: getattr(m, "game_date_sent", None))
-                or _safe(lambda: getattr(m, "date_sent", None)))
+        return (safe_call(lambda: getattr(m, "game_date_sent", None))
+                or safe_call(lambda: getattr(m, "date_sent", None)))
 
     try:
         msgs.sort(key=lambda m: (_d(m) is None, _d(m)), reverse=True)
@@ -664,7 +658,7 @@ class InboxScreen(BaseScreen):
         d_lbl.setAlignment(Qt.AlignRight)
         right.addWidget(d_lbl)
         if bool(getattr(m, "requires_response", False)) or bool(
-                _safe(lambda: m.is_overdue(), False)):
+                safe_call(lambda: m.is_overdue(), False)):
             pill = QLabel("Action needed")
             pill.setStyleSheet(
                 "color: #ef4444; border: 1px solid #ef4444; border-radius: 8px;"
@@ -941,11 +935,11 @@ class InboxScreen(BaseScreen):
         layout.addWidget(lab)
 
     def _build_actions(self, layout, m):
-        at = _safe(lambda: getattr(m, "action_type", None))
+        at = safe_call(lambda: getattr(m, "action_type", None))
         if not at:
             return
-        done = bool(_safe(lambda: getattr(m, "action_done", False), False))
-        d = _safe(lambda: getattr(m, "action_data", None) or {}, {}) or {}
+        done = bool(safe_call(lambda: getattr(m, "action_done", False), False))
+        d = safe_call(lambda: getattr(m, "action_data", None) or {}, {}) or {}
         builder = {
             "trade_offer": self._actions_trade,
             "trade_counter": self._actions_trade,
@@ -977,7 +971,7 @@ class InboxScreen(BaseScreen):
     # -- trade ------------------------------------------------------------
 
     def _actions_trade(self, layout, m, d, done):
-        at = _safe(lambda: getattr(m, "action_type", ""))
+        at = safe_call(lambda: getattr(m, "action_type", ""))
         if done:
             self._ia_note(layout, "This negotiation is no longer on the "
                                   "table.")
@@ -1218,8 +1212,8 @@ class InboxScreen(BaseScreen):
                 m.action_done = True
             except Exception:
                 pass
-            today = (_safe(lambda: app.game_manager.current_date)
-                     or _safe(lambda: getattr(app, "current_date", None)))
+            today = (safe_call(lambda: app.game_manager.current_date)
+                     or safe_call(lambda: getattr(app, "current_date", None)))
             try:
                 app._game_day_resolution = {
                     "watch": bool(watch), "talk_boost": talk_boost,

@@ -35,6 +35,7 @@ Game methods used (all real, same as the web bridge called):
       partner teams flagged via team.is_human_managed.
 """
 
+from native_ui.safe import safe_call
 from datetime import date
 
 from PySide6.QtWidgets import (
@@ -59,13 +60,6 @@ PROTECTION_HAIRCUT = {"top-3": 0.15, "top-10": 0.25, "lottery": 0.35}
 # helpers (ported from web_ui/screens/trades.py, Flask removed)
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _fmt_money(n):
     try:
         n = int(n or 0)
@@ -79,42 +73,42 @@ def _fmt_money(n):
 
 
 def _pid(p):
-    return str(_safe(lambda: getattr(p, "id", ""), "") or "")
+    return str(safe_call(lambda: getattr(p, "id", ""), "") or "")
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team)
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league)
+            or safe_call(lambda: getattr(game, "league", None)))
 
 
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
 
 
 def _today(game):
     gm = _resolve_gm(game)
-    d = (_safe(lambda: gm.current_date)
-         or _safe(lambda: getattr(game, "current_date", None)))
+    d = (safe_call(lambda: gm.current_date)
+         or safe_call(lambda: getattr(game, "current_date", None)))
     if isinstance(d, date):
         return d
     return date.today()
 
 
 def _player_name(p):
-    return _safe(lambda: getattr(p, "full_name", "?"), "?") or "?"
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?") or "?"
 
 
 _POSITION_ABBR = {
@@ -124,7 +118,7 @@ _POSITION_ABBR = {
 
 
 def _pos_str(p):
-    pos = _safe(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "")
     s = str(getattr(pos, "value", pos) or "")
     if "." in s:
         s = s.split(".")[-1]
@@ -133,39 +127,39 @@ def _pos_str(p):
 
 
 def _player_ovr(p):
-    fn = _safe(lambda: getattr(p, "overall_rating", None))
+    fn = safe_call(lambda: getattr(p, "overall_rating", None))
     if callable(fn):
-        v = _safe(fn, 0) or 0
+        v = safe_call(fn, 0) or 0
         if v:
             return int(v)
-    return _safe(lambda: int(getattr(p, "overall", 0) or 0), 0) or 0
+    return safe_call(lambda: int(getattr(p, "overall", 0) or 0), 0) or 0
 
 
 def _player_age(p):
-    return _safe(lambda: int(getattr(p, "age", 0) or 0), 0) or 0
+    return safe_call(lambda: int(getattr(p, "age", 0) or 0), 0) or 0
 
 
 def _player_cap_hit(p):
-    hit = _safe(lambda: int(getattr(getattr(p, "contract", None),
+    hit = safe_call(lambda: int(getattr(getattr(p, "contract", None),
                                    "salary", 0) or 0), 0)
     if not hit:
-        hit = _safe(lambda: int(getattr(p, "salary", 0) or 0), 0)
-    hit -= _safe(lambda: int(getattr(p, "retained_amount", 0) or 0), 0)
+        hit = safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0)
+    hit -= safe_call(lambda: int(getattr(p, "retained_amount", 0) or 0), 0)
     return max(0, hit)
 
 
 def _player_injured(p):
-    return bool(_safe(lambda: getattr(p, "injured", False), False)
-                or _safe(lambda: getattr(p, "is_injured", False), False))
+    return bool(safe_call(lambda: getattr(p, "injured", False), False)
+                or safe_call(lambda: getattr(p, "is_injured", False), False))
 
 
 def _player_captaincy(p):
-    c = _safe(lambda: getattr(p, "captaincy", ""), "") or ""
+    c = safe_call(lambda: getattr(p, "captaincy", ""), "") or ""
     if c:
         return str(c)
-    if _safe(lambda: getattr(p, "is_captain", False), False):
+    if safe_call(lambda: getattr(p, "is_captain", False), False):
         return "C"
-    if _safe(lambda: getattr(p, "is_alternate", False), False):
+    if safe_call(lambda: getattr(p, "is_alternate", False), False):
         return "A"
     return ""
 
@@ -175,13 +169,13 @@ def _team_trade_lists(team):
     players = []
     for attr, level in (("roster", "NHL"), ("ahl_roster", "AHL"),
                         ("prospects", "Prospects")):
-        for p in _safe(lambda: list(getattr(team, attr, None) or []), []) or []:
+        for p in safe_call(lambda: list(getattr(team, attr, None) or []), []) or []:
             players.append((p, level))
     picks = []
-    by_year = _safe(lambda: dict(getattr(team, "draft_picks", None) or {}),
+    by_year = safe_call(lambda: dict(getattr(team, "draft_picks", None) or {}),
                     {}) or {}
     for year in sorted(by_year.keys()):
-        for pk in _safe(lambda: list(by_year.get(year) or []), []) or []:
+        for pk in safe_call(lambda: list(by_year.get(year) or []), []) or []:
             picks.append(pk)
     return players, picks
 
@@ -191,13 +185,13 @@ def _find_team(game, team_id):
     if not team_id:
         return None
     league = _league(game)
-    teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+    teams = safe_call(lambda: list(getattr(league, "teams", None) or []), []) or []
     want = str(team_id).strip().lower()
     for t in teams:
         cands = {
             _team_name(t).lower(),
-            f"{_safe(lambda: getattr(t, 'city', ''), '')} "
-            f"{_safe(lambda: getattr(t, 'name', ''), '')}".strip().lower(),
+            f"{safe_call(lambda: getattr(t, 'city', ''), '')} "
+            f"{safe_call(lambda: getattr(t, 'name', ''), '')}".strip().lower(),
         }
         if want in cands:
             return t
@@ -213,10 +207,10 @@ def _trade_engine():
 
 
 def _pick_label(pk):
-    year = _safe(lambda: int(getattr(pk, "year", 0) or 0), 0)
-    rnd = _safe(lambda: int(getattr(pk, "round", 0) or 0), 0)
-    orig = _safe(lambda: str(getattr(pk, "original_team", "") or ""), "")
-    cur = _safe(lambda: str(getattr(pk, "current_team", "") or ""), "")
+    year = safe_call(lambda: int(getattr(pk, "year", 0) or 0), 0)
+    rnd = safe_call(lambda: int(getattr(pk, "round", 0) or 0), 0)
+    orig = safe_call(lambda: str(getattr(pk, "original_team", "") or ""), "")
+    cur = safe_call(lambda: str(getattr(pk, "current_team", "") or ""), "")
     suffix = {1: "st", 2: "nd", 3: "rd"}.get(rnd % 10, "th") \
         if not (11 <= (rnd % 100) <= 13) else "th"
     if orig and cur and orig != cur:
@@ -227,7 +221,7 @@ def _pick_label(pk):
 def _protection_label(code):
     te = _trade_engine()
     if te:
-        lab = _safe(lambda: te.protection_label(code), "")
+        lab = safe_call(lambda: te.protection_label(code), "")
         if lab:
             return lab
     return code
@@ -236,15 +230,15 @@ def _protection_label(code):
 def retention_slots_summary(team):
     """{used, max} retention slots for a club."""
     te = _trade_engine()
-    used = _safe(lambda: int(te.retention_slots_used(team)), 0) if te else 0
-    mx = _safe(lambda: int(te.MAX_RETENTION_SLOTS), 3) if te else 3
+    used = safe_call(lambda: int(te.retention_slots_used(team)), 0) if te else 0
+    mx = safe_call(lambda: int(te.MAX_RETENTION_SLOTS), 3) if te else 3
     return {"used": max(0, used), "max": max(1, mx)}
 
 
 def parse_retention_terms(raw, valid_pids=None):
     """Sanitize retention terms -> {str pid: float pct} (0 < pct <= 50)."""
     te = _trade_engine()
-    cap = _safe(lambda: float(te.MAX_RETENTION_PCT), 50.0) if te else 50.0
+    cap = safe_call(lambda: float(te.MAX_RETENTION_PCT), 50.0) if te else 50.0
     out = {}
     items = raw.items() if isinstance(raw, dict) else []
     for k, v in items:
@@ -296,7 +290,7 @@ def validate_retention_terms(team, players, retention_terms):
             continue
         others = {k: v for k, v in retention_terms.items()
                   if str(k) != str(pid)}
-        ok, msg = _safe(
+        ok, msg = safe_call(
             lambda: te.apply_retention_dry_run(team, player, pct,
                                               extra=others),
             (False, "retention check failed"))
@@ -316,7 +310,7 @@ def protection_value_adjustment(pick_objs, protection_terms, te=None):
         haircut = PROTECTION_HAIRCUT.get(code)
         if not haircut:
             continue
-        val = _safe(lambda: te.pick_trade_value(pk), 0) or 0
+        val = safe_call(lambda: te.pick_trade_value(pk), 0) or 0
         adj += int(round(val * haircut))
     return adj
 
@@ -343,7 +337,7 @@ def deal_terms_note(give_players, give_pick_objs, retention_terms,
     for pk in give_pick_objs or []:
         code = (protection_terms or {}).get(_pid(pk))
         if code:
-            label = _safe(lambda: te.protection_label(code), code) \
+            label = safe_call(lambda: te.protection_label(code), code) \
                 if te else code
             bits.append(f"{_pick_label(pk)} is {str(label).lower()}")
     if not bits:
@@ -388,7 +382,7 @@ def _preflight_flag(te, player, from_team, to_team, league, partner_name):
             wok, why = te.will_waive_ntc(player, from_team, to_team, league)
         except Exception:
             wok, why = False, "consent check unavailable"
-        clause_label = _safe(
+        clause_label = safe_call(
             lambda: te.clause_offer_label(
                 {"nmc": "nmc", "ntc": "ntc", "M-NTC": "mntc"}.get(
                     kind, "none")),
@@ -799,16 +793,16 @@ class TradesScreen(BaseScreen):
 
     def _load_teams(self):
         league = _league(self.game)
-        teams = _safe(lambda: list(getattr(league, "teams", None) or []),
+        teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
                       []) or []
         my = _user_team(self.game)
         my_name = _team_name(my) if my else ""
-        block = _safe(lambda: list(getattr(
+        block = safe_call(lambda: list(getattr(
             _resolve_gm(self.game), "trade_block", None) or []), []) or []
         block_teams = set()
         for p in block:
-            owner = _safe(lambda: getattr(p, "team", None)) or \
-                _safe(lambda: getattr(p, "team_name", None))
+            owner = safe_call(lambda: getattr(p, "team", None)) or \
+                safe_call(lambda: getattr(p, "team_name", None))
             block_teams.add(_team_name(owner))
         self._teams = [t for t in teams if _team_name(t) != my_name]
         self._my_team_name = my_name
@@ -894,7 +888,7 @@ class TradesScreen(BaseScreen):
 
     def _asset_text(self, obj, kind, level=""):
         if kind == "pick":
-            prot = _safe(lambda: getattr(obj, "protection", ""), "") or ""
+            prot = safe_call(lambda: getattr(obj, "protection", ""), "") or ""
             sub = f"{_pick_label(obj)}" + (f" · {prot}" if prot else "")
             return sub, None
         ovr = _player_ovr(obj)
@@ -923,8 +917,8 @@ class TradesScreen(BaseScreen):
                 items = sorted(
                     items,
                     key=lambda pk: (
-                        _safe(lambda: int(getattr(pk, "year", 0) or 0), 0),
-                        _safe(lambda: int(getattr(pk, "round", 0) or 0), 0)))
+                        safe_call(lambda: int(getattr(pk, "year", 0) or 0), 0),
+                        safe_call(lambda: int(getattr(pk, "round", 0) or 0), 0)))
             if not items:
                 it = QListWidgetItem("— None —")
                 it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable
@@ -1284,13 +1278,13 @@ class TradesScreen(BaseScreen):
                 give_players, give_picks, retention_terms, protection_terms,
                 want_players=want_players, acquire_terms=acquire_terms)
 
-            ev = _safe(lambda: te.evaluate_trade(
+            ev = safe_call(lambda: te.evaluate_trade(
                 give_assets, want_assets, user_team=my,
                 partner_team=self._partner, perceiver_team=self._partner))
-            gv = _safe(lambda: ev.user_value, 0) or 0
-            pv = _safe(lambda: ev.partner_value, 0) or 0
-            ratio = _safe(lambda: ev.ratio, 0.0) or 0.0
-            label = _safe(lambda: ev.label, "Incomplete") or "Incomplete"
+            gv = safe_call(lambda: ev.user_value, 0) or 0
+            pv = safe_call(lambda: ev.partner_value, 0) or 0
+            ratio = safe_call(lambda: ev.ratio, 0.0) or 0.0
+            label = safe_call(lambda: ev.label, "Incomplete") or "Incomplete"
 
             all_retention = {**retention_terms, **acquire_terms}
 
@@ -1304,9 +1298,9 @@ class TradesScreen(BaseScreen):
                         self._partner, give_assets, want_assets,
                         user_team=my)
 
-            resp = _safe(_verdict_call)
-            verdict = (_safe(lambda: resp.decision, "reject") or "reject")
-            reason = _safe(lambda: resp.message, "") or ""
+            resp = safe_call(_verdict_call)
+            verdict = (safe_call(lambda: resp.decision, "reject") or "reject")
+            reason = safe_call(lambda: resp.message, "") or ""
             data = {
                 "verdict": verdict, "reason": reason,
                 "give_value": gv, "get_value": pv, "ratio": ratio,
@@ -1439,30 +1433,30 @@ class TradesScreen(BaseScreen):
 
     def _mp_state(self):
         """(host, client) multiplayer objects if an MP session is active."""
-        host = _safe(lambda: getattr(self.game, "mp_host", None))
-        client = _safe(lambda: getattr(self.game, "mp_client", None))
+        host = safe_call(lambda: getattr(self.game, "mp_host", None))
+        client = safe_call(lambda: getattr(self.game, "mp_client", None))
         if host is None and client is None:
             try:
                 from .multiplayer import MultiplayerScreen
                 mw = self.main_window
-                for scr in _safe(lambda: mw.findChildren(MultiplayerScreen),
+                for scr in safe_call(lambda: mw.findChildren(MultiplayerScreen),
                                 []) or []:
-                    host = host or _safe(lambda: scr._host)
-                    client = client or _safe(lambda: scr._client)
+                    host = host or safe_call(lambda: scr._host)
+                    client = client or safe_call(lambda: scr._client)
             except Exception:
                 pass
         return host, client
 
     def _mp_active(self):
         host, client = self._mp_state()
-        if host is not None and _safe(lambda: host.running(), False):
+        if host is not None and safe_call(lambda: host.running(), False):
             return True
-        if client is not None and _safe(lambda: client.connected(), False):
+        if client is not None and safe_call(lambda: client.connected(), False):
             return True
         return False
 
     def _partner_is_human(self):
-        return bool(_safe(lambda: getattr(self._partner, "is_human_managed",
+        return bool(safe_call(lambda: getattr(self._partner, "is_human_managed",
                                         False), False))
 
     def _on_propose(self):
@@ -1559,8 +1553,8 @@ class TradesScreen(BaseScreen):
             self._schedule_evaluate()
             return
         pname = _team_name(self._partner)
-        if _safe(lambda: neg.status, "") == "awaiting_ai" and \
-                _safe(lambda: getattr(neg, "response_due", None)) is not None:
+        if safe_call(lambda: neg.status, "") == "awaiting_ai" and \
+                safe_call(lambda: getattr(neg, "response_due", None)) is not None:
             self._note_ok(f"Offer sent to {pname}. Their GM needs 1-3 "
                           "days — the answer lands in your inbox (accept, "
                           "counter, or reject). Track it under Open "
@@ -1591,7 +1585,7 @@ class TradesScreen(BaseScreen):
         }
         try:
             if client is not None and host is None and \
-                    _safe(lambda: client.connected(), False):
+                    safe_call(lambda: client.connected(), False):
                 # Client machine: the offer goes to the host for routing.
                 client.send_action("propose_trade", {
                     "team_id": my_name,
@@ -1605,12 +1599,12 @@ class TradesScreen(BaseScreen):
                 return
             # Host machine (or local human GMs): run the real
             # _mp_propose_trade path directly.
-            fn = _safe(lambda: getattr(self.game, "_mp_propose_trade", None))
+            fn = safe_call(lambda: getattr(self.game, "_mp_propose_trade", None))
             if fn is None:
                 raise RuntimeError("MP trade routing unavailable.")
             params = {"partner_team_id": self._partner_name, "offer": offer}
             res = fn(params, my,
-                     _safe(lambda: getattr(self.game, "gm_name", "Host"),
+                     safe_call(lambda: getattr(self.game, "gm_name", "Host"),
                            "Host"))
             ok = bool(res[0]) if isinstance(res, (list, tuple)) else bool(res)
             detail = (str(res[1]) if isinstance(res, (list, tuple))
@@ -1663,12 +1657,12 @@ class TradesScreen(BaseScreen):
 
     def _open_negotiations(self):
         gm = _resolve_gm(self.game)
-        store = _safe(lambda: list(
+        store = safe_call(lambda: list(
             getattr(gm, "trade_negotiations", None) or []), []) or []
         out = []
         for n in store:
             try:
-                status = str(_safe(lambda: getattr(n, "status", ""), ""))
+                status = str(safe_call(lambda: getattr(n, "status", ""), ""))
                 if status not in ("awaiting_ai", "awaiting_user"):
                     continue
                 out.append(n)
@@ -1676,7 +1670,7 @@ class TradesScreen(BaseScreen):
                 continue
 
         def _created(n):
-            c = _safe(lambda: getattr(n, "created", None))
+            c = safe_call(lambda: getattr(n, "created", None))
             return str(c) if c is not None else ""
 
         out.sort(key=_created, reverse=True)
@@ -1698,15 +1692,15 @@ class TradesScreen(BaseScreen):
             self._neg_layout.addStretch()
             return
         for n in negs:
-            neg_id = str(_safe(lambda: getattr(n, "id", ""), ""))
-            partner = str(_safe(lambda: getattr(
+            neg_id = str(safe_call(lambda: getattr(n, "id", ""), ""))
+            partner = str(safe_call(lambda: getattr(
                 n, "partner_team_name", "?"), "?"))
-            status = str(_safe(lambda: getattr(n, "status", ""), ""))
-            rounds = _safe(lambda: int(getattr(n, "rounds", 0) or 0), 0)
-            patience = _safe(lambda: float(getattr(n, "patience", 1.0)
+            status = str(safe_call(lambda: getattr(n, "status", ""), ""))
+            rounds = safe_call(lambda: int(getattr(n, "rounds", 0) or 0), 0)
+            patience = safe_call(lambda: float(getattr(n, "patience", 1.0)
                                           or 1.0), 1.0)
-            due = _safe(lambda: getattr(n, "response_due", None))
-            last = str(_safe(lambda: getattr(n, "last_message", ""), "")
+            due = safe_call(lambda: getattr(n, "response_due", None))
+            last = str(safe_call(lambda: getattr(n, "last_message", ""), "")
                        or "")
             if status == "awaiting_ai":
                 status_txt = (f"With {partner}'s GM — answer due "
@@ -1722,13 +1716,13 @@ class TradesScreen(BaseScreen):
             st.setStyleSheet("color: #f5a524; font-weight: bold;")
             cl.addWidget(st)
             if tn is not None:
-                you_send = _safe(
+                you_send = safe_call(
                     lambda: tn.asset_summary(
                         getattr(n, "user_assets", []),
                         getattr(n, "retention", {}),
                         getattr(n, "pick_protection", {})),
                     "?")
-                you_get = _safe(
+                you_get = safe_call(
                     lambda: tn.asset_summary(
                         getattr(n, "partner_assets", [])), "?")
             else:
@@ -1741,7 +1735,7 @@ class TradesScreen(BaseScreen):
                 lm.setWordWrap(True)
                 lm.setStyleSheet("color: #8b95ab; font-style: italic;")
                 cl.addWidget(lm)
-            hist = _safe(lambda: list(getattr(n, "history", None) or []),
+            hist = safe_call(lambda: list(getattr(n, "history", None) or []),
                          []) or []
             if hist:
                 htxt = "\n".join(
@@ -1821,12 +1815,12 @@ class TradesScreen(BaseScreen):
         if tn is None:
             self._note_err("Negotiation machinery unavailable.")
             return
-        neg = _safe(lambda: tn.get_negotiation(self.game, neg_id))
-        if neg is None or not _safe(lambda: neg.is_open, False):
+        neg = safe_call(lambda: tn.get_negotiation(self.game, neg_id))
+        if neg is None or not safe_call(lambda: neg.is_open, False):
             self._note_err("That negotiation is no longer open.")
             return
         my = _user_team(self.game)
-        partner = _safe(lambda: tn.find_team(
+        partner = safe_call(lambda: tn.find_team(
             self.game, getattr(neg, "partner_team_name", "")))
         if my is None or partner is None:
             self._note_err("Could not resolve teams.")
@@ -1860,7 +1854,7 @@ class TradesScreen(BaseScreen):
     def _load_completed_log(self):
         self._clear_layout(self._log_layout)
         gm = _resolve_gm(self.game)
-        recs = _safe(lambda: list(
+        recs = safe_call(lambda: list(
             getattr(gm, "trade_history", None) or []), []) or []
         if not recs:
             lbl = QLabel("No completed trades yet this career — the log "
@@ -1872,16 +1866,16 @@ class TradesScreen(BaseScreen):
             return
         for r in reversed(recs[-30:]):
             try:
-                dt = str(_safe(lambda: getattr(r, "date", ""), "") or "")
-                ta = str(_safe(lambda: getattr(r, "team_a", ""), "") or "")
-                tb = str(_safe(lambda: getattr(r, "team_b", ""), "") or "")
+                dt = str(safe_call(lambda: getattr(r, "date", ""), "") or "")
+                ta = str(safe_call(lambda: getattr(r, "team_a", ""), "") or "")
+                tb = str(safe_call(lambda: getattr(r, "team_b", ""), "") or "")
                 a_gave = [str(x) for x in
-                          (_safe(lambda: list(
+                          (safe_call(lambda: list(
                               getattr(r, "a_gave", None) or []), []) or [])]
                 b_gave = [str(x) for x in
-                          (_safe(lambda: list(
+                          (safe_call(lambda: list(
                               getattr(r, "b_gave", None) or []), []) or [])]
-                summ = str(_safe(lambda: getattr(r, "summary", ""),
+                summ = str(safe_call(lambda: getattr(r, "summary", ""),
                                  "") or "")
                 card = QGroupBox(f"{ta} ⇄ {tb}  ·  {dt}")
                 cl = QVBoxLayout(card)
@@ -1942,7 +1936,7 @@ class TradesScreen(BaseScreen):
 
     def _team_for_player(self, player_id):
         league = _league(self.game)
-        teams = _safe(lambda: list(getattr(league, "teams", None) or []),
+        teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
                       []) or []
         for t in teams:
             players, _picks = _team_trade_lists(t)

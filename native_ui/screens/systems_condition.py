@@ -5,16 +5,14 @@ number is an exact engine read (condition_system); nothing is
 re-derived or invented.
 """
 from PySide6.QtWidgets import (QLabel, QFrame, QVBoxLayout, QHBoxLayout,
-                               QScrollArea, QWidget, QTableWidget,
-                               QTableWidgetItem, QHeaderView)
-from PySide6.QtCore import Qt
+                               QTableWidget, QTableWidgetItem, QHeaderView)
 from PySide6.QtGui import QColor
 
 from .base import BaseScreen
 from .systems_common import (user_team, league_of, today_of, tone_color,
                              explainer_label, section_title, no_game_label,
-                             clear_layout, pos_short, player_name)
-from .systems_common import systems_nav_bar
+                             clear_layout, pos_short, player_name,
+                             add_scroll_content)
 
 
 class SystemsConditionScreen(BaseScreen):
@@ -29,14 +27,7 @@ class SystemsConditionScreen(BaseScreen):
 
     def _build_body(self):
         self._layout.addLayout(systems_nav_bar(self))
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        inner = QWidget()
-        self._content = QVBoxLayout(inner)
-        self._content.setSpacing(12)
-        scroll.setWidget(inner)
-        self._layout.addWidget(scroll)
+        self._content = add_scroll_content(self)
         self.refresh()
 
     def refresh(self):

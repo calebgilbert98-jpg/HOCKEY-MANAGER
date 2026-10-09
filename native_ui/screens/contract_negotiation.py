@@ -74,6 +74,7 @@ class ContractNegotiationScreen(BaseScreen):
         # Offer form
         form_box = QGroupBox("Your Offer")
         form = QFormLayout(form_box)
+        self._offer_form = form  # for showing/hiding ELC-only rows
 
         # Years slider 1-7
         years_row = QHBoxLayout()
@@ -202,6 +203,17 @@ class ContractNegotiationScreen(BaseScreen):
         offer = self._get_offer()
         try:
             game = getattr(self.game, "game_manager", None) or self.game
+            if self._is_elc:
+                # ELC path: the engine's handle_elc_offer takes salary and
+                # both bonus types as params (band validation, prospect
+                # handshake inside). No player-attribute staging needed.
+                result = _safe(
+                    lambda: game.handle_elc_offer(
+                        self._player, offer["aav"],
+                        offer["signing_bonus"],
+                        offer["performance_bonus"]))
+                self._handle_agent_response(result, offer)
+                return
             # Validate through the game's own gate
             ok, reason = _safe(
                 lambda: game._validate_contract_terms(
@@ -217,12 +229,18 @@ class ContractNegotiationScreen(BaseScreen):
             # player BEFORE calling. Passing dollars positionally would
             # land them in the extension/notify params (real signature:
             # handle_contract_offer(person, extension=False, notify="popup")).
-            # Snapshot first: if the deal isn't accepted, the offered terms
-            # must not leak into the player's attributes.
-            orig_salary = getattr(self._player, "salary", None)
-            orig_years = getattr(self._player, "contract_years", None)
+            # It also reads person.offered_clause_kind /
+            # person.offered_clause_list_size for trade protection, so the
+            # clause picker is staged there too. Snapshot first: if the
+            # deal isn't accepted, the offered terms must not leak into
+            # the player's attributes.
+            staged = ("salary", "contract_years", "offered_clause_kind",
+                      "offered_clause_list_size")
+            orig = {a: getattr(self._player, a, None) for a in staged}
             self._player.salary = offer["aav"]
             self._player.contract_years = offer["years"]
+            self._player.offered_clause_kind = offer["clause"] or "none"
+            self._player.offered_clause_list_size = 10
             # Submit the offer — the agent responds via the game's
             # negotiation logic (may accept, counter, or reject)
             result = _safe(
@@ -231,25 +249,46 @@ class ContractNegotiationScreen(BaseScreen):
                     notify="popup"))
             accepted = self._handle_agent_response(result, offer)
             if not accepted:
-                self._player.salary = orig_salary
-                self._player.contract_years = orig_years
+                for a in staged:
+                    try:
+                        setattr(self._player, a, orig[a])
+                    except Exception:
+                        pass
         except Exception as e:
             QMessageBox.warning(self, "Offer", f"Failed: {e}")
+
+    def _set_bonus_rows_visible(self, visible):
+        """Signing/performance bonuses only exist on ELCs (the engine's
+        handle_elc_offer takes them as params; handle_contract_offer has
+        no bonus support). Hide the rows in non-ELC mode so the UI never
+        presents terms as applied when the engine would ignore them."""
+        try:
+            form = self._offer_form
+            for spin in (self._sb_spin, self._pb_spin):
+                spin.setVisible(visible)
+                lbl = form.labelForField(spin)
+                if lbl is not None:
+                    lbl.setVisible(visible)
+        except Exception:
+            pass
 
     def _offer_accepted(self, result):
         """True iff the engine actually signed the deal.
 
-        Real engine shape: True = signed, False/None = refused or blocked
-        (buyout ban, Dec-1 RFA ineligibility, already-signed player,
-        failed validation), "consideration" = UFA bid period, still no
-        deal. Legacy dict-verdict shape: verdict == "accept". Everything
-        else — counter, missing verdict, unrecognized — is not an
-        acceptance.
+        Real engine shapes: True = signed (standard path),
+        dict verdict "accept" = signed (standard path),
+        dict verdict "accepted" = signed (ELC path via
+        handle_elc_offer). False/None = refused or blocked (buyout ban,
+        Dec-1 RFA ineligibility, already-signed player, failed
+        validation), "consideration" = UFA bid period, still no deal.
+        Everything else — counter, invalid, missing verdict,
+        unrecognized — is not an acceptance.
         """
         if result is True:
             return True
         if isinstance(result, dict):
-            return str(result.get("verdict", "")).lower() == "accept"
+            return str(result.get("verdict", "")).lower() in ("accept",
+                                                              "accepted")
         return False
 
     def _handle_agent_response(self, result, offer, signed_title="Deal!",
@@ -317,9 +356,26 @@ class ContractNegotiationScreen(BaseScreen):
                 "No agent offer to accept yet. Make an offer first.")
             return
         try:
+            game = getattr(self.game, "game_manager", None) or self.game
+            if self._is_elc:
+                # ELC accept: the agent's counter carries salary and both
+                # bonus types; handle_elc_offer takes them as params.
+                ask = self._agent_ask
+                salary = ask.get("salary", ask.get("aav", 0))
+                sb = ask.get("signing_bonus", 0)
+                pb = ask.get("performance_bonus", 0)
+                result = _safe(
+                    lambda: game.handle_elc_offer(
+                        self._player, salary, sb, pb))
+                self._handle_agent_response(
+                    result, {"aav": salary, "years": 3,
+                             "signing_bonus": sb,
+                             "performance_bonus": pb},
+                    signed_title="Signed!",
+                    signed_text="Contract signed.")
+                return
             aav = self._agent_ask.get("aav", 0)
             years = self._agent_ask.get("years", 0)
-            game = getattr(self.game, "game_manager", None) or self.game
             # Validate the agent's terms through the same gate as our own
             # offers — a stale or illegal ask must not slip through.
             ok, reason = _safe(
@@ -333,12 +389,17 @@ class ContractNegotiationScreen(BaseScreen):
                 return
             # Same contract as _on_counter: the engine reads the terms from
             # person.salary / person.contract_years, so set them first —
-            # but snapshot them so a non-acceptance can't leak the ask
-            # into the player's attributes.
-            orig_salary = getattr(self._player, "salary", None)
-            orig_years = getattr(self._player, "contract_years", None)
+            # plus the clause the agent asked for — but snapshot them so a
+            # non-acceptance can't leak the ask into the player's
+            # attributes.
+            staged = ("salary", "contract_years", "offered_clause_kind",
+                      "offered_clause_list_size")
+            orig = {a: getattr(self._player, a, None) for a in staged}
             self._player.salary = aav
             self._player.contract_years = years
+            ask_clause = self._agent_ask.get("clause")
+            self._player.offered_clause_kind = ask_clause or "none"
+            self._player.offered_clause_list_size = 10
             result = _safe(
                 lambda: game.handle_contract_offer(
                     self._player, extension=self._is_extension,
@@ -347,8 +408,11 @@ class ContractNegotiationScreen(BaseScreen):
                 result, {"aav": aav, "years": years},
                 signed_title="Signed!", signed_text="Contract signed.")
             if not accepted:
-                self._player.salary = orig_salary
-                self._player.contract_years = orig_years
+                for a in staged:
+                    try:
+                        setattr(self._player, a, orig[a])
+                    except Exception:
+                        pass
         except Exception as e:
             QMessageBox.warning(self, "Accept", f"Failed: {e}")
 
@@ -381,6 +445,9 @@ class ContractNegotiationScreen(BaseScreen):
             mode = "Contract Extension"
         else:
             mode = "New Contract (Free Agent)"
+        # Bonuses only exist on ELCs — hide the rows otherwise so the UI
+        # never presents terms the engine would silently ignore.
+        self._set_bonus_rows_visible(self._is_elc)
         try:
             pos = getattr(p, "position", "?")
             pos_s = getattr(pos, "value", str(pos))

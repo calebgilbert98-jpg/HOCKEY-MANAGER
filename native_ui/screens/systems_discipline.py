@@ -6,15 +6,13 @@ Player.suspension_games_remaining and the controversy_history
 suspension events (the same source the year-end Discipline Report
 reads).
 """
-from PySide6.QtWidgets import (QLabel, QFrame, QVBoxLayout, QHBoxLayout,
-                               QScrollArea, QWidget)
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QLabel, QFrame, QVBoxLayout, QHBoxLayout)
 
 from .base import BaseScreen
 from .systems_common import (league_of, tone_color, explainer_label,
                              section_title, no_game_label, clear_layout,
-                             player_name)
-from .systems_common import systems_nav_bar
+                             player_name,
+                             add_scroll_content)
 
 
 class SystemsDisciplineScreen(BaseScreen):
@@ -24,14 +22,7 @@ class SystemsDisciplineScreen(BaseScreen):
 
     def _build_body(self):
         self._layout.addLayout(systems_nav_bar(self))
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        inner = QWidget()
-        self._content = QVBoxLayout(inner)
-        self._content.setSpacing(12)
-        scroll.setWidget(inner)
-        self._layout.addWidget(scroll)
+        self._content = add_scroll_content(self)
         self.refresh()
 
     def refresh(self):

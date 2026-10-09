@@ -11,18 +11,16 @@ detail stays qualitative (rivalry intensity band only).
 from types import SimpleNamespace
 
 from PySide6.QtWidgets import (QLabel, QFrame, QVBoxLayout, QHBoxLayout,
-                               QScrollArea, QWidget, QComboBox,
-                               QTableWidget, QTableWidgetItem,
+                               QComboBox, QTableWidget, QTableWidgetItem,
                                QHeaderView)
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from .base import BaseScreen
 from .systems_common import (user_team, league_of, today_of, tone_color,
                              heat_band, explainer_label, section_title,
                              no_game_label, clear_layout, pos_short,
-                             player_name)
-from .systems_common import systems_nav_bar
+                             player_name,
+                             add_scroll_content)
 
 _COMPOSITE_LABELS = {
     "chance_creation": "Chance creation",
@@ -44,14 +42,7 @@ class SystemsCircumstanceScreen(BaseScreen):
 
     def _build_body(self):
         self._layout.addLayout(systems_nav_bar(self))
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        inner = QWidget()
-        self._content = QVBoxLayout(inner)
-        self._content.setSpacing(12)
-        scroll.setWidget(inner)
-        self._layout.addWidget(scroll)
+        self._content = add_scroll_content(self)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Composite:"))

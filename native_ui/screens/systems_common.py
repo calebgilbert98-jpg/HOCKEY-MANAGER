@@ -130,3 +130,22 @@ def systems_nav_bar(screen):
         bar.addWidget(btn)
     bar.addStretch()
     return bar
+
+
+def add_scroll_content(screen, spacing=12):
+    """Build a standard scroll container and return its content layout.
+
+    Creates a QScrollArea (resizable, no frame) with an inner QWidget +
+    QVBoxLayout, adds the scroll area to ``screen._layout``, and returns
+    the content layout for the caller to populate.
+    """
+    from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+    scroll = QScrollArea(screen)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.NoFrame)
+    inner = QWidget()
+    content = QVBoxLayout(inner)
+    content.setSpacing(spacing)
+    scroll.setWidget(inner)
+    screen._layout.addWidget(scroll)
+    return content

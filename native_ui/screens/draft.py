@@ -27,6 +27,7 @@ MP fantasy-draft contract (see native_ui/MP_FANTASY_DRAFT_BUG.md):
   draft flow and must stay untouched.
 """
 
+from native_ui.safe import safe_call
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -43,33 +44,26 @@ from ..widgets.attribute_bar import AttributeBar
 # helpers (ported from web_ui/screens/draft.py, Flask removed)
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team)
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league)
+            or safe_call(lambda: getattr(game, "league", None)))
 
 
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
 
 
 def _player_ovr(p):
@@ -99,19 +93,19 @@ def _prospect_pos(p):
             return v
     except Exception:
         pass
-    return _safe(lambda: str(getattr(p, "primary_position", "?") or "?"), "?")
+    return safe_call(lambda: str(getattr(p, "primary_position", "?") or "?"), "?")
 
 
 def _session(game):
     league = _league(game)
-    return _safe(lambda: getattr(league, "entry_draft_session", None))
+    return safe_call(lambda: getattr(league, "entry_draft_session", None))
 
 
 def _prospect_index(league):
     """Every draftable prospect by id: live class + drafted ones on team
     lists (mirrors EntryDraftSession._prospect_index, read-only)."""
     idx = {}
-    for p in _safe(lambda: list(getattr(league, "draft_prospects", None)
+    for p in safe_call(lambda: list(getattr(league, "draft_prospects", None)
                                 or []), []) or []:
         try:
             pid = getattr(p, "id", None)
@@ -119,10 +113,10 @@ def _prospect_index(league):
                 idx.setdefault(pid, p)
         except Exception:
             continue
-    for t in _safe(lambda: list(getattr(league, "teams", None) or []), []) \
+    for t in safe_call(lambda: list(getattr(league, "teams", None) or []), []) \
             or []:
         for attr in ("prospects", "roster", "ahl_roster"):
-            for p in _safe(lambda: list(getattr(t, attr, None) or []),
+            for p in safe_call(lambda: list(getattr(t, attr, None) or []),
                            []) or []:
                 try:
                     pid = getattr(p, "id", None)
@@ -137,22 +131,22 @@ def get_draft_state(game):
     """Serialize the entry draft session for the board (port of the web
     get_draft_state, reading native objects directly)."""
     gm = _resolve_gm(game)
-    league = _safe(lambda: gm.league) or _safe(lambda: game.league)
-    team = _safe(lambda: gm.user_team) or _safe(lambda: game.user_team)
+    league = safe_call(lambda: gm.league) or safe_call(lambda: game.league)
+    team = safe_call(lambda: gm.user_team) or safe_call(lambda: game.user_team)
     if league is None:
         return {"active": False}
 
-    session = _safe(lambda: getattr(league, "entry_draft_session", None))
-    if session is None or _safe(lambda: bool(session.is_complete()), True):
+    session = safe_call(lambda: getattr(league, "entry_draft_session", None))
+    if session is None or safe_call(lambda: bool(session.is_complete()), True):
         return {"active": False}
 
-    year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
-    slots = _safe(lambda: list(getattr(session, "slots", None) or []), []) \
+    year = safe_call(lambda: int(getattr(session, "year", 0) or 0), 0)
+    slots = safe_call(lambda: list(getattr(session, "slots", None) or []), []) \
         or []
-    picks = _safe(lambda: list(getattr(session, "picks", None) or []), []) \
+    picks = safe_call(lambda: list(getattr(session, "picks", None) or []), []) \
         or []
-    cur_idx = _safe(lambda: int(getattr(session, "current_pick", 0) or 0), 0)
-    user_name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
+    cur_idx = safe_call(lambda: int(getattr(session, "current_pick", 0) or 0), 0)
+    user_name = safe_call(lambda: getattr(team, "team_name", ""), "") or ""
 
     pick_by_overall = {}
     for p in picks:
@@ -165,10 +159,10 @@ def get_draft_state(game):
 
     def _to_prospect(p):
         return {
-            "id": _safe(lambda: str(getattr(p, "id", id(p)))),
-            "name": _safe(lambda: getattr(p, "full_name", "?")),
+            "id": safe_call(lambda: str(getattr(p, "id", id(p)))),
+            "name": safe_call(lambda: getattr(p, "full_name", "?")),
             "position": _prospect_pos(p),
-            "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
+            "age": safe_call(lambda: int(getattr(p, "age", 0) or 0)),
             "overall": _player_ovr(p),
         }
 
@@ -221,13 +215,13 @@ def available_prospects(game):
     session = _session(game)
     picked_ids = set()
     if session is not None:
-        for p in (_safe(lambda: list(getattr(session, "picks", None)
+        for p in (safe_call(lambda: list(getattr(session, "picks", None)
                                      or []), []) or []):
             try:
                 picked_ids.add(str(p.get("player_id")))
             except Exception:
                 pass
-    prospects = _safe(lambda: list(getattr(league, "draft_prospects",
+    prospects = safe_call(lambda: list(getattr(league, "draft_prospects",
                                           None) or []), []) or []
     out = []
     for p in prospects:
@@ -237,11 +231,11 @@ def available_prospects(game):
                 continue
             out.append({
                 "id": pid,
-                "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                "name": safe_call(lambda: getattr(p, "full_name", "?"), "?"),
                 "position": _prospect_pos(p),
-                "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+                "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0),
                 "overall": _player_ovr(p),
-                "potential": _safe(lambda: str(getattr(
+                "potential": safe_call(lambda: str(getattr(
                     p, "potential_grade", "?") or "?"), "?"),
             })
         except Exception:
@@ -274,7 +268,7 @@ def scout_report(game, pid):
     if league is None:
         return {"error": "no game"}
     target = None
-    for q in (_safe(lambda: list(getattr(league, "draft_prospects",
+    for q in (safe_call(lambda: list(getattr(league, "draft_prospects",
                                         None) or []), []) or []):
         if str(getattr(q, "id", "")) == str(pid):
             target = q
@@ -293,18 +287,18 @@ def scout_report(game, pid):
             pass
     return {
         "id": str(pid),
-        "name": _safe(lambda: getattr(target, "full_name", "?"), "?"),
+        "name": safe_call(lambda: getattr(target, "full_name", "?"), "?"),
         "position": _prospect_pos(target),
-        "age": _safe(lambda: int(getattr(target, "age", 0) or 0), 0),
+        "age": safe_call(lambda: int(getattr(target, "age", 0) or 0), 0),
         "overall": _player_ovr(target),
-        "potential": _safe(lambda: str(getattr(target, "potential_grade",
+        "potential": safe_call(lambda: str(getattr(target, "potential_grade",
                                               "?") or "?"), "?"),
         "attributes": attrs,
-        "report": _safe(lambda: getattr(target, "scout_report", "") or "",
+        "report": safe_call(lambda: getattr(target, "scout_report", "") or "",
                         ""),
-        "strengths": _safe(lambda: list(getattr(target, "strengths",
+        "strengths": safe_call(lambda: list(getattr(target, "strengths",
                                                None) or []), []) or [],
-        "weaknesses": _safe(lambda: list(getattr(target, "weaknesses",
+        "weaknesses": safe_call(lambda: list(getattr(target, "weaknesses",
                                                 None) or []), []) or [],
     }
 
@@ -472,12 +466,12 @@ def buzz_items(game):
     except Exception:
         return []
 
-    prospects = _safe(lambda: list(getattr(league, "draft_prospects",
+    prospects = safe_call(lambda: list(getattr(league, "draft_prospects",
                                           None) or []), []) or []
     session = _session(game)
-    year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
+    year = safe_call(lambda: int(getattr(session, "year", 0) or 0), 0)
     if not year:
-        year = _safe(lambda: int(getattr(league, "season_year", 0) or 0),
+        year = safe_call(lambda: int(getattr(league, "season_year", 0) or 0),
                      0)
         year = year + 1 if year else 0
     items = []
@@ -500,7 +494,7 @@ def buzz_items(game):
 
     # 1. Live pick drama from picks actually made (engine ticker lines).
     slot_round = {}
-    for s in (_safe(lambda: list(getattr(session, "slots", None) or []),
+    for s in (safe_call(lambda: list(getattr(session, "slots", None) or []),
                     []) or []):
         try:
             slot_round[int(s.get("overall", 0) or 0)] = int(
@@ -509,7 +503,7 @@ def buzz_items(game):
             continue
     pidx = _prospect_index(league)
     made = []
-    for p in (_safe(lambda: list(getattr(session, "picks", None) or []),
+    for p in (safe_call(lambda: list(getattr(session, "picks", None) or []),
                     []) or []):
         try:
             made.append((int(p.get("overall", 0) or 0), p))
@@ -565,7 +559,7 @@ def buzz_items(game):
             pass
         try:
             gm = _resolve_gm(game)
-            d = _safe(lambda: gm.current_date)
+            d = safe_call(lambda: gm.current_date)
             try:
                 month = int(getattr(d, "month", 6) or 6)
             except Exception:
@@ -591,12 +585,12 @@ def buzz_items(game):
     try:
         _steal_grades = {"B+", "A-", "A", "A+"}
         found = []
-        teams = _safe(lambda: list(getattr(league, "teams", None)
+        teams = safe_call(lambda: list(getattr(league, "teams", None)
                                   or []), []) or []
         for t in teams:
             pool = []
             for attr in ("roster", "prospects"):
-                pool += _safe(lambda: list(getattr(t, attr, None)
+                pool += safe_call(lambda: list(getattr(t, attr, None)
                                           or []), []) or []
             for p in pool:
                 try:
@@ -610,7 +604,7 @@ def buzz_items(game):
                         continue
                     if float(getattr(p, "draft_hype", 100) or 100) > 45:
                         continue
-                    dyear = _safe(lambda: int(getattr(
+                    dyear = safe_call(lambda: int(getattr(
                         p, "drafted_year", 0) or 0), 0)
                     found.append((dround, p, dyear, grade))
                 except Exception:
@@ -619,7 +613,7 @@ def buzz_items(game):
         found.sort(key=lambda x: (-x[0], _grade_order.get(x[3], 0)),
                    reverse=False)
         for dround, p, dyear, grade in found[:3]:
-            name = _safe(lambda: getattr(p, "full_name", "?"), "?")
+            name = safe_call(lambda: getattr(p, "full_name", "?"), "?")
             when = ("round %d of the %s draft" % (dround, dyear)
                     if dyear else "round %d" % dround)
             items.append({
@@ -643,24 +637,24 @@ def trade_feed(game):
     gm = _resolve_gm(game)
     if league is None:
         return []
-    deals = _safe(lambda: list(getattr(league, "draft_day_deals",
+    deals = safe_call(lambda: list(getattr(league, "draft_day_deals",
                                       None) or []), []) or []
 
     date_by_summary = {}
     try:
-        for ct in (_safe(lambda: list(getattr(gm, "trade_history",
+        for ct in (safe_call(lambda: list(getattr(gm, "trade_history",
                                              None) or []), []) or []):
-            s = _safe(lambda: str(getattr(ct, "summary", "") or ""), "")
-            d = _safe(lambda: str(getattr(ct, "date", "") or ""), "")
+            s = safe_call(lambda: str(getattr(ct, "summary", "") or ""), "")
+            d = safe_call(lambda: str(getattr(ct, "date", "") or ""), "")
             if s:
                 date_by_summary.setdefault(s, d)
     except Exception:
         pass
 
     team_names = []
-    for t in (_safe(lambda: list(getattr(league, "teams", None)
+    for t in (safe_call(lambda: list(getattr(league, "teams", None)
                                 or []), []) or []):
-        n = _safe(lambda: str(getattr(t, "team_name", "") or ""), "")
+        n = safe_call(lambda: str(getattr(t, "team_name", "") or ""), "")
         if n:
             team_names.append(n)
 
@@ -701,13 +695,13 @@ def draft_grades(game):
         return {"source": "none", "year": None, "grades": []}
 
     session = _session(game)
-    complete = (_safe(lambda: bool(session.is_complete()), True)
+    complete = (safe_call(lambda: bool(session.is_complete()), True)
                 if session else True)
-    picks = _safe(lambda: list(getattr(session, "picks", None)
+    picks = safe_call(lambda: list(getattr(session, "picks", None)
                                or []), []) or []
-    year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
+    year = safe_call(lambda: int(getattr(session, "year", 0) or 0), 0)
     if not year:
-        year = _safe(lambda: int(getattr(league, "season_year", 0) or 0),
+        year = safe_call(lambda: int(getattr(league, "season_year", 0) or 0),
                      0)
         year = year + 1 if year else 0
 
@@ -720,7 +714,7 @@ def draft_grades(game):
     if session is not None and not complete and picks:
         pidx = _prospect_index(league)
         slot_round = {}
-        for s in (_safe(lambda: list(getattr(session, "slots", None)
+        for s in (safe_call(lambda: list(getattr(session, "slots", None)
                                      or []), []) or []):
             try:
                 slot_round[int(s.get("overall", 0) or 0)] = int(
@@ -743,7 +737,7 @@ def draft_grades(game):
                     "overall": overall,
                     "round": slot_round.get(overall)
                     or ((overall - 1) // 32 + 1),
-                    "player": _safe(lambda: getattr(player, "full_name",
+                    "player": safe_call(lambda: getattr(player, "full_name",
                                                    "?"), "?"),
                     "player_id": str(getattr(player, "id", "")),
                     "expected": exp,
@@ -763,7 +757,7 @@ def draft_grades(game):
                 "grades": rows}
 
     # Final: newest completed draft from the persisted history.
-    hist = _safe(lambda: dict(getattr(league, "draft_grades_history",
+    hist = safe_call(lambda: dict(getattr(league, "draft_grades_history",
                                      None) or {}), {}) or {}
     years = []
     for k in hist.keys():
@@ -800,7 +794,7 @@ def trade_pick_info(game):
     cur = state.get("current_overall")
     board = state.get("board", [])
     cur_row = next((b for b in board if b.get("overall") == cur), None)
-    user_name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
+    user_name = safe_call(lambda: getattr(team, "team_name", ""), "") or ""
     if cur_row is None or cur_row.get("owner") != user_name:
         return {"can_trade": False,
                 "reason": "Not your pick -- you can only trade your own "
@@ -819,7 +813,7 @@ def trade_pick_info(game):
     try:
         for rnd, tm, dp in session.materialize_order(league):
             if dp is not None:
-                pid = _safe(lambda: str(getattr(dp, "id", "")), "")
+                pid = safe_call(lambda: str(getattr(dp, "id", "")), "")
                 for s in (getattr(session, "slots", None) or []):
                     if str(s.get("pick_id") or "") == pid:
                         dp_by_overall[int(s.get("overall", 0) or 0)] = dp
@@ -1112,12 +1106,12 @@ def _ddt_serialize_asset(a):
         label = (f"{getattr(a, 'year', '?')} "
                  f"round {getattr(a, 'round', '?')} pick")
     return {
-        "id": str(_safe(lambda: getattr(a, "id", ""), "")),
+        "id": str(safe_call(lambda: getattr(a, "id", ""), "")),
         "kind": "pick",
         "label": str(label),
-        "year": _safe(lambda: int(getattr(a, "year", 0) or 0), 0),
-        "round": _safe(lambda: int(getattr(a, "round", 0) or 0), 0),
-        "overall_pick": _safe(lambda: getattr(a, "overall_pick", None)),
+        "year": safe_call(lambda: int(getattr(a, "year", 0) or 0), 0),
+        "round": safe_call(lambda: int(getattr(a, "round", 0) or 0), 0),
+        "overall_pick": safe_call(lambda: getattr(a, "overall_pick", None)),
     }
 
 
@@ -1141,21 +1135,21 @@ def ddt_build_call(game):
         return None
     league = _league(game)
     user_team = _user_team(game)
-    year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
-    cur_idx = _safe(lambda: int(getattr(session, "current_pick", 0) or 0),
+    year = safe_call(lambda: int(getattr(session, "year", 0) or 0), 0)
+    cur_idx = safe_call(lambda: int(getattr(session, "current_pick", 0) or 0),
                     0)
     overall = cur_idx + 1
     # Already rang / already declined for this slot.
     if _ddt_offered(game) == overall or overall in _ddt_declined(game):
         return None
     # Current slot must be round 1 and owned by the user.
-    slots = _safe(lambda: list(getattr(session, "slots", None) or []),
+    slots = safe_call(lambda: list(getattr(session, "slots", None) or []),
                   []) or []
     cur_slot = next((s for s in slots
                      if int(s.get("overall", 0) or 0) == overall), None)
     if cur_slot is None or int(cur_slot.get("round", 0) or 0) != 1:
         return None
-    uname = _safe(lambda: getattr(user_team, "team_name", ""), "")
+    uname = safe_call(lambda: getattr(user_team, "team_name", ""), "")
     if str(cur_slot.get("owner", "") or "") != uname:
         return None
     _ddt_mark_offered(game, overall)
@@ -1166,7 +1160,7 @@ def ddt_build_call(game):
     if not order or not board:
         return None
     try:
-        ai_manager = _safe(lambda: getattr(game, "ai_manager", None))
+        ai_manager = safe_call(lambda: getattr(game, "ai_manager", None))
     except Exception:
         ai_manager = None
     best = None
@@ -1234,19 +1228,19 @@ def ddt_build_call(game):
               else "Value favors them" if share <= 0.45
               else "Roughly fair value")
     call = {
-        "caller": _safe(lambda: getattr(caller, "team_name", "?"), "?"),
-        "caller_id": str(_safe(lambda: getattr(caller, "id", ""), "")),
+        "caller": safe_call(lambda: getattr(caller, "team_name", "?"), "?"),
+        "caller_id": str(safe_call(lambda: getattr(caller, "id", ""), "")),
         "overall": overall,
         "year": year,
         "why_title": str(why.get("direction_short", "") or ""),
         "why_bullets": [str(b) for b in (why.get("bullets", None) or [])],
         "target": {
-            "name": _safe(lambda: getattr(prosp, "full_name", "?"), "?"),
+            "name": safe_call(lambda: getattr(prosp, "full_name", "?"), "?"),
             "position": ddt._pos_of(prosp),
-            "age": _safe(lambda: int(getattr(prosp, "age", 0) or 0), 0),
+            "age": safe_call(lambda: int(getattr(prosp, "age", 0) or 0), 0),
             "potential": str(tpot),
             "potential_grade": str(
-                _safe(lambda: getattr(prosp, "potential_grade", "?"),
+                safe_call(lambda: getattr(prosp, "potential_grade", "?"),
                       "?")),
         },
         "you_send": ser_gets,     # gets: the user's pick going out

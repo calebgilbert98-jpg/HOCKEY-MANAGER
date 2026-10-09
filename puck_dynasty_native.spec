@@ -13,7 +13,6 @@ import os as _os
 # PyInstaller.utils.hooks.collect_submodules, because collect_submodules
 # needs the package importable at spec-parse time and can return empty
 # silently on the GitHub runner.  This scan cannot fail silently.
-from PyInstaller.utils.hooks import collect_submodules as _collect_submodules  # noqa: F401 (kept for reference)
 
 block_cipher = None
 

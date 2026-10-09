@@ -4,7 +4,7 @@ Ports web_ui/static/js/context_menu.js. Right-click on any entity shows
 an NHL 14-styled menu. Supports Caleb's "everything should be clickable"
 standard.
 """
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu, QMessageBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 
@@ -58,7 +58,8 @@ class EntityContextMenu(QMenu):
                         lambda p=player: EntityContextMenu._open_compare(
                             main_window, p))
         menu.add_action("Propose Trade",
-                        lambda: main_window.show_screen("trades"))
+                        lambda p=player: EntityContextMenu._open_trade_proposal(
+                            main_window, player=p))
 
         if is_user_team:
             menu.addSeparator()
@@ -105,7 +106,8 @@ class EntityContextMenu(QMenu):
         menu.add_action("Team Overview",
                         lambda: main_window.open_team(team_name))
         menu.add_action("Propose Trade",
-                        lambda: main_window.show_screen("trades"))
+                        lambda: EntityContextMenu._open_trade_proposal(
+                            main_window, team_name=team_name))
         return menu
 
     @staticmethod
@@ -122,43 +124,83 @@ class EntityContextMenu(QMenu):
         return menu
 
     @staticmethod
+    def _open_entity_screen(main_window, screen_name, setter_name, entity,
+                            friendly_name="screen"):
+        """Navigate to a screen and load an entity via its setter.
+
+        Raises RuntimeError if the screen cannot load the entity so the
+        caller can show an actionable error instead of failing silently.
+        """
+        main_window.show_screen(screen_name)
+        screen = main_window._screens.get(screen_name)
+        widget = screen.widget() if screen and hasattr(screen, "widget") else screen
+        setter = getattr(widget, setter_name, None) if widget else None
+        if callable(setter):
+            setter(entity)
+        else:
+            raise RuntimeError(
+                f"The {friendly_name} could not load the selected item "
+                f"({screen_name} has no {setter_name}).")
+
+    @staticmethod
     def _open_compare(main_window, player):
         """Open compare screen with the player pre-loaded."""
-        main_window.show_screen("compare")
-        screen = main_window._screens.get("compare")
-        if screen:
-            widget = screen.widget() if hasattr(screen, "widget") else screen
-            if hasattr(widget, "set_players"):
-                try:
-                    widget.set_players([player])
-                except Exception:
-                    pass
+        try:
+            EntityContextMenu._open_entity_screen(
+                main_window, "compare", "set_players", [player],
+                friendly_name="compare screen")
+        except Exception as exc:
+            QMessageBox.warning(
+                main_window, "Could not open compare",
+                f"The compare screen could not load this player: {exc}")
 
     @staticmethod
     def _open_contracts(main_window, player):
         """Open contracts screen with the player pre-loaded."""
-        main_window.show_screen("contracts")
-        screen = main_window._screens.get("contracts")
-        if screen:
-            widget = screen.widget() if hasattr(screen, "widget") else screen
-            if hasattr(widget, "set_player"):
-                try:
-                    widget.set_player(player)
-                except Exception:
-                    pass
+        try:
+            EntityContextMenu._open_entity_screen(
+                main_window, "contracts", "set_player", player,
+                friendly_name="contracts screen")
+        except Exception as exc:
+            QMessageBox.warning(
+                main_window, "Could not open contracts",
+                f"The contracts screen could not load this player: {exc}")
+
+    @staticmethod
+    def _open_trade_proposal(main_window, player=None, team_name=None):
+        """Open the trade screen preloaded with a player or team.
+
+        Uses the screen's set_teams deep-link so the clicked entity is
+        preselected instead of forcing the user to find it again.
+        """
+        try:
+            main_window.show_screen("trades")
+            screen = main_window._screens.get("trades")
+            widget = (screen.widget() if screen and hasattr(screen, "widget")
+                      else screen)
+            setter = getattr(widget, "set_teams", None) if widget else None
+            if not callable(setter):
+                raise RuntimeError("trade screen has no set_teams deep-link")
+            pid = None
+            if player is not None:
+                pid = str(getattr(player, "id", "") or "")
+            setter(team_name or "", pid or "")
+        except Exception as exc:
+            QMessageBox.warning(
+                main_window, "Could not open trade proposal",
+                f"The trade screen could not preload this selection: {exc}")
 
     @staticmethod
     def _open_staff_detail(main_window, staff):
         """Open staff detail screen with the staff pre-loaded."""
-        main_window.show_screen("staff_detail")
-        screen = main_window._screens.get("staff_detail")
-        if screen:
-            widget = screen.widget() if hasattr(screen, "widget") else screen
-            if hasattr(widget, "set_staff"):
-                try:
-                    widget.set_staff(staff)
-                except Exception:
-                    pass
+        try:
+            EntityContextMenu._open_entity_screen(
+                main_window, "staff_detail", "set_staff", staff,
+                friendly_name="staff detail screen")
+        except Exception as exc:
+            QMessageBox.warning(
+                main_window, "Could not open staff details",
+                f"The staff screen could not load this staff member: {exc}")
 
     @staticmethod
     def _add_trade_block(main_window, game, player):

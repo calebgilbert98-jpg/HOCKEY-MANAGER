@@ -592,6 +592,53 @@ def _find_neg_person(game, pid, kind):
     return None
 
 
+def _staged_contract_attrs():
+    """Every player attribute the native UI stages before calling the
+    contract engine. The engine reads salary/contract_years plus the
+    offered_* attributes from the player object (it takes no term
+    params), so all of these must be snapshotted before mutation and
+    restored unless the deal is actually accepted."""
+    return ("salary", "contract_years", "offered_clause_kind",
+            "offered_clause_list_size", "offered_signing_bonus")
+
+
+def _snapshot_attrs(player, attrs):
+    """Return {attr: current_value}. Missing attrs map to None."""
+    snap = {}
+    for a in attrs:
+        try:
+            snap[a] = getattr(player, a, None)
+        except Exception:
+            snap[a] = None
+    return snap
+
+
+def _restore_attrs(player, snap):
+    """Restore a snapshot from _snapshot_attrs. Never raises."""
+    for a, v in (snap or {}).items():
+        try:
+            setattr(player, a, v)
+        except Exception:
+            pass
+
+
+def _offer_result_accepted(result):
+    """True iff the engine actually signed the deal.
+
+    Real engine shape: True = signed; "consideration" = UFA bid period
+    (no deal yet); False/None = refused or blocked; dict verdict
+    "accept" = signed (standard path) / "accepted" = signed (ELC path).
+    Everything else — counter, invalid, unrecognized — is not an
+    acceptance, so staged terms must not leak.
+    """
+    if result is True:
+        return True
+    if isinstance(result, dict):
+        return str(result.get("verdict", "")).lower() in ("accept",
+                                                          "accepted")
+    return False
+
+
 def _neg_kind_for(game, pid):
     """sign vs extend for a player: existing negotiation state wins,
     else derive from where the player lives. Never raises."""
@@ -634,6 +681,12 @@ def submit_offer(game, player, kind, years, aav, extras=None):
     )
     negs[pid_s] = st
     # Same staging as the desktop extension flow (web bridge parity).
+    # The engine reads offer terms from the player object, so the caller
+    # MUST stage them first — but snapshot everything first: if the deal
+    # isn't accepted (countered, rejected, exception), the offered terms
+    # must not leak into the player's attributes.
+    _staged = _staged_contract_attrs()
+    _orig = _snapshot_attrs(player, _staged)
     try:
         player.salary = int(aav)
         player.contract_years = int(years)
@@ -652,7 +705,10 @@ def submit_offer(game, player, kind, years, aav, extras=None):
         result = game.handle_contract_offer(
             player, extension=(kind == "extend"), notify="inbox")
     except Exception:
+        _restore_attrs(player, _orig)
         return st
+    if not _offer_result_accepted(result):
+        _restore_attrs(player, _orig)
     _safe(lambda: _apply_offer_verdict(game, st, result))
     return st
 

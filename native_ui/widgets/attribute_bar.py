@@ -18,6 +18,23 @@ def _bar_color(value):
 class AttributeBar(QWidget):
     """Single labeled attribute bar."""
 
+    @staticmethod
+    def _bar_stylesheet(color):
+        return f"""
+            QProgressBar {{
+                background-color: #1a2338;
+                border: none;
+                border-radius: 5px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {color};
+                border-radius: 5px;
+            }}
+        """
+
+    def _apply_bar_color(self, color):
+        self._bar.setStyleSheet(self._bar_stylesheet(color))
+
     def __init__(self, name, value, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
@@ -35,17 +52,7 @@ class AttributeBar(QWidget):
         self._bar.setTextVisible(False)
         self._bar.setFixedHeight(10)
         color = _bar_color(value)
-        self._bar.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: #1a2338;
-                border: none;
-                border-radius: 5px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 5px;
-            }}
-        """)
+        self._apply_bar_color(color)
         layout.addWidget(self._bar, 1)
 
         val_label = QLabel(str(int(value)))
@@ -58,14 +65,4 @@ class AttributeBar(QWidget):
     def set_value(self, value):
         color = _bar_color(value)
         self._bar.setValue(max(0, min(100, int(value))))
-        self._bar.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: #1a2338;
-                border: none;
-                border-radius: 5px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 5px;
-            }}
-        """)
+        self._apply_bar_color(color)

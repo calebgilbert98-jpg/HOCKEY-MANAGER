@@ -15,6 +15,7 @@ Game attributes used (all real, same as the web bridge read):
   - league.user_team
 """
 
+from native_ui.safe import safe_call
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QMessageBox, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem,
@@ -29,20 +30,13 @@ from .base import BaseScreen
 # helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    return _safe(lambda: gm.league)
+    return safe_call(lambda: gm.league)
 
 
 def _rich_team_rows(game):
@@ -51,35 +45,35 @@ def _rich_team_rows(game):
     league = _league(game)
     if league is None:
         return [], None
-    table = _safe(lambda: dict(league.standings), {}) or {}
-    teams = _safe(lambda: list(league.teams), []) or []
-    user_team_name = (_safe(lambda: league.user_team.team_name)
-                      or _safe(lambda: getattr(game, "user_team", None)
+    table = safe_call(lambda: dict(league.standings), {}) or {}
+    teams = safe_call(lambda: list(league.teams), []) or []
+    user_team_name = (safe_call(lambda: league.user_team.team_name)
+                      or safe_call(lambda: getattr(game, "user_team", None)
                                and game.user_team.team_name))
 
     rows = []
     for t in teams:
         try:
-            name = _safe(lambda: t.team_name, "")
+            name = safe_call(lambda: t.team_name, "")
             if not name:
                 continue
-            row = _safe(lambda: table.get(name), {}) or {}
-            w = _safe(lambda: int(row.get("W", 0) or 0), 0)
-            l = _safe(lambda: int(row.get("L", 0) or 0), 0)
-            otl = _safe(lambda: int(row.get("OTL", 0) or 0), 0)
-            pts = _safe(lambda: int(row.get("Points", 0) or 0), 0)
-            gf = _safe(lambda: int(getattr(t, "goals_for", 0) or 0), 0)
-            ga = _safe(lambda: int(getattr(t, "goals_against", 0) or 0), 0)
+            row = safe_call(lambda: table.get(name), {}) or {}
+            w = safe_call(lambda: int(row.get("W", 0) or 0), 0)
+            l = safe_call(lambda: int(row.get("L", 0) or 0), 0)
+            otl = safe_call(lambda: int(row.get("OTL", 0) or 0), 0)
+            pts = safe_call(lambda: int(row.get("Points", 0) or 0), 0)
+            gf = safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0)
+            ga = safe_call(lambda: int(getattr(t, "goals_against", 0) or 0), 0)
             gp = w + l + otl
             rows.append({
                 "name": name,
-                "division": _safe(lambda: t.division, "") or "",
-                "conf": _safe(lambda: t.conference, "") or "",
+                "division": safe_call(lambda: t.division, "") or "",
+                "conf": safe_call(lambda: t.conference, "") or "",
                 "gp": gp, "w": w, "l": l, "otl": otl, "pts": pts,
                 "gf": gf, "ga": ga, "diff": gf - ga,
                 "pt_pct": round(pts / (2 * gp), 3) if gp else 0.0,
-                "streak": _safe(lambda: getattr(t, "streak", "") or "", ""),
-                "is_user": (_safe(lambda: bool(t.is_user_team), False)
+                "streak": safe_call(lambda: getattr(t, "streak", "") or "", ""),
+                "is_user": (safe_call(lambda: bool(t.is_user_team), False)
                             or name == user_team_name),
             })
         except Exception:
@@ -135,8 +129,8 @@ def _team_analytics_rows(game, category):
     league = _league(game)
     teams_by_name = {}
     if league is not None:
-        for t in (_safe(lambda: list(league.teams), []) or []):
-            n = _safe(lambda: t.team_name, "")
+        for t in (safe_call(lambda: list(league.teams), []) or []):
+            n = safe_call(lambda: t.team_name, "")
             if n:
                 teams_by_name[n] = t
 
@@ -144,10 +138,10 @@ def _team_analytics_rows(game, category):
     for r in rows:
         t = teams_by_name.get(r["name"])
         gp = max(1, r["gp"])
-        pp = _safe(lambda: float(getattr(t, "power_play_pct", 0) or 0), 0)
-        pk = _safe(lambda: float(getattr(t, "penalty_kill_pct", 0) or 0), 0)
-        gaa_team = _safe(lambda: float(getattr(t, "team_gaa", 0) or 0), 0)
-        svp_team = _safe(lambda: float(getattr(t, "team_save_pct", 0) or 0), 0)
+        pp = safe_call(lambda: float(getattr(t, "power_play_pct", 0) or 0), 0)
+        pk = safe_call(lambda: float(getattr(t, "penalty_kill_pct", 0) or 0), 0)
+        gaa_team = safe_call(lambda: float(getattr(t, "team_gaa", 0) or 0), 0)
+        svp_team = safe_call(lambda: float(getattr(t, "team_save_pct", 0) or 0), 0)
         gf, ga = r["gf"], r["ga"]
         out.append({
             "name": r["name"], "division": r["division"], "conf": r["conf"],
@@ -651,7 +645,7 @@ class StandingsScreen(BaseScreen):
 
     def _strength_of_schedule(self, rows, user_team):
         league = _league(self.game)
-        sched = _safe(lambda: list(getattr(league, "schedule", None) or []),
+        sched = safe_call(lambda: list(getattr(league, "schedule", None) or []),
                       []) or []
         pct = {r["name"]: r["pt_pct"] for r in rows}
         rem = {}
