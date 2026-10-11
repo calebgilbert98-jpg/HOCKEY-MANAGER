@@ -19,6 +19,13 @@ Native differences from the tkinter original (all deliberate):
     loop shows the non-modal ``DaySimLoadingOverlay`` so the app stays
     usable between days; quick advances use the cancelable
     ``run_threaded`` progress dialog with per-day progress.
+  - Worker-thread ``_ui_notify`` guard (``_install_worker_notify_guard``):
+    ``MainWindow`` rebinds ``game._ui_notify`` to a dispatcher whose
+    worker-thread path deadlocks (``QTimer.singleShot`` from a non-Qt
+    thread never fires). While a season-flow worker sims, notifies from
+    that thread are answered with the native headless defaults instead
+    of blocking; the original is restored afterwards. The main_window
+    marshal itself is owned by whoever owns that file.
   - The engine's ``_show_milestone_notification`` imports tkinter's
     messagebox. Critical milestones are surfaced here with a native
     ``QDialog`` instead.
@@ -45,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 
+import queue
 import threading
 
 from .base import BaseScreen
@@ -72,6 +80,7 @@ except Exception as e:  # pragma: no cover - defensive
 
 
 # Phase -> native screen name for the milestone dialog's "open" button.
+
 _PHASE_SCREENS = {
     "Trade Deadline Period": "deadline",
     "Playoffs": "playoffs",
@@ -90,6 +99,66 @@ _PHASE_ICONS = {
     "Entry Draft": "\U0001f4cb",
     "Free Agency": "\U0001f4b0",
 }
+
+
+def _install_worker_notify_guard(game):
+    """Make ``game._ui_notify`` safe to call from a sim worker thread.
+
+    WHY (root cause, cross-file): ``MainWindow.__init__`` rebinds
+    ``game._ui_notify`` to its dispatcher, whose worker-thread path
+    (``QTimer.singleShot(0, ...)`` from a non-Qt thread, then
+    ``threading.Event.wait()``) never fires -- a worker-thread
+    ``simulate_day()`` deadlocks on the first ``_set_continue_feedback``
+    instead of simming. Until that marshal is fixed in main_window.py,
+    this guard answers worker-thread notifies with the native headless
+    defaults instead of blocking forever.
+
+    Worker-thread answers mirror the native UI-thread behavior:
+      - "continue_feedback" -> None (our progress UI covers feedback)
+      - "game_day_bundle"   -> False (== MainWindow._notify_game_day_bundle)
+      - "ask_game_mode"     -> "quick" (background advance: quick-sim,
+        never open the viewer/modal off-thread)
+      - "ask_playoffs_mode" -> False (non-interactive)
+      - everything else      -> None (fire-and-forget kinds)
+
+    Calls made on the UI thread still delegate to the original. The
+    guard is nesting-safe via a depth counter; the returned ``restore``
+    callable must be called exactly once per install (use try/finally).
+    """
+    depth = getattr(game, "_sf_notify_guard_depth", 0)
+    if depth == 0:
+        original = game._ui_notify
+        ui_thread = threading.current_thread()
+
+        def _guard(kind, *args, **kwargs):
+            if threading.current_thread() is ui_thread:
+                return original(kind, *args, **kwargs)
+            if kind == "game_day_bundle":
+                return False
+            if kind == "ask_game_mode":
+                return "quick"
+            if kind == "ask_playoffs_mode":
+                return False
+            return None
+
+        game._ui_notify = _guard
+        game._sf_notify_guard_original = original
+    game._sf_notify_guard_depth = depth + 1
+
+    def _restore():
+        left = getattr(game, "_sf_notify_guard_depth", 1) - 1
+        game._sf_notify_guard_depth = max(left, 0)
+        if left <= 0:
+            try:
+                game._ui_notify = game._sf_notify_guard_original
+            except Exception:
+                pass
+            try:
+                del game._sf_notify_guard_original
+            except Exception:
+                pass
+
+    return _restore
 
 
 class MilestoneDialog(QDialog):
@@ -249,6 +318,8 @@ class SeasonFlowScreen(BaseScreen):
         self._auto_overlay = None
         self._quick_btns = []
         self._running = False
+        self._day_result_q = None
+        self._day_restore_notify = None
 
         if not _ENGINE_OK:
             err = QLabel(
@@ -501,18 +572,26 @@ class SeasonFlowScreen(BaseScreen):
     def _start_day_worker(self):
         """Run one day of sim on a worker thread.
 
-        Completion (or failure) is marshaled back to the UI thread via
-        ``QTimer.singleShot(0, ...)`` -- ``QTimer.singleShot`` is
-        thread-safe, so this is a valid cross-thread wake-up. The worker
-        touches only sim objects (the game), never widgets.
+        Completion is reported through a ``queue.Queue`` which the UI
+        thread drains via ``_poll_day_worker`` -- the same structure as
+        ``run_threaded`` in ``native_ui.dialogs.sim_progress``. (A plain
+        ``QTimer.singleShot(0, ...)`` issued from the worker thread never
+        fires: the timer is created in the calling thread, which has no
+        event loop.) The worker touches only sim objects, never widgets.
+
+        The worker-thread ``_ui_notify`` guard is installed here on the
+        UI thread and restored in ``_poll_day_worker`` once the result is
+        drained -- see ``_install_worker_notify_guard``.
         """
         game = self.game
         self._sim_in_progress = True
         self._show_auto_overlay()
         self.refresh()
+        result_q = queue.Queue()
+        self._day_result_q = result_q
+        restore_notify = _install_worker_notify_guard(game)
 
         def _worker():
-            error = None
             try:
                 _bulk = getattr(game, "_bulk_simming", None)
                 try:
@@ -525,13 +604,39 @@ class SeasonFlowScreen(BaseScreen):
                             game._bulk_simming = False
                         except Exception:
                             pass
+                result_q.put((False, None))
             except Exception as e:  # noqa: BLE001 -- reported on UI thread
-                error = e
-            # Marshal completion to the UI thread.
-            QTimer.singleShot(0, lambda: self._on_day_sim_done(error))
+                result_q.put((True, e))
 
         threading.Thread(target=_worker, daemon=True,
                          name="season-flow-day").start()
+        QTimer.singleShot(100, self._poll_day_worker)
+        # Keep restore paired with this worker even if the poll chain is
+        # somehow dropped: stash it for the poll to consume.
+        self._day_restore_notify = restore_notify
+
+    def _poll_day_worker(self):
+        """Drain the day worker's result queue. Runs ON the UI thread."""
+        result_q = getattr(self, "_day_result_q", None)
+        if result_q is None:
+            return
+        try:
+            failed, payload = result_q.get_nowait()
+        except queue.Empty:
+            if getattr(self, "_sim_in_progress", False):
+                QTimer.singleShot(100, self._poll_day_worker)
+            return
+        self._day_result_q = None
+        restore = getattr(self, "_day_restore_notify", None)
+        self._day_restore_notify = None
+        try:
+            self._on_day_sim_done(payload if failed else None)
+        finally:
+            if restore is not None:
+                try:
+                    restore()
+                except Exception:
+                    pass
 
     def _on_day_sim_done(self, error):
         """Day worker finished. Runs ON the UI thread.
@@ -684,6 +789,7 @@ class SeasonFlowScreen(BaseScreen):
             self._sim_in_progress = True
             self.refresh()
             game = self.game
+            restore_notify = _install_worker_notify_guard(game)
 
             def _worker(cancel_event, progress):
                 # Runs OFF the UI thread. Must not touch widgets.
@@ -710,6 +816,10 @@ class SeasonFlowScreen(BaseScreen):
             def _on_done(cancelled, error):
                 # Runs ON the UI thread.
                 self._sim_in_progress = False
+                try:
+                    restore_notify()
+                except Exception:
+                    pass
                 if error is not None:
                     print(f"[season_flow] advance days failed: {error}")
                     QMessageBox.critical(
