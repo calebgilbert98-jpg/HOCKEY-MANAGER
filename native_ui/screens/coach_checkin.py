@@ -290,8 +290,8 @@ class CoachCheckinScreen(BaseScreen):
 
     def _team(self):
         gm = self._gm()
-        return (safe_call(lambda: gm.user_team)
-                or safe_call(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: gm.user_team, context="coach_checkin/resolve_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None), context="coach_checkin/resolve_team"))
 
     def _head_coach(self, team, m):
         try:
@@ -319,7 +319,7 @@ class CoachCheckinScreen(BaseScreen):
             if isinstance(d, dict) and d.get("quarter") == pending_q \
                     and pending_q is not None:
                 return d
-            gp = safe_call(lambda: m.team_games_played(team), 0)
+            gp = safe_call(lambda: m.team_games_played(team), 0, context="coach_checkin/head_coach_games")
             d = {"quarter": pending_q, "game": gp, "stage": "opening",
                  "chosen": [], "topics": [], "deltas": {}, "notes": [],
                  "done": False}
@@ -356,16 +356,18 @@ class CoachCheckinScreen(BaseScreen):
             state["message"] = ("No check-in is due right now. The next one "
                                 "is armed after games ~20, ~40 and ~60.")
             return state
-        q = safe_call(lambda: m.get_pending_quarter(team))
+        q = safe_call(lambda: m.get_pending_quarter(team), context="coach_checkin/pending_quarter")
         state["quarter"] = q
         state["quarter_label"] = safe_call(lambda: m.quarter_label(q),
-                                       "Quarterly")
+                                       "Quarterly",
+                                           context="coach_checkin/quarter_label")
         coach = self._head_coach(team, m)
         state["coach_name"] = _coach_name(coach)
         state["coach_trust"] = safe_call(
-            lambda: round(float(getattr(coach, "gm_trust", 70) or 70)), 70)
-        state["game"] = safe_call(lambda: m.team_games_played(team), 0)
-        mandate = safe_call(lambda: m.get_active_mandate(team), {}) or {}
+            lambda: round(float(getattr(coach, "gm_trust", 70) or 70)), 70,
+                                         context="coach_checkin/coach_trust")
+        state["game"] = safe_call(lambda: m.team_games_played(team), 0, context="coach_checkin/state_games_played")
+        mandate = safe_call(lambda: m.get_active_mandate(team), {}, context="coach_checkin/active_mandate") or {}
         state["mandate"] = str(mandate.get("expectation", "playoffs"))
 
         # Situational inputs (desktop CheckinView._load_context, same calls).
@@ -714,13 +716,14 @@ class CoachCheckinScreen(BaseScreen):
             if beat == "room":
                 sit["messy"] = bool(
                     safe_call(lambda: (m.room_state(team) or {}).get("messy"),
-                          False))
+                          False,
+                              context="coach_checkin/room_messy"))
             elif beat == "rookies":
                 sit["honored"] = bool(
-                    safe_call(lambda: m.rookie_stance_honored(team)[0], True))
+                    safe_call(lambda: m.rookie_stance_honored(team)[0], True, context="coach_checkin/rookie_stance"))
             elif beat == "tactics":
                 sit["working"] = bool(
-                    safe_call(lambda: m.tactics_working(team)[0], True))
+                    safe_call(lambda: m.tactics_working(team)[0], True, context="coach_checkin/tactics_working"))
         gm_line = gm_line_for(beat, framing, sit)
         self._append_gm(gm_line)
         sb = self._transcript.verticalScrollBar()
@@ -795,7 +798,7 @@ class CoachCheckinScreen(BaseScreen):
             if m is None or team is None:
                 raise RuntimeError("Check-in system unavailable.")
             draft = self._draft(team, m)
-            mandate = safe_call(lambda: m.get_active_mandate(team), {}) or {}
+            mandate = safe_call(lambda: m.get_active_mandate(team), {}, context="coach_checkin/submit_mandate") or {}
             fields = {
                 "season": mandate.get("season"),
                 "quarter": draft.get("quarter"),
