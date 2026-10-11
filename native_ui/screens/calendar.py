@@ -591,6 +591,11 @@ class CalendarScreen(BaseScreen):
         # shared with the schedule screen so statuses always agree.
         by_date = safe_call(lambda: _results_by_date(self.game), {},
                             context="calendar/load_data/results_by_date") or {}
+        # Stamp detection for the legacy draft fallback below: records the
+        # iso date of the engine-stamped entry_draft NHL_EVENT when it
+        # actually lands on the grid (a stamp with an empty date/label
+        # renders nothing and must NOT suppress the fallback).
+        stamped_draft_iso = ""
         for g in entries:
             try:
                 # Mainline parity: schedule-stamped NHL special events
@@ -616,6 +621,8 @@ class CalendarScreen(BaseScreen):
                     }.get(etype, ("important", etitle))
                     if ed and label:
                         self._add_event(events, ed, kind, label)
+                        if etype == "entry_draft":
+                            stamped_draft_iso = ed
                     continue
                 if not isinstance(g, dict):
                     continue
@@ -660,8 +667,18 @@ class CalendarScreen(BaseScreen):
             pass
         # Entry draft: the marker comes from the engine-stamped NHL_EVENT
         # (type "entry_draft", Jun 27 — the same date mainline badges
-        # DRAFT). No derived marker is added: the stamp is the single
-        # source of truth, so June always shows exactly one draft marker.
+        # DRAFT). Legacy fallback: a career whose schedule PREDATES
+        # NHL_EVENT stamping carries no entry_draft stamp and would
+        # otherwise show no draft marker at all, while mainline badges a
+        # fixed "Draft Day" Jun 27 in that scenario. The fallback fires
+        # ONLY when the stamp is absent — the stamp stays the single
+        # source of truth, so June shows exactly one draft marker, never
+        # two. Title matches the stamped convention verbatim so the
+        # fallback renders identically to a real stamp.
+        if not stamped_draft_iso:
+            self._add_event(
+                events, date(self._season_year() + 1, 6, 27).isoformat(),
+                "draft", "\U0001F3AF NHL Entry Draft")
         # season bounds from the regular-season schedule
         try:
             dates = sorted(gd for gd, gs in games.items()
