@@ -22,8 +22,11 @@ writes into command-queue ops; here we call the same underlying
                                  control NEVER flips (mainline parity)
 - coach takeover               : ``rs.take_over_tactics(team, ctx)`` --
                                  PERMANENT GM control of the whiteboard
-- coach handback               : ``rs.hand_back_tactics(team)`` +
-                                 ``tactics.install_coach_systems(team, coach)``
+- coach handback               : ``rs.hand_back_tactics(team)`` --
+                                 control flips back and trust is repaired;
+                                 SYSTEMS STAY as the GM left them (mainline
+                                 parity -- install_coach_systems is the hire
+                                 path only)
 - preferred tactics            : ``tactics.save_preferred_tactics`` /
                                  ``tactics.get_preferred_tactics``
 - legacy slider pills         : plain ``setattr(team, tactic_*, value)``
@@ -37,6 +40,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, QEvent
+
+import time
 
 from .base import BaseScreen
 from native_ui.safe import safe_call
@@ -173,6 +178,13 @@ class TacticsScreen(BaseScreen):
         # Response lines that survive tab rebuilds (mainline _response_text).
         self._coach_msg = ""
         self._systems_msg = ""
+        # T2: double-click guard -- ignore single clicks landing within this
+        # many seconds after a handled double-click (Qt still emits
+        # clicked() on release after the double-click).
+        self._last_pill_dblclick = 0.0
+        # T6: identity of the team _pending was staged for -- pending is
+        # cleared whenever the resolved team changes (career switches).
+        self._pending_team_marker = None
         super().__init__(game, main_window, parent)
 
     def _resolve_team(self):
@@ -180,6 +192,15 @@ class TacticsScreen(BaseScreen):
         self._gm = gm
         self._team = (getattr(gm, "user_team", None)
                       or getattr(self.game, "user_team", None))
+        # T6: staged changes belong to one team. If the resolved team
+        # changed (career switch in the same session), drop the pending
+        # map rather than letting another career's stages leak onto it.
+        team = self._team
+        marker = (id(team), getattr(team, "team_name", None)) \
+            if team is not None else None
+        if marker != self._pending_team_marker:
+            self._pending.clear()
+            self._pending_team_marker = marker
         return self._team
 
     def _head_coach(self, team):
@@ -602,6 +623,11 @@ class TacticsScreen(BaseScreen):
             t = getattr(obj, "_pending", None)
             if t is not None and t.isActive():
                 t.stop()
+            # T2: Qt still emits clicked() on release after the double
+            # click -- record the timestamp so _on_module_pill_clicked can
+            # ignore that trailing click instead of starting a new timer
+            # nothing cancels (which would install the system anyway).
+            self._last_pill_dblclick = time.monotonic()
             self._show_inspector(obj)
             return True
         return super().eventFilter(obj, event)
@@ -609,6 +635,9 @@ class TacticsScreen(BaseScreen):
     def _on_module_pill_clicked(self):
         pill = self.sender()
         if pill is None:
+            return
+        # T2: ignore the clicked() that trails a handled double-click.
+        if time.monotonic() - self._last_pill_dblclick < 0.3:
             return
         old = getattr(pill, "_pending", None)
         if old is not None and old.isActive():
@@ -1103,8 +1132,8 @@ class TacticsScreen(BaseScreen):
             "him ONCE for those changes — he keeps the whiteboard and stays "
             "in charge of mid-game adjustments. <b>Take Over</b> seizes the "
             "whiteboard PERMANENTLY (his personality decides how he takes "
-            "it). <b>Hand Back</b> returns it to him and installs his "
-            "systems.")
+            "it). <b>Hand Back</b> returns it to him -- your systems stay "
+            "on the board as you left them.")
         act_sub.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         act_sub.setWordWrap(True)
         lay.addWidget(act_sub)
@@ -1151,24 +1180,39 @@ class TacticsScreen(BaseScreen):
             self.refresh()
 
         def _suggest():
+            # T7: fail closed with an actionable warning, not a shrug.
+            if _rs is None:
+                self._warn_rs_unavailable("suggestion")
+                return
             if not self._pending:
                 _show_recommendation()
                 return
+            # T3: when the GM owns the whiteboard there is no coach to
+            # suggest to -- clicks apply immediately, so pending should be
+            # empty; refuse rather than running a coach-overrule path.
+            if safe_call(lambda: _tx.get_tactics_control(team), "coach",
+                         context="tactics/get_control") == "gm":
+                self._coach_msg = (
+                    "You already own the whiteboard -- your changes apply "
+                    "immediately, so there is nothing to suggest.")
+                self.refresh()
+                return
             res = {}
-            if _rs is not None:
-                try:
-                    res = _rs.suggest_tactics_to_coach(
-                        team, dict(self._pending),
-                        self._team_context()) or {}
-                except Exception:
-                    res = {}
+            try:
+                res = _rs.suggest_tactics_to_coach(
+                    team, dict(self._pending),
+                    self._team_context()) or {}
+            except Exception:
+                res = {}
+            if not res:
+                self._warn_rs_unavailable("suggestion")
+                return
             if res.get("applied"):
                 self._pending.clear()
                 text = res.get("text", "")
                 if text:
                     self._push_tactics_news(f"Tactics: {text}")
-            self._coach_msg = res.get(
-                "text", "Could not suggest the staged changes.")
+            self._coach_msg = res.get("text", "")
             self.refresh()
 
         def _enforce():
@@ -1177,9 +1221,23 @@ class TacticsScreen(BaseScreen):
             # it NEVER flips whiteboard control. The permanent flip is the
             # separate Take Over path below; take_over_tactics must not be
             # called from here.
+            # T7: fail closed with an actionable warning, not a shrug.
+            if _rs is None:
+                self._warn_rs_unavailable("enforcement")
+                return
             if not self._pending:
                 self._coach_msg = ("Nothing staged — pick systems on the "
                                    "Systems tab first.")
+                self.refresh()
+                return
+            # T3: when the GM owns the whiteboard there was no overrule --
+            # running enforce_tactics would apply the staged changes AND
+            # ding trust/morale "over the coach's objections" unjustifiably.
+            if safe_call(lambda: _tx.get_tactics_control(team), "coach",
+                         context="tactics/get_control") == "gm":
+                self._coach_msg = (
+                    "You already own the whiteboard -- there is no coach "
+                    "to overrule.")
                 self.refresh()
                 return
             ans = QMessageBox.question(
@@ -1190,61 +1248,29 @@ class TacticsScreen(BaseScreen):
             if ans != QMessageBox.Yes:
                 return
             res = {}
-            if _rs is not None:
-                try:
-                    res = _rs.enforce_tactics(
-                        team, dict(self._pending),
-                        self._team_context()) or {}
-                except Exception:
-                    res = {}
+            try:
+                res = _rs.enforce_tactics(
+                    team, dict(self._pending),
+                    self._team_context()) or {}
+            except Exception:
+                res = {}
+            if not res:
+                self._warn_rs_unavailable("enforcement")
+                return
             if res.get("applied"):
                 self._pending.clear()
                 text = res.get("text", "")
                 if text:
                     self._push_tactics_news(f"Tactics: {text}")
-            self._coach_msg = res.get("text", "Could not enforce.")
+            self._coach_msg = res.get("text", "")
             self.refresh()
 
         def _takeover():
             # PERMANENT path (mainline parity): the GM takes the whiteboard.
-            # This is the ONLY one-time-flow path allowed to call
-            # take_over_tactics -- it is an explicit, confirmed seizure.
-            ans = QMessageBox.question(
-                self, "Take Over Whiteboard",
-                "Take permanent control of tactics from your head coach?\n"
-                "His reaction will depend on his personality.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ans != QMessageBox.Yes:
-                return
-            res = {}
-            if _rs is not None:
-                try:
-                    res = _rs.take_over_tactics(
-                        team, self._team_context()) or {}
-                except Exception:
-                    res = {}
-            if not res:
-                # Engine unavailable -- fall back to the raw control flip.
-                try:
-                    _tx.set_tactics_control(team, "gm")
-                except Exception:
-                    pass
-            if res.get("changed"):
-                # Pending changes are yours now -- apply them (mainline).
-                try:
-                    for cat, key in list(self._pending.items()):
-                        _tx.set_team_system(team, cat, key)
-                    self._pending.clear()
-                except Exception:
-                    pass
-                text = res.get("text", "")
-                if text:
-                    self._push_tactics_news(f"Tactics: {text}")
-            self._coach_msg = res.get(
-                "text",
-                "Whiteboard is yours. He will coach your systems and stop "
-                "adjusting mid-game.")
-            self.refresh()
+            # Routes through the shared confirmed-takeover flow (same
+            # permanence disclosure as the "I Control" button) -- this is
+            # the explicit, confirmed seizure path.
+            self._confirmed_takeover()
 
         def _save_pref():
             try:
@@ -1294,30 +1320,91 @@ class TacticsScreen(BaseScreen):
         load_pref_btn.clicked.connect(_load_pref)
         lay.addStretch(1)
 
-    def _hand_back_whiteboard(self):
+    def _warn_rs_unavailable(self, action):
+        """Fail-closed warning when the reputation service can't be reached.
+
+        Same actionable pattern as _apply_system_change: no raw control
+        flip, no silent shrug -- the mutation is blocked and the user is
+        told what to do.
+        """
+        QMessageBox.warning(
+            self, "Tactics",
+            f"The reputation service is unavailable, so the {action} "
+            "cannot be made with the coach's personality consequences "
+            "applied. No changes were made. Restart the application and "
+            "try again.")
+
+    def _confirmed_takeover(self):
+        """PERMANENT whiteboard seizure with permanence disclosure (mainline).
+
+        Shared by the Coach tab's "Take Over Whiteboard" button and the
+        "I Control" control button -- take_over_tactics is permanent and
+        personality-reactive, so BOTH routes go through the same confirm
+        dialog. Applies and clears staged changes on success (pending is
+        yours once you own the board). Fail-closed when the reputation
+        service is unavailable: no raw control flip.
+        Returns True if the takeover ran, False on cancel/unavailable.
+        """
         team = self._team
-        coach = self._head_coach(team)
-        # Personality-safe handback: trust repair, morale shift and room
-        # event fire inside (mainline parity). hand_back_tactics flips
-        # control to "coach" internally. This is NOT a takeover -- it is the
-        # explicit return of control (the takeover label on this button was
-        # the D-3 conflation bug).
+        # T4: _rs is None -> block with an actionable warning, never a
+        # consequence-free raw flip that pretends the full path ran.
+        if _rs is None:
+            self._warn_rs_unavailable("takeover")
+            return False
+        ans = QMessageBox.question(
+            self, "Take Over Whiteboard",
+            "Take permanent control of tactics from your head coach?\n"
+            "His reaction will depend on his personality.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ans != QMessageBox.Yes:
+            return False
         res = {}
-        if _rs is not None:
-            try:
-                res = _rs.hand_back_tactics(team) or {}
-            except Exception:
-                res = {}
+        try:
+            res = _rs.take_over_tactics(team, self._team_context()) or {}
+        except Exception:
+            res = {}
         if not res:
+            # Engine call failed mid-path -- fail closed, never flip raw.
+            self._warn_rs_unavailable("takeover")
+            return False
+        if res.get("changed"):
+            # Pending changes are yours now -- apply them (mainline).
             try:
-                _tx.set_tactics_control(team, "coach")
+                for cat, key in list(self._pending.items()):
+                    _tx.set_team_system(team, cat, key)
+                self._pending.clear()
             except Exception:
                 pass
+            text = res.get("text", "")
+            if text:
+                self._push_tactics_news(f"Tactics: {text}")
+        self._coach_msg = res.get(
+            "text",
+            "Whiteboard is yours. He will coach your systems and stop "
+            "adjusting mid-game.")
+        self.refresh()
+        return True
+
+    def _hand_back_whiteboard(self):
+        team = self._team
+        # Personality-safe handback: trust repair, morale shift and room
+        # event fire inside (mainline parity). hand_back_tactics flips
+        # control to "coach" internally; the engine docstring says
+        # "Systems stay; trust is repaired" and the QA suite pins handback
+        # as control-flip + trust repair only -- install_coach_systems is
+        # the head-coach-hire path, never a handback side effect (it also
+        # silently resets familiarity to 55). T5.
+        if _rs is None:
+            self._warn_rs_unavailable("handback")
+            return
+        res = {}
         try:
-            if coach is not None:
-                _tx.install_coach_systems(team, coach)
+            res = _rs.hand_back_tactics(team) or {}
         except Exception:
-            pass
+            res = {}
+        if not res:
+            self._warn_rs_unavailable("handback")
+            return
         if res.get("changed"):
             self._push_tactics_news(res.get("text", ""))
 
@@ -1333,27 +1420,19 @@ class TacticsScreen(BaseScreen):
         who = who if who in ("coach", "gm") else "coach"
         # Route through the personality engine so trust/morale/room-event
         # consequences fire (mainline parity); never flip control raw.
-        # NOTE: this is the legitimate PERMANENT control path (the "I Control"
-        # button) -- take_over_tactics belongs here and in the Coach tab's
-        # explicit "Take Over Whiteboard" button, never in the one-time
-        # Enforce flow.
-        res = {}
-        if _rs is not None:
-            try:
-                if who == "gm":
-                    res = _rs.take_over_tactics(self._team,
-                                                self._team_context()) or {}
-                else:
-                    res = _rs.hand_back_tactics(self._team) or {}
-            except Exception:
-                res = {}
-        if not res:
-            try:
-                _tx.set_tactics_control(self._team, who)
-            except Exception:
-                pass
-        if res.get("changed"):
-            self._push_tactics_news(res.get("text", ""))
+        # T1/T4: the "I Control" (gm) branch is a PERMANENT,
+        # personality-reactive takeover, so it runs through the SAME
+        # confirmed seizure flow as "Take Over Whiteboard" (same
+        # permanence disclosure dialog) instead of calling
+        # take_over_tactics unconfirmed. The "coach" branch is the same
+        # handback the "Hand Back Whiteboard" button runs.
+        if _rs is None:
+            self._warn_rs_unavailable("whiteboard change")
+            return
+        if who == "gm":
+            self._confirmed_takeover()
+        else:
+            self._hand_back_whiteboard()
         self.refresh()
 
     # ------------------------------------------------------------ practice
