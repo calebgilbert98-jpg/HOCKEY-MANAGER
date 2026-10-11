@@ -568,24 +568,49 @@ class CalendarScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _load_data(self):
         gm = _gm(self.game)
-        team = (_safe(lambda: gm.user_team)
-                or _safe(lambda: getattr(self.game, "user_team", None)))
-        self._my_name = (_safe(lambda: team.team_name, "") or "") if team \
-            else ""
-        today = _safe(lambda: gm.current_date)
+        team = (safe_call(lambda: gm.user_team,
+                          context="calendar/load_data/user_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None),
+                             context="calendar/load_data/fallback_user_team"))
+        self._my_name = (safe_call(lambda: team.team_name, "",
+                                   context="calendar/load_data/user_team_name")
+                         or "") if team else ""
+        today = safe_call(lambda: gm.current_date,
+                          context="calendar/load_data/current_date")
         self._today_iso = _iso(today)
         if not self._today_iso:
             self._today_iso = date.today().isoformat()
 
         games = {}
+        events = {}
         league = _league(self.game)
-        raw = _safe(lambda: list(getattr(league, "schedule", None)
-                                 or []), []) or []
+        entries = safe_call(
+            lambda: list(getattr(league, "schedule", None) or []), [],
+            context="calendar/load_data/schedule") or []
         # Played-state index (scores/OT/SO) from the real game results,
         # shared with the schedule screen so statuses always agree.
-        by_date = _safe(lambda: _results_by_date(self.game), {}) or {}
-        for g in raw:
+        by_date = safe_call(lambda: _results_by_date(self.game), {},
+                            context="calendar/load_data/results_by_date") or {}
+        for g in entries:
             try:
+                # Mainline parity: schedule-stamped NHL special events
+                # (all-star skills/game, trade deadline) are tuple entries
+                # the games loop below would otherwise skip.
+                if (isinstance(g, (tuple, list)) and len(g) >= 3
+                        and g[1] == "NHL_EVENT"):
+                    ed = _iso(g[0])
+                    edata = g[2] if isinstance(g[2], dict) else {}
+                    etype = edata.get("type", "")
+                    kind, label = {
+                        "all_star_skills":
+                            ("allstar", "All-Star Skills Competition"),
+                        "all_star_game": ("allstar", "All-Star Game"),
+                        "trade_deadline": ("deadline", "Trade Deadline"),
+                    }.get(etype, ("important",
+                                  str(edata.get("title", "") or etype)))
+                    if ed and label:
+                        self._add_event(events, ed, kind, label)
+                    continue
                 if not isinstance(g, dict):
                     continue
                 home = _team_name(g.get("home_team"))
@@ -594,9 +619,10 @@ class CalendarScreen(BaseScreen):
                 if not gd:
                     continue
                 mine = bool(self._my_name) and self._my_name in (home, away)
-                played, hs, aws, ot, so = _safe(
+                played, hs, aws, ot, so = safe_call(
                     lambda: _game_played_state(g, self.game, by_date),
-                    (False, None, None, False, False))
+                    (False, None, None, False, False),
+                    context="calendar/load_data/played_state")
                 games.setdefault(gd, []).append({
                     "home": home, "away": away, "mine": mine,
                     "is_home": bool(mine) and home == self._my_name,
@@ -606,31 +632,40 @@ class CalendarScreen(BaseScreen):
                     "played": played, "home_score": hs, "away_score": aws,
                     "overtime": ot, "shootout": so,
                 })
+                # Outdoor games stamped on the schedule (Winter Classic,
+                # Stadium Series) — ported from mainline.
+                od = g.get("outdoor")
+                if isinstance(od, dict) and od.get("event"):
+                    self._add_event(
+                        events, gd, "outdoor",
+                        f"{od.get('event')}: {away} @ {home}")
             except Exception:
                 continue
         self._games_by_date = games
 
-        events = {}
         # trade deadline
         try:
             from trade_deadline_manager import trade_deadline_date
             dd = trade_deadline_date(league)
             if dd:
-                events.setdefault(dd.isoformat(), []).append({
-                    "kind": "deadline", "label": "Trade Deadline"})
+                self._add_event(events, dd.isoformat(),
+                                "deadline", "Trade Deadline")
         except Exception:
             pass
         # entry draft (late June)
         try:
-            session = _safe(lambda: getattr(league, "entry_draft_session",
-                                           None))
-            dyear = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
+            session = safe_call(
+                lambda: getattr(league, "entry_draft_session", None),
+                context="calendar/load_data/draft_session")
+            dyear = safe_call(lambda: int(getattr(session, "year", 0) or 0),
+                              0, context="calendar/load_data/draft_year")
             if not dyear:
-                dyear = _safe(lambda: int(
-                    getattr(league, "season_year", 0) or 0), 0) + 1
+                dyear = safe_call(
+                    lambda: int(getattr(league, "season_year", 0) or 0),
+                    0, context="calendar/load_data/season_year_fallback") + 1
             if dyear:
-                events.setdefault(f"{dyear}-06-28", []).append(
-                    {"kind": "draft", "label": f"{dyear} Entry Draft"})
+                self._add_event(events, f"{dyear}-06-28",
+                                "draft", f"{dyear} Entry Draft")
         except Exception:
             pass
         # season bounds from the regular-season schedule
@@ -638,14 +673,154 @@ class CalendarScreen(BaseScreen):
             dates = sorted(gd for gd, gs in games.items()
                            if gd and not any(x["preseason"] for x in gs))
             if dates:
-                events.setdefault(dates[0], []).append(
-                    {"kind": "season", "label": "Opening Night"})
+                self._add_event(events, dates[0],
+                                "season", "Opening Night")
                 if dates[-1] != dates[0]:
-                    events.setdefault(dates[-1], []).append(
-                        {"kind": "season", "label": "Regular Season Ends"})
+                    self._add_event(events, dates[-1],
+                                    "season", "Regular Season Ends")
         except Exception:
             pass
+        # Mainline parity: marquee events, break days, fixed league dates.
+        self._add_marquee_events(events)
+        self._add_break_days_and_holidays(events)
+        self._add_important_dates(events)
         self._events_by_date = events
+
+    # ------------------------------------------------------------------
+    # Mainline calendar parity (calendar_window.py)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _add_event(events, iso, kind, label):
+        """Append one event, skipping exact (kind, label) duplicates."""
+        day = events.setdefault(iso, [])
+        if any(e.get("kind") == kind and e.get("label") == label
+               for e in day):
+            return
+        day.append({"kind": kind, "label": label})
+
+    def _season_year(self):
+        """Year the season started (e.g. 2026 for 2026-27).
+
+        Port of mainline's _get_season_year: league.season_year, falling
+        back to deriving from the current date (Jan-Sep => started last
+        year).
+        """
+        league = _league(self.game)
+        sy = safe_call(lambda: int(getattr(league, "season_year", 0) or 0),
+                       0, context="calendar/season_year")
+        if sy:
+            return sy
+        try:
+            cur = date.fromisoformat(self._today_iso[:10]) \
+                if self._today_iso else date.today()
+        except Exception:
+            cur = date.today()
+        return cur.year if cur.month >= 10 else cur.year - 1
+
+    def _add_marquee_events(self, events):
+        """Surface marquee calendar events the sim actually stages.
+
+        Port of mainline's _add_marquee_events:
+        - jersey-retirement ceremonies (the league's ceremony schedule,
+          skipped once the number is retired);
+        - the Olympic window in Olympic years (roster announcement Feb 9,
+          NHL dark Feb 10-24, medal games Feb 22).
+        Outdoor games are stamped on the schedule itself (handled in
+        _load_data). All additive; never crashes on a missing system.
+        """
+        league = _league(self.game)
+        season_year = self._season_year()
+        # -- Jersey ceremonies -------------------------------------
+        try:
+            import immortality as _im
+            sched = (safe_call(
+                lambda: getattr(league, "ceremony_schedule", None),
+                context="calendar/marquee/ceremony_schedule")
+                or _im.ceremony_schedule_for(season_year))
+            for c in sched or []:
+                try:
+                    y, m, d = (int(x) for x in
+                               str(c.get("date", ""))[:10].split("-"))
+                    ciso = date(y, m, d).isoformat()
+                except Exception:
+                    continue
+                team = next(
+                    (t for t in (getattr(league, "teams", None) or [])
+                     if getattr(t, "team_name", "") == c.get("team", "")),
+                    None)
+                if team is not None and safe_call(
+                        lambda: _im.is_number_retired(
+                            team, int(c.get("number", 0) or 0)),
+                        False,
+                        context="calendar/marquee/retired_check"):
+                    continue  # already in the rafters
+                self._add_event(
+                    events, ciso, "ceremony",
+                    f"Jersey retirement: {c.get('player', '')} "
+                    f"No. {c.get('number', '')} ({c.get('team', '')})")
+        except Exception:
+            pass
+        # -- Olympic window ----------------------------------------
+        try:
+            from international import is_olympic_year
+            if is_olympic_year(season_year + 1):
+                self._add_event(events, date(season_year + 1, 2, 9).isoformat(),
+                                "olympics", "Olympic rosters announced")
+                cur = date(season_year + 1, 2, 10)
+                while cur <= date(season_year + 1, 2, 24):
+                    # Styled as a break so the dark stretch reads on the
+                    # grid; the details dialog names it.
+                    self._add_event(events, cur.isoformat(), "break",
+                                    "Olympic break \u2014 NHL dark")
+                    cur += timedelta(days=1)
+                self._add_event(events, date(season_year + 1, 2, 22).isoformat(),
+                                "olympics", "Olympic medal games")
+        except Exception:
+            pass
+
+    def _add_break_days_and_holidays(self, events):
+        """All-Star / Christmas break days (port of mainline).
+
+        Days that already carry an all-star event from the schedule keep
+        their event instead of getting a generic break marker.
+        """
+        season_year = self._season_year()
+        cur = date(season_year + 1, 2, 5)
+        while cur <= date(season_year + 1, 2, 11):
+            iso = cur.isoformat()
+            if not any(e.get("kind") == "allstar"
+                       for e in events.get(iso, [])):
+                self._add_event(events, iso, "break", "All-Star Break")
+            cur += timedelta(days=1)
+        self._add_event(events, date(season_year, 12, 24).isoformat(),
+                        "break", "Christmas Break")
+        self._add_event(events, date(season_year, 12, 25).isoformat(),
+                        "xmas", "Christmas Day")
+
+    def _add_important_dates(self, events):
+        """Fixed league dates (port of mainline's _add_important_dates).
+
+        A date that already has events keeps them (mainline skips those
+        days). Mainline's fixed "Draft Day" (Jun 27) is intentionally not
+        ported: native derives the real draft date from the league's
+        entry_draft_session, and a second marker a day apart would
+        conflict with it.
+        """
+        season_year = self._season_year()
+        important = [
+            (date(season_year, 10, 8), "important", "Season Opener"),
+            (date(season_year + 1, 1, 1), "important", "New Year's Day"),
+            (date(season_year + 1, 2, 14), "important", "Valentine's Day"),
+            (date(season_year + 1, 4, 25), "important",
+             "Regular Season End"),
+            (date(season_year + 1, 4, 26), "important", "Playoffs Begin"),
+            (date(season_year + 1, 7, 1), "freeagency", "Free Agency"),
+        ]
+        for event_date, kind, label in important:
+            iso = event_date.isoformat()
+            if iso in events:
+                continue  # mainline: skip days that already have events
+            self._add_event(events, iso, kind, label)
 
     def _render_banner(self):
         league = _league(self.game)
@@ -661,7 +836,8 @@ class CalendarScreen(BaseScreen):
             self._banner.setVisible(False)
             return
         gm = _gm(self.game)
-        today = _safe(lambda: gm.current_date)
+        today = safe_call(lambda: gm.current_date,
+                          context="calendar/banner/current_date")
         try:
             today = today.date() if isinstance(today, datetime) else today
         except Exception:
@@ -734,7 +910,8 @@ class CalendarScreen(BaseScreen):
             self._render_grid()
             dlg = _DayDetailDialog(iso, games, events, self._my_name,
                                    self._today_iso, parent=self,
-                                   main_window=self.main_window)
+                                   main_window=self.main_window,
+                                   games_by_date=self._games_by_date)
             dlg.exec()
         except Exception as e:
             print(f"[calendar] day detail failed: {e}")
@@ -744,6 +921,61 @@ class CalendarScreen(BaseScreen):
                     f"Could not open the day details: {e}")
             except Exception:
                 pass
+
+    def _goto_screen(self, screen_name):
+        """Navigate to another screen from a calendar event marker."""
+        try:
+            if self.main_window is not None:
+                self.main_window.show_screen(screen_name)
+        except Exception:
+            pass
+
+    def _day_marker(self, iso, games, events):
+        """Priority marker badge for a day cell.
+
+        Port of mainline's _style_for_day priority: user game
+        (HOME/AWAY) > league games > all-star (ASG) > trade deadline
+        (TDL) > draft (DRAFT) > free agency (FA) > christmas (XMAS) >
+        ceremony (RETIRE) / outdoor (WC) / olympics (OLY) > break
+        (BREAK) > other events (!). Like mainline, today keeps its
+        game marker but drops event badges.
+        Returns (marker_text, emphasis) with emphasis one of
+        'home'/'away'/'event'/''.
+        """
+        kinds = [e.get("kind", "") for e in events]
+        marker, emphasis = "", ""
+        if any(g.get("mine") and g.get("is_home") for g in games):
+            marker, emphasis = "HOME", "home"
+        elif any(g.get("mine") and not g.get("is_home") for g in games):
+            marker, emphasis = "AWAY", "away"
+        elif games:
+            marker, emphasis = f"{len(games)} games", ""
+        elif "allstar" in kinds:
+            marker, emphasis = "ASG", "event"
+        elif "deadline" in kinds:
+            marker, emphasis = "TDL", "event"
+        elif "draft" in kinds:
+            marker, emphasis = "DRAFT", "event"
+        elif "freeagency" in kinds:
+            marker, emphasis = "FA", "event"
+        elif "xmas" in kinds:
+            marker, emphasis = "XMAS", "event"
+        elif "ceremony" in kinds:
+            marker, emphasis = "RETIRE", "event"
+        elif "outdoor" in kinds:
+            marker, emphasis = "WC", "event"
+        elif "olympics" in kinds:
+            marker, emphasis = "OLY", "event"
+        elif "break" in kinds:
+            marker, emphasis = "BREAK", "event"
+        elif kinds:
+            marker, emphasis = "!", "event"
+        if iso == self._today_iso and emphasis not in ("home", "away"):
+            # Today keeps its game marker but not the event badge.
+            marker = "" if emphasis == "event" else marker
+            if emphasis == "event":
+                emphasis = ""
+        return marker, emphasis
 
     def _day_cell(self, day_num, iso, games, events):
         cell = _DayCell(iso)
@@ -766,13 +998,17 @@ class CalendarScreen(BaseScreen):
             dl.setAlignment(Qt.AlignLeft)
         dl.setStyleSheet(style)
         cl.addWidget(dl)
+        # Mainline parity: one priority badge per day (HOME/AWAY/"N games"
+        # on game days, ASG/TDL/DRAFT/FA/XMAS/RETIRE/WC/OLY/BREAK/! on
+        # event days) instead of the plain counts.
+        marker, emphasis = self._day_marker(iso, games, events)
         mine = [g for g in games if g["mine"]]
-        others = [g for g in games if not g["mine"]]
         if mine:
-            gl = QLabel(f"{len(mine)} game{'s' if len(mine) != 1 else ''}")
-            gl.setStyleSheet(
-                "font-size: 11px; font-weight: 700; color: #3B82F6;")
-            cl.addWidget(gl)
+            badge = QLabel(marker)  # HOME or AWAY
+            badge.setStyleSheet(
+                "font-size: 10px; font-weight: 800; color: "
+                f"{'#3B82F6' if emphasis == 'home' else '#0ea5b7'};")
+            cl.addWidget(badge)
             for g in mine[:2]:
                 opp = g['opponent'] or g['away']
                 pre = 'vs' if g['is_home'] else '@'
@@ -802,15 +1038,45 @@ class CalendarScreen(BaseScreen):
             gl = QLabel(f"{len(games)} league")
             gl.setStyleSheet("font-size: 11px; color: #6b7488;")
             cl.addWidget(gl)
+        elif marker:
+            # Event-day badge (ASG/TDL/DRAFT/FA/XMAS/RETIRE/WC/OLY/BREAK/!).
+            badge = QLabel(marker)
+            badge.setStyleSheet(
+                "font-size: 10px; font-weight: 800; color: #e8b34b;")
+            cl.addWidget(badge)
+        # Event markers are clickable (E-15): deadline/draft markers
+        # navigate straight to the Deadline Center / Draft Day Central;
+        # every other marker opens the day-detail dialog, the same panel
+        # clicking the day cell itself opens.
         for ev in events:
             kind = ev.get("kind", "")
             icon = {"deadline": "\u23F0", "draft": "\U0001F3AF",
-                    "season": "\U0001F3C1"}.get(kind, "\u2022")
-            el = QLabel(f"{icon} {ev.get('label', '')}")
-            el.setStyleSheet(
-                "font-size: 10px; font-weight: 700; color: #e8b34b;")
-            el.setWordWrap(True)
-            cl.addWidget(el)
+                    "season": "\U0001F3C1", "allstar": "\u2B50",
+                    "ceremony": "\U0001F3A9", "olympics": "\U0001F3C5",
+                    "outdoor": "\u2744\uFE0F", "freeagency": "\U0001F4B0",
+                    "break": "\u23F8\uFE0F", "xmas": "\U0001F384",
+                    "important": "\u2757"}.get(kind, "\u2022")
+            full = str(ev.get("label", ""))
+            short = full if len(full) <= 30 else full[:29] + "\u2026"
+            target = {"deadline": "deadline",
+                      "draft": "draft_central"}.get(kind)
+            btn = QPushButton(f"{icon} {short}")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton { font-size: 10px; font-weight: 700; "
+                "color: #e8b34b; background: transparent; border: none; "
+                "padding: 0px; text-align: left; } "
+                "QPushButton:hover { color: #f5c86e; "
+                "text-decoration: underline; }")
+            if target:
+                btn.setToolTip(f"Open {full}")
+                btn.clicked.connect(
+                    lambda _c=False, t=target: self._goto_screen(t))
+            else:
+                btn.setToolTip(f"Day details: {full}")
+                btn.clicked.connect(
+                    lambda _c=False, i=iso: self._show_day_detail(i))
+            cl.addWidget(btn)
         cl.addStretch()
         return cell
 
