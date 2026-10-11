@@ -2330,10 +2330,13 @@ class MainWindow(QMainWindow):
             if blockers:
                 self.show_blockers(blockers)
                 return
-            # Heavy-sim confirmation + fallback save (standard pattern).
+            # Fallback save before the sim (standard pattern). NOTE: a single
+            # day is not a heavy sim, so the ask_heavy_sim confirmation gate
+            # is deliberately NOT applied here -- gating every Continue
+            # click would contradict mainline UX and no-op under automation.
             try:
                 from native_ui.dialogs.sim_progress import (
-                    run_threaded, create_fallback_save, ask_heavy_sim)
+                    run_threaded, create_fallback_save)
             except Exception as e:
                 print(f"[native] sim progress import failed: {e}")
                 # Fall back to synchronous sim if the dialog is unavailable.
