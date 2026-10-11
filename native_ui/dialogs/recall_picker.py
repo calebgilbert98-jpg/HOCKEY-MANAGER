@@ -18,12 +18,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 class RecallPickerDialog(QDialog):
@@ -69,7 +64,8 @@ class RecallPickerDialog(QDialog):
         try:
             import roster_limits as _rl
             game = getattr(self.game, "game_manager", None) or self.game
-            team = _safe(lambda: game.user_team)
+            team = safe_call(lambda: game.user_team,
+                               context="recall_picker/load_user_team")
             if team is None:
                 return
             sk_need, go_need = _rl.lineup_shortfall(team)
@@ -141,7 +137,8 @@ def maybe_open_recall_picker(game, parent=None):
     try:
         import roster_limits as _rl
         gm = getattr(game, "game_manager", None) or game
-        team = _safe(lambda: gm.user_team)
+        team = safe_call(lambda: gm.user_team,
+                           context="recall_picker/load_user_team")
         if team is None:
             return None
         sk_need, go_need = _rl.lineup_shortfall(team)
