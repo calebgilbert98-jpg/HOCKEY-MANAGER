@@ -35,13 +35,13 @@ from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="recall_picker/resolve_gm") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: gm.user_team)
-            or safe_call(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="recall_picker/resolve_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="recall_picker/resolve_user_team"))
 
 
 _POSITION_ABBR = {
@@ -52,7 +52,7 @@ _POSITION_ABBR = {
 
 
 def _pos_str(p):
-    pos = safe_call(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="recall_picker/player_position")
     raw = getattr(pos, "value", pos)
     try:
         s = str(raw or "")
@@ -65,9 +65,9 @@ def _pos_str(p):
 
 
 def _player_name(p):
-    first = safe_call(lambda: getattr(p, "first_name", ""), "") or ""
-    last = safe_call(lambda: getattr(p, "last_name", ""), "") or ""
-    full = safe_call(lambda: getattr(p, "full_name", ""), "") or ""
+    first = safe_call(lambda: getattr(p, "first_name", ""), "", context="recall_picker/player_first_name") or ""
+    last = safe_call(lambda: getattr(p, "last_name", ""), "", context="recall_picker/player_last_name") or ""
+    full = safe_call(lambda: getattr(p, "full_name", ""), "", context="recall_picker/player_full_name") or ""
     name = full or (first + " " + last).strip()
     return name or "?"
 
@@ -225,7 +225,8 @@ class RecallPickerScreen(BaseScreen):
             sal = _rl._player_nhl_salary(p)
             two_way = bool(safe_call(
                 lambda: getattr(getattr(p, "contract", None),
-                                "two_way", False), False))
+                                "two_way", False), False,
+                                     context="recall_picker/player_two_way"))
             fits = _rl._recall_fits_cap(team, p)
 
             name = _player_name(p)
