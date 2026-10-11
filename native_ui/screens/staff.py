@@ -1,8 +1,10 @@
 """Staff screen: coaches & management.
 
 Three tabs (lazy-loaded, one at a time): Staff list, Org Chart, Staff Report.
-Per-staff actions: Release (confirm dialog mentioning severance) and
-Reassign (modal dialog with role selector). Staff are grouped by role;
+Per-staff actions: Negotiate (multi-round contract negotiation with
+persist/resume chain), Release (confirm dialog mentioning severance),
+Reassign (modal dialog with role selector), Declare Rival (personal
+rivalry via the reputation system). Staff are grouped by role;
 names click through to StaffDetailScreen.
 
 Calls the game object directly -- no HTTP, no serialization.
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
     QFrame, QScrollArea, QDialog, QComboBox, QMessageBox, QGridLayout,
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
+    QLineEdit, QSpinBox, QFormLayout,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -114,6 +117,334 @@ def _staff_status(s):
     return "Unhappy"
 
 
+# ---------------------------------------------------------------------------
+# Negotiate-chain persist/resume (D-16 port of mainline's
+# staff_management_window.py "Gating: staff negotiate-chain persist/resume").
+#
+# Mainline keeps the chain in app.pending_sessions ("staff_negotiate_chain",
+# JSON-safe: staff IDs + result strings only): write-through on start and
+# every advance; navigating away mid-step parks it (resume question on
+# return, dismiss = keep parked); a parked chain survives save/load and
+# resumes via its named resolver with stale IDs skipped honestly.
+#
+# Native port: the same session schema lives on the game manager's
+# pending_sessions dict (the object GameSaveManager wraps). Root-cause
+# note: GameSaveManager._serializable_team_talk_sessions() and
+# _restore_team_talk_sessions() read self.app.pending_sessions, but
+# GameSaveManager.app is never assigned anywhere in mainline, so the
+# whitelisted chain kind could never actually survive save/load there.
+# _ensure_save_bridge() repairs that dead wiring from here (assigns
+# save_manager.app to the session owner, only when unset);
+# save_load_system.py itself is untouched.
+#
+# The in-progress multi-round step is part of the session ("step"):
+# round number, offer history, half-typed draft offer, and the staffer's
+# demands snapshot -- all JSON-safe, so a mid-negotiation save/load
+# resumes at the exact round with the exact state.
+# ---------------------------------------------------------------------------
+_CHAIN_SESSION_ID = "staff_negotiate_chain"
+_CHAIN_KIND = "staff_negotiate_chain"
+
+
+def _chain_owner(game):
+    """Object owning pending_sessions (the one the save manager wraps)."""
+    try:
+        return getattr(game, "game_manager", None) or game
+    except Exception:
+        return game
+
+
+def _chain_store(game):
+    """The pending_sessions dict (created on demand). Never raises."""
+    owner = _chain_owner(game)
+    try:
+        store = getattr(owner, "pending_sessions", None)
+        if not isinstance(store, dict):
+            store = {}
+            owner.pending_sessions = store
+        return store
+    except Exception:
+        return {}
+
+
+def _ensure_save_bridge(game):
+    """Point GameSaveManager.app at the session owner so the whitelisted
+    chain kind actually survives save/load (mainline's intended design;
+    its wiring was dead). Only assigns when unset. Never raises."""
+    try:
+        owner = _chain_owner(game)
+        sm = getattr(owner, "save_manager", None)
+        if sm is None:
+            return
+        if getattr(sm, "app", None) is None:
+            sm.app = owner
+    except Exception:
+        pass
+
+
+def _chain_session(game):
+    """The live chain session dict, or None. Never raises."""
+    try:
+        sess = _chain_store(game).get(_CHAIN_SESSION_ID)
+        return sess if isinstance(sess, dict) else None
+    except Exception:
+        return None
+
+
+def _drop_chain(game):
+    """Consume the chain session (exactly-once completion/discard)."""
+    try:
+        _chain_store(game).pop(_CHAIN_SESSION_ID, None)
+    except Exception:
+        pass
+
+
+def _touch_chain(game, **fields):
+    """Write-through update of the chain session (creates it if missing).
+    Every value must stay JSON-safe. Never raises."""
+    try:
+        _ensure_save_bridge(game)
+        store = _chain_store(game)
+        sess = store.get(_CHAIN_SESSION_ID)
+        if not isinstance(sess, dict):
+            sess = {"kind": _CHAIN_KIND}
+            store[_CHAIN_SESSION_ID] = sess
+        sess["kind"] = _CHAIN_KIND
+        for key, value in fields.items():
+            sess[key] = value
+        return sess
+    except Exception:
+        return None
+
+
+class _StaffNegotiationDialog(QDialog):
+    """Multi-round staff contract negotiation (D-16 port of mainline's
+    StaffContractView renegotiate flow: demands + offer + accept/reject
+    roll via staff.negotiate_contract()).
+
+    step: the persisted in-progress step dict (mutated in place):
+      {staff_id, round, offers:[{salary, years, result}], draft_salary,
+       draft_years, demands:{salary, years}}
+    Every keystroke writes through via on_draft; every offer via on_offer;
+    closing without agreement parks via on_walk_away (mainline: cancel
+    keeps the session for resume).
+    """
+
+    def __init__(self, parent, staff, step, on_draft, on_offer,
+                 on_walk_away):
+        super().__init__(parent)
+        self._staff = staff
+        self._step = step
+        self._on_draft = on_draft
+        self._on_offer = on_offer
+        self._on_walk_away = on_walk_away
+        self._resolved = False
+        self._walked_away = False
+
+        name = _staff_name(staff)
+        self.setWindowTitle(f"Contract Negotiation \u2014 {name}")
+        self.setMinimumWidth(480)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        title = QLabel(f"Negotiating with {name}")
+        title.setObjectName("dialog-title")
+        lay.addWidget(title)
+        self._round_lbl = QLabel("")
+        self._round_lbl.setStyleSheet("color: #8b95ab; font-size: 13px;")
+        lay.addWidget(self._round_lbl)
+
+        # Demands card (the staffer's stance -- snapshot, survives reload).
+        demands = step.get("demands") or {}
+        try:
+            d_sal = int(demands.get("salary") or 0)
+        except Exception:
+            d_sal = 0
+        try:
+            d_yrs = int(demands.get("years") or 0)
+        except Exception:
+            d_yrs = 0
+        dcard = QFrame()
+        dcard.setObjectName("tile")
+        dl = QVBoxLayout(dcard)
+        dl.setContentsMargins(12, 8, 12, 8)
+        dl.setSpacing(2)
+        dh = QLabel("Current Demands")
+        dh.setStyleSheet("font-size: 12px; font-weight: 700;")
+        dl.addWidget(dh)
+        dd = QLabel(f"Asking salary: {_fmt_money(d_sal)}/yr \u00b7 "
+                    f"Contract length: {d_yrs or '?'} year"
+                    f"{'s' if d_yrs != 1 else ''}")
+        dd.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        dl.addWidget(dd)
+        lay.addWidget(dcard)
+
+        # Offer history (this negotiation's rounds).
+        self._history_lbl = QLabel("")
+        self._history_lbl.setStyleSheet(
+            "color: #8b95ab; font-size: 12px;")
+        self._history_lbl.setWordWrap(True)
+        lay.addWidget(self._history_lbl)
+
+        # Offer frame.
+        form = QFormLayout()
+        form.setSpacing(8)
+        self._salary_edit = QLineEdit(str(step.get("draft_salary") or ""))
+        self._salary_edit.setPlaceholderText("e.g. 850000")
+        self._salary_edit.textChanged.connect(self._emit_draft)
+        form.addRow("Salary offer ($ / year):", self._salary_edit)
+        self._years_spin = QSpinBox()
+        self._years_spin.setRange(1, 5)
+        try:
+            self._years_spin.setValue(
+                max(1, min(5, int(step.get("draft_years") or 2))))
+        except Exception:
+            self._years_spin.setValue(2)
+        self._years_spin.valueChanged.connect(self._emit_draft)
+        form.addRow("Contract length (years):", self._years_spin)
+        lay.addLayout(form)
+
+        self._result_lbl = QLabel("")
+        self._result_lbl.setStyleSheet("font-size: 13px;")
+        self._result_lbl.setWordWrap(True)
+        lay.addWidget(self._result_lbl)
+
+        row = QHBoxLayout()
+        walk = QPushButton("Walk Away")
+        walk.setCursor(Qt.PointingHandCursor)
+        walk.setToolTip("Pause this negotiation -- it stays parked and "
+                        "resumable from the Staff screen")
+        walk.clicked.connect(self.reject)
+        row.addWidget(walk)
+        row.addStretch()
+        offer_btn = QPushButton("Make Offer")
+        offer_btn.setObjectName("primary-btn")
+        offer_btn.setCursor(Qt.PointingHandCursor)
+        offer_btn.clicked.connect(self._make_offer)
+        row.addWidget(offer_btn)
+        lay.addLayout(row)
+
+        self._refresh_state()
+
+    # -- internal ------------------------------------------------------
+    def _emit_draft(self, *_a):
+        try:
+            self._on_draft(self._salary_edit.text(),
+                           str(self._years_spin.value()))
+        except Exception:
+            pass
+
+    def _refresh_state(self):
+        step = self._step
+        self._round_lbl.setText(
+            f"{_staff_role_value(self._staff)} \u00b7 "
+            f"Round {int(step.get('round') or 1)}")
+        offers = step.get("offers") or []
+        if offers:
+            lines = []
+            for i, o in enumerate(offers, 1):
+                try:
+                    lines.append(
+                        f"Round {i}: {_fmt_money(int(o.get('salary') or 0))}"
+                        f" \u00d7 {int(o.get('years') or 0)}y \u2014 "
+                        f"{o.get('result', '?')}")
+                except Exception:
+                    continue
+            self._history_lbl.setText("Offer history:\n" + "\n".join(lines))
+        else:
+            self._history_lbl.setText("No offers yet this negotiation.")
+
+    def _parse_offer(self):
+        raw = self._salary_edit.text().strip()
+        raw = raw.replace("$", "").replace(",", "").replace(" ", "")
+        try:
+            salary = int(float(raw))
+        except Exception:
+            return None, None
+        years = int(self._years_spin.value())
+        if salary <= 0 or not 1 <= years <= 5:
+            return None, None
+        return salary, years
+
+    def _make_offer(self):
+        salary, years = self._parse_offer()
+        if salary is None:
+            QMessageBox.warning(
+                self, "Invalid Offer",
+                "Enter a positive salary and a term of 1\u20135 years.")
+            return
+        staff = self._staff
+        try:
+            accepted = bool(staff.negotiate_contract(salary, years))
+        except Exception:
+            accepted = False
+        offer = {"salary": int(salary), "years": int(years)}
+        # Record the round + write through BEFORE the callback advances.
+        offers = list(self._step.get("offers") or [])
+        offers.append({"salary": int(salary), "years": int(years),
+                       "result": "accepted" if accepted else "rejected"})
+        self._step["offers"] = offers
+        if not accepted:
+            self._step["round"] = int(self._step.get("round") or 1) + 1
+        self._step["draft_salary"] = str(salary)
+        self._step["draft_years"] = str(years)
+        try:
+            self._on_offer(self, offer, accepted)
+        except Exception:
+            pass
+        if not accepted:
+            self._result_lbl.setText(
+                "Offer rejected. Try adjusting your offer.")
+            self._result_lbl.setStyleSheet(
+                "font-size: 13px; color: #ff8a8a;")
+            self._refresh_state()
+
+    def mark_resolved(self):
+        """The step ended in agreement -- do not park on close."""
+        self._resolved = True
+
+    def closeEvent(self, event):
+        # Mainline parity: tearing down the open step without resolution
+        # parks the chain (resume question on return, never silent loss).
+        if not self._resolved and not self._walked_away:
+            self._walked_away = True
+            try:
+                self._on_walk_away()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+
+def _start_chain_session(game, staff_list):
+    """Begin a fresh chain: pops any previous session, writes the new one
+    write-through. staff_list: live staff objects, in chain order."""
+    try:
+        _drop_chain(game)
+        ids = []
+        names = {}
+        for s in staff_list or []:
+            sid = str(safe_call(lambda: getattr(s, "id", ""),
+                                "", context="chain staff id") or "")
+            if not sid:
+                continue
+            ids.append(sid)
+            names[sid] = _staff_name(s)
+        sess = _touch_chain(
+            game,
+            remaining_staff_ids=ids,
+            completed_results=[],
+            total=len(ids),
+            step_open=ids[0] if ids else None,
+            staff_names=names,
+            step=None,
+            parked=False,
+            notice_message_id=None,
+        )
+        return sess
+    except Exception:
+        return None
+
+
 class StaffScreen(BaseScreen):
     """Coaches & management."""
 
@@ -193,6 +524,9 @@ class StaffScreen(BaseScreen):
         self._load_data()
         self._loaded = {0: False, 1: False, 2: False, 3: False}
         self._on_tab_changed(self._tabs.currentIndex())
+        # D-16: a parked negotiate chain re-presents its resume question
+        # whenever the Staff screen is (re)shown.
+        self._maybe_resume_parked_chain()
 
     def _on_tab_changed(self, idx):
         if self._loaded.get(idx):
@@ -332,6 +666,12 @@ class StaffScreen(BaseScreen):
         # Actions
         row = QHBoxLayout()
         row.setSpacing(8)
+        negotiate_btn = QPushButton("Negotiate")
+        negotiate_btn.setCursor(Qt.PointingHandCursor)
+        negotiate_btn.setToolTip(
+            "Negotiate a new contract -- multi-round, parks and resumes")
+        negotiate_btn.clicked.connect(
+            lambda _=False, staff=s: self._negotiate_contract(staff))
         reassign_btn = QPushButton("Reassign Role")
         reassign_btn.setCursor(Qt.PointingHandCursor)
         reassign_btn.clicked.connect(
@@ -344,8 +684,16 @@ class StaffScreen(BaseScreen):
             "QPushButton:hover { background-color: #4d2329; }")
         release_btn.clicked.connect(
             lambda _=False, staff=s: self._release_staff(staff))
+        rival_btn = QPushButton("Declare Rival")
+        rival_btn.setCursor(Qt.PointingHandCursor)
+        rival_btn.setToolTip(
+            "Declare a personal rivalry with this staffer")
+        rival_btn.clicked.connect(
+            lambda _=False, staff=s: self._declare_rival_staff(staff))
+        row.addWidget(negotiate_btn)
         row.addWidget(reassign_btn)
         row.addWidget(release_btn)
+        row.addWidget(rival_btn)
         row.addStretch()
         v.addLayout(row)
         return card
@@ -956,6 +1304,464 @@ class StaffScreen(BaseScreen):
         except Exception as e:
             QMessageBox.warning(self, "Staff",
                                 f"Could not open staff profile: {e}")
+
+    # --- contract negotiation chain (D-16 port) ---------------------------
+    # Mainline parity: negotiate_selected_staff()/_negotiate_chain() run a
+    # chained series of renegotiation steps (demands + offer +
+    # staff.negotiate_contract() roll). The chain is write-through
+    # persisted (JSON-safe); walking away mid-step parks it; the Staff
+    # screen re-presents the resume question; save/load resumes at the
+    # exact round with offer history, demands, and draft offer intact.
+
+    @staticmethod
+    def _staff_id(staff):
+        return str(safe_call(lambda: getattr(staff, "id", ""), "",
+                             context="negotiate staff id") or "")
+
+    def _live_staff_by_id(self):
+        team = self._user_team()
+        out = {}
+        try:
+            for s in (safe_call(
+                    lambda: list(getattr(team, "staff", []) or []), [],
+                    context="chain live staff") or []):
+                sid = self._staff_id(s)
+                if sid:
+                    out[sid] = s
+        except Exception:
+            pass
+        return out
+
+    def _fresh_step(self, staff):
+        try:
+            sal = int(safe_call(lambda: getattr(staff, "salary", 0), 0,
+                                context="fresh step salary") or 0)
+        except Exception:
+            sal = 0
+        try:
+            yrs = int(safe_call(lambda: getattr(staff, "contract_years", 2),
+                                2, context="fresh step years") or 2)
+        except Exception:
+            yrs = 2
+        return {
+            "staff_id": self._staff_id(staff),
+            "round": 1,
+            "offers": [],
+            "draft_salary": str(sal),
+            "draft_years": str(max(1, min(5, yrs))),
+            "demands": {"salary": sal,
+                        "years": max(1, min(5, yrs))},
+        }
+
+    @staticmethod
+    def _sanitize_step(saved, staff):
+        """Defensive rebuild of a restored step (old/foreign saves)."""
+        try:
+            rnd = max(1, int(saved.get("round") or 1))
+        except Exception:
+            rnd = 1
+        offers = []
+        for o in (saved.get("offers") or []):
+            if not isinstance(o, dict):
+                continue
+            try:
+                offers.append({
+                    "salary": int(o.get("salary") or 0),
+                    "years": int(o.get("years") or 0),
+                    "result": str(o.get("result") or "rejected"),
+                })
+            except Exception:
+                continue
+        demands = saved.get("demands") \
+            if isinstance(saved.get("demands"), dict) else {}
+        try:
+            dsal = int(demands.get("salary")
+                       or getattr(staff, "salary", 0) or 0)
+        except Exception:
+            dsal = 0
+        try:
+            dyrs = int(demands.get("years")
+                       or getattr(staff, "contract_years", 2) or 2)
+        except Exception:
+            dyrs = 2
+        return {
+            "staff_id": str(getattr(staff, "id", "") or ""),
+            "round": rnd,
+            "offers": offers,
+            "draft_salary": str(saved.get("draft_salary") or ""),
+            "draft_years": str(saved.get("draft_years") or ""),
+            "demands": {"salary": dsal,
+                        "years": max(1, min(5, dyrs))},
+        }
+
+    def _negotiate_contract(self, staff):
+        """Entry point: negotiate a new contract (chain of one)."""
+        team = self._user_team()
+        if team is None:
+            QMessageBox.warning(self, "Negotiate Contract",
+                                "No team loaded.")
+            return
+        sid = self._staff_id(staff)
+        if not sid or sid not in self._live_staff_by_id():
+            QMessageBox.warning(
+                self, "Negotiate Contract",
+                f"{_staff_name(staff)} is no longer on the staff.")
+            return
+        _start_chain_session(self.game, [staff])
+        step = self._fresh_step(staff)
+        _touch_chain(self.game, step=dict(step))
+        self._open_negotiation_dialog(staff, step, [])
+
+    def _open_negotiation_dialog(self, staff, step, results):
+        def _on_draft(salary_text, years_text):
+            step["draft_salary"] = str(salary_text or "")
+            step["draft_years"] = str(years_text or "")
+            _touch_chain(self.game, step=dict(step))
+
+        def _on_offer(dlg, offer, accepted):
+            _touch_chain(self.game, step=dict(step))
+            if not accepted:
+                return
+            try:
+                staff.salary = int(offer["salary"])
+                staff.contract_years = int(offer["years"])
+            except Exception:
+                pass
+            results.append(
+                f"{_staff_name(staff)}: agreement reached")
+            dlg.mark_resolved()
+            dlg.accept()
+            self._chain_advance(results)
+
+        def _on_walk_away():
+            # Park: keep the session (step_open + step intact) and post
+            # the resume notice. No re-prompt now -- the Staff screen
+            # re-presents the resume question on return.
+            _touch_chain(self.game, parked=True)
+            self._post_park_notice()
+
+        dlg = _StaffNegotiationDialog(self, staff, step, _on_draft,
+                                      _on_offer, _on_walk_away)
+        dlg.exec()
+
+    def _chain_advance(self, results):
+        """Advance the chain past the finished step (mainline
+        _negotiate_chain parity)."""
+        sess = _chain_session(self.game)
+        if not isinstance(sess, dict):
+            self.refresh()
+            return
+        remaining = [str(i)
+                     for i in (sess.get("remaining_staff_ids") or [])]
+        names = dict(sess.get("staff_names") or {})
+        if remaining:
+            remaining = remaining[1:]  # consume the finished step
+        _touch_chain(
+            self.game,
+            remaining_staff_ids=remaining,
+            completed_results=[str(r) for r in results],
+            step_open=remaining[0] if remaining else None,
+            step=None,
+            parked=False,
+        )
+        if not remaining:
+            self._chain_complete(results)
+            return
+        live = self._live_staff_by_id()
+        nxt = live.get(remaining[0])
+        if nxt is None:
+            # Stale ID: honest digest note, never a crash (mainline).
+            results.append(
+                f"{names.get(remaining[0], remaining[0])}: "
+                "no longer on staff -- skipped")
+            self._chain_advance(results)
+            return
+        step = self._fresh_step(nxt)
+        _touch_chain(self.game, step=dict(step),
+                     staff_names={remaining[0]: _staff_name(nxt)})
+        self._open_negotiation_dialog(nxt, step, results)
+
+    def _chain_complete(self, results):
+        """Land the chain: consume the session FIRST (exactly-once),
+        clear the park notice, post one digest. Mainline parity."""
+        sess = _chain_session(self.game)
+        _drop_chain(self.game)
+        self._clear_park_notice(sess)
+        if results:
+            content = ("Contract negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results))
+            try:
+                team = self._user_team()
+                inbox = safe_call(lambda: getattr(team, "inbox", None),
+                                  None, context="chain digest inbox")
+                msgs = safe_call(
+                    lambda: list(getattr(inbox, "messages", []) or []),
+                    [], context="chain digest scan") or []
+                already = any(
+                    getattr(m, "subject", "")
+                    == "Staff Negotiation Results"
+                    and getattr(m, "content", "") == content
+                    for m in msgs)
+                if not already:
+                    from game_classes import EmailMessage
+                    from datetime import date
+                    gm = _chain_owner(self.game)
+                    send = safe_call(
+                        lambda: getattr(gm, "send_email_to_user", None),
+                        None, context="chain digest sender")
+                    if callable(send):
+                        send(EmailMessage(
+                            sender="System", sender_type="System",
+                            date_sent=date.today(), category="Contracts",
+                            priority=2,
+                            subject="Staff Negotiation Results",
+                            content=content))
+            except Exception:
+                pass
+        self.refresh()
+
+    def _post_park_notice(self):
+        """Idempotent park-time inbox notice (mainline priority-3 pill)."""
+        sess = _chain_session(self.game)
+        if not isinstance(sess, dict) or sess.get("notice_message_id"):
+            return
+        try:
+            from game_classes import EmailMessage
+            from datetime import date
+            remaining = [str(i)
+                         for i in (sess.get("remaining_staff_ids") or [])]
+            total = int(sess.get("total") or len(remaining) or 0)
+            names = dict(sess.get("staff_names") or {})
+            first = [str(names.get(sid, sid)) for sid in remaining[:3]]
+            detail = (f"{len(remaining)} of {total} negotiations remaining"
+                      + (f" ({', '.join(first)}"
+                         + ("..." if len(remaining) > 3 else "") + ")"
+                         if first else ""))
+            gm = _chain_owner(self.game)
+            send = safe_call(
+                lambda: getattr(gm, "send_email_to_user", None), None,
+                context="park notice sender")
+            if not callable(send):
+                return
+            msg = EmailMessage(
+                sender="System", sender_type="System",
+                date_sent=date.today(), category="Contracts",
+                priority=3, subject="Staff negotiations parked",
+                content=(f"Contract negotiations paused -- {detail}.\n"
+                         "Resume any time from the Staff screen."))
+            send(msg)
+            _touch_chain(self.game,
+                         notice_message_id=getattr(msg, "id", None))
+        except Exception:
+            pass
+
+    def _clear_park_notice(self, sess):
+        """Delete the park-time inbox notice, if it still exists."""
+        try:
+            mid = (sess or {}).get("notice_message_id")
+            if not mid:
+                return
+            team = self._user_team()
+            inbox = safe_call(lambda: getattr(team, "inbox", None),
+                              None, context="clear notice inbox")
+            deleter = safe_call(
+                lambda: getattr(inbox, "delete_message", None), None,
+                context="clear notice deleter")
+            if callable(deleter):
+                deleter(mid)
+        except Exception:
+            pass
+
+    def _maybe_resume_parked_chain(self):
+        """Re-present the resume question when returning to the Staff
+        screen with a parked chain. Dismiss (X/Esc) = keep parked, never
+        auto-answer (mainline parity)."""
+        sess = _chain_session(self.game)
+        if not isinstance(sess, dict) or not sess.get("parked"):
+            return
+        if getattr(self, "_resume_asked", False):
+            return
+        self._resume_asked = True
+        remaining = [str(i)
+                     for i in (sess.get("remaining_staff_ids") or [])]
+        total = int(sess.get("total") or len(remaining) or 0)
+        names = dict(sess.get("staff_names") or {})
+        first = ", ".join(str(names.get(sid, sid)) for sid in remaining[:3])
+        detail = f"{len(remaining)} of {total} negotiations remaining"
+        if first:
+            detail += (f" ({first}"
+                       + ("..." if len(remaining) > 3 else "") + ")")
+        box = QMessageBox(self)
+        box.setWindowTitle("Resume negotiations?")
+        box.setText(
+            f"Contract negotiations paused -- {detail}.\n\n"
+            "Resume where you left off, or discard the remaining "
+            "negotiations.")
+        resume_btn = box.addButton("Resume", QMessageBox.AcceptRole)
+        box.addButton("Discard", QMessageBox.DestructiveRole)
+        box.setDefaultButton(resume_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == resume_btn:
+            self._resume_asked = False
+            self._resume_chain()
+        elif clicked is None:
+            # Dismissed: keep parked; allow re-prompt on next return.
+            self._resume_asked = False
+        else:
+            self._resume_asked = False
+            _drop_chain(self.game)
+            self.refresh()
+
+    def _resume_chain(self):
+        """Resume a parked chain: revalidate IDs, restore the exact step
+        (round, offer history, demands, draft), reopen the dialog."""
+        sess = _chain_session(self.game)
+        if not isinstance(sess, dict):
+            return
+        _touch_chain(self.game, parked=False)
+        self._clear_park_notice(sess)
+        remaining = [str(i)
+                     for i in (sess.get("remaining_staff_ids") or [])]
+        names = dict(sess.get("staff_names") or {})
+        results = [str(r) for r in (sess.get("completed_results") or [])]
+        live = self._live_staff_by_id()
+        staff_objs = []
+        for sid in remaining:
+            s = live.get(sid)
+            if s is None:
+                results.append(f"{names.get(sid, sid)}: "
+                               "no longer on staff -- skipped")
+            else:
+                staff_objs.append(s)
+        if not staff_objs:
+            self._chain_complete(results)
+            return
+        first = staff_objs[0]
+        first_id = self._staff_id(first)
+        saved_step = sess.get("step")
+        if isinstance(saved_step, dict) and \
+                str(saved_step.get("staff_id") or "") == first_id:
+            step = self._sanitize_step(saved_step, first)
+        else:
+            step = self._fresh_step(first)
+        _touch_chain(
+            self.game,
+            remaining_staff_ids=[self._staff_id(s) for s in staff_objs],
+            completed_results=list(results),
+            step_open=first_id,
+            step=dict(step),
+            parked=False,
+        )
+        self._open_negotiation_dialog(first, step, results)
+
+    # --- declare rival (D-16 port) ---------------------------------------
+    # Mainline parity: staff_management_window._declare_rival_staff --
+    # non-head-coach staff can declare personal rivalries through the
+    # EXISTING rivalry system (reputation_system.declare_rivalry,
+    # kind="gm_coach"). Staff on the user's own club are refused with an
+    # explanation; feed + inbox go through the headlines machinery.
+    # Effects: heat 70, grudge 80, declared floor 40, user_declared.
+
+    def _declare_rival_staff(self, staff):
+        """Declare a personal rivalry with a staff member. Never raises."""
+        try:
+            gm = _chain_owner(self.game)
+            league = safe_call(lambda: getattr(gm, "league", None), None,
+                               context="declare rival league")
+            team = self._user_team()
+            name = _staff_name(staff)
+            if league is None or team is None:
+                QMessageBox.warning(
+                    self, "Declare Rival",
+                    "No active league to declare a rivalry in.")
+                return
+            own_ids = {self._staff_id(s)
+                       for s in self._live_staff_by_id().values()}
+            if self._staff_id(staff) in own_ids:
+                QMessageBox.information(
+                    self, "Declare Rival",
+                    f"{name} works for your club.\n\n"
+                    "Declare rival is for opposing staff -- declare from "
+                    "their card to start a personal beef.")
+                return
+            import reputation_system as rs
+            try:
+                existing = rs.rivalry_between(
+                    getattr(league, "rivalries", None) or [],
+                    rs.gm_persona(team), staff, kind="gm_coach")
+            except Exception:
+                existing = None
+            if existing and existing.get("user_declared"):
+                QMessageBox.information(
+                    self, "Declare Rival",
+                    f"You already declared {name} a personal rival "
+                    f"(heat {existing.get('intensity', 0):.0f}).")
+                return
+            rec = rs.declare_rivalry(league, rs.gm_persona(team), staff,
+                                     kind="gm_coach")
+            if not rec:
+                QMessageBox.warning(self, "Declare Rival",
+                                    "Could not register the rivalry.")
+                return
+            # Feed + inbox (headlines parity). deliver() always lands the
+            # inbox via human_teams(); the feed needs a native add_news
+            # (or the engine news_log) since GameManager has neither.
+            try:
+                import headlines as hl
+                from datetime import date
+                team_name = str(safe_call(
+                    lambda: getattr(team, "team_name", "?"), "?",
+                    context="declare rival team name") or "?")
+                target_team_name = "?"
+                for t in (safe_call(
+                        lambda: list(getattr(league, "teams", []) or []),
+                        [], context="declare rival league teams") or []):
+                    tids = {self._staff_id(s) for s in
+                            (safe_call(lambda: list(
+                                getattr(t, "staff", []) or []), [],
+                                context="declare rival team staff") or [])}
+                    if self._staff_id(staff) in tids:
+                        target_team_name = str(safe_call(
+                            lambda: getattr(t, "team_name", "?"), "?",
+                            context="declare rival target team") or "?")
+                        break
+                game_date = safe_call(
+                    lambda: getattr(gm, "current_date", None), None,
+                    context="declare rival game date") or date.today()
+                msg = hl.make_headline(
+                    "rivalry_declared", game_date,
+                    declarer_name=team_name, target_name=name,
+                    target_kind="coach")
+                if msg is not None:
+                    hl.deliver(gm, msg,
+                              involved=(team_name, target_team_name))
+                    story = str(getattr(msg, "subject", "") or "")
+                    feed_fn = safe_call(
+                        lambda: getattr(self.main_window, "add_news",
+                                        None), None,
+                        context="declare rival feed mw") or safe_call(
+                        lambda: getattr(self.game, "add_news", None),
+                        None, context="declare rival feed game")
+                    if callable(feed_fn):
+                        feed_fn(story)
+                    else:
+                        log = safe_call(
+                            lambda: getattr(gm, "news_log", None), None,
+                            context="declare rival news_log")
+                        if isinstance(log, list):
+                            log.append({"date": game_date,
+                                        "story": story})
+            except Exception:
+                pass
+            QMessageBox.information(
+                self, "Rival Declared",
+                f"Declared: {name} "
+                f"(heat {rec.get('intensity', 70):.0f}). "
+                "Those games just got personal.")
+        except Exception as e:
+            QMessageBox.warning(self, "Declare Rival",
+                                f"Could not declare rival: {e}")
 
 
 class _ReassignDialog(QDialog):
