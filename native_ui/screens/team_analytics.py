@@ -40,37 +40,33 @@ from PySide6.QtGui import QColor
 
 from .base import BaseScreen
 
+from native_ui.safe import safe_call
+
 
 # ---------------------------------------------------------------------------
 # safe data access
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="team_analytics/get_game_manager") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return _safe(lambda: getattr(gm, "user_team", None)) or \
-        _safe(lambda: getattr(game, "user_team", None))
+    return safe_call(lambda: getattr(gm, "user_team", None), context="team_analytics/load_user_team") or \
+        safe_call(lambda: getattr(game, "user_team", None), context="team_analytics/get_user_team")
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    return _safe(lambda: getattr(gm, "league", None)) or \
-        _safe(lambda: getattr(game, "league", None))
+    return safe_call(lambda: getattr(gm, "league", None), context="team_analytics/load_league") or \
+        safe_call(lambda: getattr(game, "league", None), context="team_analytics/get_league")
 
 
 def _league_teams(game):
     league = _league(game)
-    return _safe(lambda: list(league.teams), []) or []
+    return safe_call(lambda: list(league.teams), [], context="team_analytics/load_teams") or []
 
 
 def _is_goalie(p):
@@ -81,7 +77,7 @@ def _is_goalie(p):
 
 
 def _pos_value(p):
-    return _safe(lambda: p.primary_position.value, "") or ""
+    return safe_call(lambda: p.primary_position.value, "", context="team_analytics/get_position") or ""
 
 
 def _team_special_teams(team, gm):
@@ -91,17 +87,17 @@ def _team_special_teams(team, gm):
     (same pattern as mainline dashboard_home._special_teams_pct).
     Percentages are None when there were no opportunities.
     """
-    name = _safe(lambda: team.team_name, "") or ""
-    ts = _safe(lambda: dict(getattr(gm, "team_stats", {}) or {}).get(name, {})) or {}
+    name = safe_call(lambda: team.team_name, "", context="team_analytics/get_team_name") or ""
+    ts = safe_call(lambda: dict(getattr(gm, "team_stats", {}) or {}).get(name, {}), context="team_analytics/get_team_stats") or {}
 
-    ppg = _safe(lambda: int(getattr(team, "power_play_goals", 0) or 0), 0)
-    ppo = _safe(lambda: int(getattr(team, "power_play_opportunities", 0) or 0), 0)
+    ppg = safe_call(lambda: int(getattr(team, "power_play_goals", 0) or 0), 0, context="team_analytics/get_pp_goals")
+    ppo = safe_call(lambda: int(getattr(team, "power_play_opportunities", 0) or 0), 0, context="team_analytics/get_pp_opportunities")
     if not ppo and ts:
         ppg = int(ts.get("power_play_goals", 0) or 0)
         ppo = int(ts.get("power_play_opportunities", 0) or 0)
 
-    pkga = _safe(lambda: int(getattr(team, "penalty_kill_goals_against", 0) or 0), 0)
-    pko = _safe(lambda: int(getattr(team, "penalty_kill_opportunities", 0) or 0), 0)
+    pkga = safe_call(lambda: int(getattr(team, "penalty_kill_goals_against", 0) or 0), 0, context="team_analytics/get_pk_goals_against")
+    pko = safe_call(lambda: int(getattr(team, "penalty_kill_opportunities", 0) or 0), 0, context="team_analytics/get_pk_opportunities")
     if not pko and ts:
         pkga = int(ts.get("penalty_kill_goals_against", 0) or 0)
         pko = int(ts.get("penalty_kill_opportunities", 0) or 0)
@@ -118,12 +114,12 @@ def _team_goalie_totals(team):
     Port of the mainline TeamAnalyticsView aggregation:
     GA = shots_against - saves.
     """
-    goalies = [p for p in (_safe(lambda: list(team.roster), []) or [])
+    goalies = [p for p in (safe_call(lambda: list(team.roster), [], context="team_analytics/load_roster") or [])
                if _is_goalie(p)]
-    sa = sum(_safe(lambda: int(p.stats.shots_against or 0), 0) for p in goalies)
-    sv = sum(_safe(lambda: int(p.stats.saves or 0), 0) for p in goalies)
+    sa = sum(safe_call(lambda: int(p.stats.shots_against or 0), 0, context="team_analytics/get_shots_against") for p in goalies)
+    sv = sum(safe_call(lambda: int(p.stats.saves or 0), 0, context="team_analytics/get_saves") for p in goalies)
     ga = sa - sv
-    gp = max(1, max([_safe(lambda: int(p.stats.games_played or 0), 0)
+    gp = max(1, max([safe_call(lambda: int(p.stats.games_played or 0), 0, context="team_analytics/get_games_played")
                      for p in goalies] or [0]))
     sv_pct = (sv / sa * 100.0) if sa else None
     gaa = ga / gp
@@ -133,14 +129,14 @@ def _team_goalie_totals(team):
 
 def _skater_totals(team):
     """Aggregate skater stats (mainline TeamAnalyticsView formulas)."""
-    roster = _safe(lambda: list(team.roster), []) or []
+    roster = safe_call(lambda: list(team.roster), [], context="team_analytics/load_roster") or []
     skaters = [p for p in roster if not _is_goalie(p)]
-    tgp_raw = max([_safe(lambda: int(p.stats.games_played or 0), 0)
+    tgp_raw = max([safe_call(lambda: int(p.stats.games_played or 0), 0, context="team_analytics/get_games_played")
                    for p in roster] or [0])
     tgp = max(1, tgp_raw)
-    gf = sum(_safe(lambda: int(p.stats.goals or 0), 0) for p in skaters)
-    shots = sum(_safe(lambda: int(p.stats.shots or 0), 0) for p in skaters)
-    pim = sum(_safe(lambda: int(p.stats.penalties_in_minutes or 0), 0)
+    gf = sum(safe_call(lambda: int(p.stats.goals or 0), 0, context="team_analytics/get_goals") for p in skaters)
+    shots = sum(safe_call(lambda: int(p.stats.shots or 0), 0, context="team_analytics/get_shots") for p in skaters)
+    pim = sum(safe_call(lambda: int(p.stats.penalties_in_minutes or 0), 0, context="team_analytics/get_pim")
               for p in roster)
     return {"skaters": skaters, "tgp": tgp, "tgp_raw": tgp_raw, "gf": gf,
             "shots": shots, "pim": pim}
@@ -150,7 +146,7 @@ def _entry_team_name(val):
     """Schedule entries may store a name string or a Team object."""
     if val is None:
         return ""
-    name = _safe(lambda: val.team_name, None)
+    name = safe_call(lambda: val.team_name, None, context="team_analytics/get_team_name")
     if name:
         return str(name).strip()
     return str(val).strip()
@@ -164,8 +160,8 @@ def _played_games_for(game, team_name, limit=10):
     (opponent, gf, ga, result, ot) where result in W/L/OTL.
     """
     league = _league(game)
-    sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
-    mine = _safe(lambda: str(team_name).strip().lower(), "") or ""
+    sched = safe_call(lambda: list(getattr(league, "schedule", None) or []), [], context="team_analytics/load_schedule") or []
+    mine = safe_call(lambda: str(team_name).strip().lower(), "", context="team_analytics/normalize_team_name") or ""
     out = []
     for item in sched:
         try:
@@ -203,7 +199,7 @@ def _resolve_line_player(entry, by_id):
     """Lineup slots may hold player objects or ids (save-safe snapshots)."""
     if entry is None:
         return None
-    pid = _safe(lambda: getattr(entry, "id", None), None)
+    pid = safe_call(lambda: getattr(entry, "id", None), None, context="team_analytics/get_entry_id")
     if pid is not None:
         return entry
     key = entry if isinstance(entry, (str, int)) else None
@@ -391,7 +387,7 @@ class TeamAnalyticsScreen(BaseScreen):
                 self._clear(page)
                 _sub(page.layout(), "No user team is loaded yet.")
             return
-        name = _safe(lambda: team.team_name, "?") or "?"
+        name = safe_call(lambda: team.team_name, "?", context="team_analytics/get_team_name") or "?"
         self._team_lbl.setText(str(name).upper())
         gm = _resolve_gm(game)
         self._fill_overview(team, gm)
@@ -460,17 +456,17 @@ class TeamAnalyticsScreen(BaseScreen):
         # Goaltenders (mainline formula)
         lay = _tile(grid, "Goaltenders", 1, 0)
         goalies = sorted(gt["goalies"],
-                         key=lambda p: _safe(lambda: int(p.stats.games_played or 0), 0),
+                         key=lambda p: safe_call(lambda: int(p.stats.games_played or 0), 0, context="team_analytics/get_games_played"),
                          reverse=True)
         if goalies:
             for g in goalies[:4]:
-                gp = _safe(lambda: int(g.stats.games_played or 0), 0)
-                gsa = _safe(lambda: int(g.stats.shots_against or 0), 0)
-                gsv = _safe(lambda: int(g.stats.saves or 0), 0)
+                gp = safe_call(lambda: int(g.stats.games_played or 0), 0, context="team_analytics/get_games_played")
+                gsa = safe_call(lambda: int(g.stats.shots_against or 0), 0, context="team_analytics/get_shots_against")
+                gsv = safe_call(lambda: int(g.stats.saves or 0), 0, context="team_analytics/get_saves")
                 gga = gsa - gsv
                 svp = f"{gsv / gsa * 100:.1f}%" if gsa else "—"
                 gag = f"{gga / gp:.2f}" if gp else "—"
-                fname = _safe(lambda: g.full_name, "?") or "?"
+                fname = safe_call(lambda: g.full_name, "?", context="team_analytics/get_player_name") or "?"
                 _line(lay, f"{fname}: {gp} GP, {svp} SV%, {gag} GA/G")
         else:
             _line(lay, "No goaltenders on roster", dim=True)
@@ -481,7 +477,7 @@ class TeamAnalyticsScreen(BaseScreen):
         for p in sk["skaters"]:
             pos = _pos_value(p)
             pos_goals[pos] = pos_goals.get(pos, 0) + \
-                _safe(lambda: int(p.stats.goals or 0), 0)
+                safe_call(lambda: int(p.stats.goals or 0), 0, context="team_analytics/get_goals")
         total = max(1, sum(pos_goals.values()))
         for pos in ("C", "LW", "RW", "LD", "RD"):
             gls = pos_goals.get(pos, 0)
@@ -492,32 +488,32 @@ class TeamAnalyticsScreen(BaseScreen):
         lay = _tile(grid, "Discipline", 1, 2)
         _big(lay, f"{pim / tgp:.1f}")
         _line(lay, "PIM per game", dim=True)
-        roster = _safe(lambda: list(team.roster), []) or []
+        roster = safe_call(lambda: list(team.roster), [], context="team_analytics/load_roster") or []
         offenders = sorted(
             roster,
-            key=lambda p: _safe(lambda: int(p.stats.penalties_in_minutes or 0), 0),
+            key=lambda p: safe_call(lambda: int(p.stats.penalties_in_minutes or 0), 0, context="team_analytics/get_pim"),
             reverse=True)[:3]
         for p in offenders:
-            pm = _safe(lambda: int(p.stats.penalties_in_minutes or 0), 0)
+            pm = safe_call(lambda: int(p.stats.penalties_in_minutes or 0), 0, context="team_analytics/get_pim")
             if pm:
-                fname = _safe(lambda: p.full_name, "?") or "?"
+                fname = safe_call(lambda: p.full_name, "?", context="team_analytics/get_player_name") or "?"
                 _line(lay, f"{fname}: {pm} PIM")
 
         # Top scorers (mainline formula)
         lay = _tile(grid, "Top Scorers", 2, 0, 1, 3)
         skaters = sorted(
             sk["skaters"],
-            key=lambda p: _safe(lambda: int(p.stats.points or 0), 0),
+            key=lambda p: safe_call(lambda: int(p.stats.points or 0), 0, context="team_analytics/get_points"),
             reverse=True)
         shown = 0
         for p in skaters[:5]:
-            pts = _safe(lambda: int(p.stats.points or 0), 0)
+            pts = safe_call(lambda: int(p.stats.points or 0), 0, context="team_analytics/get_points")
             if not pts:
                 continue
-            gp = max(1, _safe(lambda: int(p.stats.games_played or 0), 0))
-            g = _safe(lambda: int(p.stats.goals or 0), 0)
-            a = _safe(lambda: int(p.stats.assists or 0), 0)
-            fname = _safe(lambda: p.full_name, "?") or "?"
+            gp = max(1, safe_call(lambda: int(p.stats.games_played or 0), 0, context="team_analytics/get_games_played"))
+            g = safe_call(lambda: int(p.stats.goals or 0), 0, context="team_analytics/get_goals")
+            a = safe_call(lambda: int(p.stats.assists or 0), 0, context="team_analytics/get_assists")
+            fname = safe_call(lambda: p.full_name, "?", context="team_analytics/get_player_name") or "?"
             _line(lay, f"{fname}: {g}G {a}A ({pts / gp:.2f} P/GP)")
             shown += 1
         if not shown:
@@ -528,16 +524,16 @@ class TeamAnalyticsScreen(BaseScreen):
         page = self._tab_widgets["league"]
         self._clear(page)
         teams = _league_teams(game)
-        my_name = _safe(lambda: team.team_name, "") or ""
+        my_name = safe_call(lambda: team.team_name, "", context="team_analytics/get_team_name") or ""
         rows = []
         for t in teams:
             try:
-                tname = _safe(lambda: t.team_name, "") or ""
-                gp = max(0, _safe(lambda: int(getattr(t, "games_played", 0) or 0), 0))
+                tname = safe_call(lambda: t.team_name, "", context="team_analytics/get_team_name") or ""
+                gp = max(0, safe_call(lambda: int(getattr(t, "games_played", 0) or 0), 0, context="team_analytics/get_games_played"))
                 if not gp:
                     continue
-                gf = _safe(lambda: int(getattr(t, "goals_for", 0) or 0), 0)
-                ga = _safe(lambda: int(getattr(t, "goals_against", 0) or 0), 0)
+                gf = safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0, context="team_analytics/get_goals_for")
+                ga = safe_call(lambda: int(getattr(t, "goals_against", 0) or 0), 0, context="team_analytics/get_goals_against")
                 st = _team_special_teams(t, gm)
                 gt = _team_goalie_totals(t)
                 sk = _skater_totals(t)
@@ -605,10 +601,10 @@ class TeamAnalyticsScreen(BaseScreen):
         page = self._tab_widgets["division"]
         self._clear(page)
         teams = _league_teams(game)
-        my_div = _safe(lambda: team.division, "") or ""
-        my_name = _safe(lambda: team.team_name, "") or ""
+        my_div = safe_call(lambda: team.division, "", context="team_analytics/get_division") or ""
+        my_name = safe_call(lambda: team.team_name, "", context="team_analytics/get_team_name") or ""
         rivals = [t for t in teams
-                  if (_safe(lambda: t.division, "") or "") == my_div] if my_div else []
+                  if (safe_call(lambda: t.division, "", context="team_analytics/get_division") or "") == my_div] if my_div else []
 
         if not rivals:
             _line(page.layout(), "Division data unavailable.", dim=True)
@@ -616,8 +612,8 @@ class TeamAnalyticsScreen(BaseScreen):
             return
 
         def points(t):
-            w = _safe(lambda: int(getattr(t, "wins", 0) or 0), 0)
-            otl = _safe(lambda: int(getattr(t, "ot_losses", 0) or 0), 0)
+            w = safe_call(lambda: int(getattr(t, "wins", 0) or 0), 0, context="team_analytics/get_wins")
+            otl = safe_call(lambda: int(getattr(t, "ot_losses", 0) or 0), 0, context="team_analytics/get_ot_losses")
             return 2 * w + otl
 
         rivals.sort(key=points, reverse=True)
@@ -625,12 +621,12 @@ class TeamAnalyticsScreen(BaseScreen):
                                 "PTS", "GF", "GA"])
         table.setRowCount(len(rivals))
         for i, t in enumerate(rivals):
-            tname = _safe(lambda: t.team_name, "?") or "?"
-            w = _safe(lambda: int(getattr(t, "wins", 0) or 0), 0)
-            l = _safe(lambda: int(getattr(t, "losses", 0) or 0), 0)
-            otl = _safe(lambda: int(getattr(t, "ot_losses", 0) or 0), 0)
-            gf = _safe(lambda: int(getattr(t, "goals_for", 0) or 0), 0)
-            ga = _safe(lambda: int(getattr(t, "goals_against", 0) or 0), 0)
+            tname = safe_call(lambda: t.team_name, "?", context="team_analytics/get_team_name") or "?"
+            w = safe_call(lambda: int(getattr(t, "wins", 0) or 0), 0, context="team_analytics/get_wins")
+            l = safe_call(lambda: int(getattr(t, "losses", 0) or 0), 0, context="team_analytics/get_losses")
+            otl = safe_call(lambda: int(getattr(t, "ot_losses", 0) or 0), 0, context="team_analytics/get_ot_losses")
+            gf = safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0, context="team_analytics/get_goals_for")
+            ga = safe_call(lambda: int(getattr(t, "goals_against", 0) or 0), 0, context="team_analytics/get_goals_against")
             is_me = tname == my_name
             vals = [tname, w + l + otl, w, l, otl, points(t), gf, ga]
             for j, v in enumerate(vals):
@@ -645,25 +641,25 @@ class TeamAnalyticsScreen(BaseScreen):
     def _fill_lines(self, team):
         page = self._tab_widgets["lines"]
         self._clear(page)
-        lineup = _safe(lambda: getattr(team, "lineup", None), None)
-        roster = _safe(lambda: list(team.roster), []) or []
-        ahl = _safe(lambda: list(team.ahl_roster), []) or []
+        lineup = safe_call(lambda: getattr(team, "lineup", None), None, context="team_analytics/get_lineup")
+        roster = safe_call(lambda: list(team.roster), [], context="team_analytics/load_roster") or []
+        ahl = safe_call(lambda: list(team.ahl_roster), [], context="team_analytics/load_ahl_roster") or []
         by_id = {}
         for p in roster + ahl:
-            pid = _safe(lambda: getattr(p, "id", None), None)
+            pid = safe_call(lambda: getattr(p, "id", None), None, context="team_analytics/get_player_id")
             if pid is not None:
                 by_id[pid] = p
 
         def line_card(lay, label, pls):
-            g = sum(_safe(lambda: int(p.stats.goals or 0), 0) for p in pls)
-            a = sum(_safe(lambda: int(p.stats.assists or 0), 0) for p in pls)
+            g = sum(safe_call(lambda: int(p.stats.goals or 0), 0, context="team_analytics/get_goals") for p in pls)
+            a = sum(safe_call(lambda: int(p.stats.assists or 0), 0, context="team_analytics/get_assists") for p in pls)
             _big(lay, f"{g}G · {a}A · {g + a}P")
             _line(lay, label, dim=True)
             for p in pls:
-                fname = _safe(lambda: p.full_name, "?") or "?"
+                fname = safe_call(lambda: p.full_name, "?", context="team_analytics/get_player_name") or "?"
                 pos = _pos_value(p)
-                pg = _safe(lambda: int(p.stats.goals or 0), 0)
-                pa = _safe(lambda: int(p.stats.assists or 0), 0)
+                pg = safe_call(lambda: int(p.stats.goals or 0), 0, context="team_analytics/get_goals")
+                pa = safe_call(lambda: int(p.stats.assists or 0), 0, context="team_analytics/get_assists")
                 _line(lay, f"{fname} ({pos}) — {pg}G {pa}A")
 
         grid = QGridLayout()
@@ -695,7 +691,7 @@ class TeamAnalyticsScreen(BaseScreen):
     def _fill_trends(self, team, game):
         page = self._tab_widgets["trends"]
         self._clear(page)
-        name = _safe(lambda: team.team_name, "") or ""
+        name = safe_call(lambda: team.team_name, "", context="team_analytics/get_team_name") or ""
         games = _played_games_for(game, name, 10)
 
         if not games:
@@ -730,9 +726,9 @@ class TeamAnalyticsScreen(BaseScreen):
         page.layout().addWidget(table)
 
         # season pace
-        gw = _safe(lambda: int(getattr(team, "wins", 0) or 0), 0)
-        gl = _safe(lambda: int(getattr(team, "losses", 0) or 0), 0)
-        gotl = _safe(lambda: int(getattr(team, "ot_losses", 0) or 0), 0)
+        gw = safe_call(lambda: int(getattr(team, "wins", 0) or 0), 0, context="team_analytics/get_wins")
+        gl = safe_call(lambda: int(getattr(team, "losses", 0) or 0), 0, context="team_analytics/get_losses")
+        gotl = safe_call(lambda: int(getattr(team, "ot_losses", 0) or 0), 0, context="team_analytics/get_ot_losses")
         gp = gw + gl + gotl
         if gp:
             pts = 2 * gw + gotl
