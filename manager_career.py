@@ -2364,8 +2364,8 @@ def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
             if drew else
             (POSTMATCH_QUESTIONS_WIN if won else POSTMATCH_QUESTIONS_LOSS))
     full_ctx = dict(ctx)
-    full_ctx.update({"score": score, "star": star_name,
-                     "opp": getattr(opponent, "team_name", "them"),
+    full_ctx.update({"score": score or "", "star": star_name or "your star",
+                     "opp": getattr(opponent, "team_name", "them") or "them",
                      "won": won, "drew": drew})
     # F-7: the postmatch path was iterating the bank UNFILTERED -- postmatch
     # questions now run through the same 'when' guard as prematch. A guard
