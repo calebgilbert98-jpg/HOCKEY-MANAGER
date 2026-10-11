@@ -2004,78 +2004,101 @@ class MainWindow(QMainWindow):
         from native_ui.screens.systems_deployment import SystemsDeploymentScreen
         from native_ui.screens.systems_condition import SystemsConditionScreen
 
-        # Map of screen name -> class (no dynamic import needed)
-        _registry = {
-            "roster": RosterScreen,
-            "player": PlayerProfileScreen,
-            "lines": LinesScreen,
-            "setup": SetupScreen,
-            "multiplayer": MultiplayerScreen,
-            "practice_center": PracticeCenterScreen,
-            "camp": CampScreen,
-            "captains": CaptainsScreen,
-            "staff": StaffScreen,
-            "staff_detail": StaffDetailScreen,
-            "contracts": ContractsScreen,
-            "morale": MoraleScreen,
-            "development": DevelopmentScreen,
-            "tactics": TacticsScreen,
-            "season_goals": SeasonGoalsScreen,
-            "offseason_programs": OffseasonProgramsScreen,
-            "jersey_numbers": JerseyNumbersScreen,
-            "gm_options": GMOptionsScreen,
-            "gm_relationships": GmRelationshipsScreen,
-            "trades": TradesScreen,
-            "free_agents": FreeAgentsScreen,
-            "waivers": WaiversScreen,
-            "offer_sheets": OfferSheetsScreen,
-            "trade_block": TradeBlockScreen,
-            "deadline": DeadlineScreen,
-            "standings": StandingsScreen,
-            "stats": StatsScreen,
-            "schedule": ScheduleScreen,
-            "playoffs": PlayoffsScreen,
-            "draft": DraftScreen,
-            "draft_central": DraftCentralScreen,
-            "draft_recap": DraftRecapScreen,
-            "lottery": LotteryScreen,
-            "history": HistoryScreen,
-            "season_summary": SeasonSummaryScreen,
-            "awards_ceremony": AwardsCeremonyScreen,
-            "ahl": AhIScreen,
-            "calendar": CalendarScreen,
-            "team": TeamScreen,
-            "team_analytics": TeamAnalyticsScreen,
-            "inbox": InboxScreen,
-            "news": NewsScreen,
-            "finances": FinancesScreen,
-            "settings": SettingsScreen,
-            "save": SaveScreen,
-            "watch": WatchScreen,
-            "replay": ReplayScreen,
-            "recall_picker": RecallPickerScreen,
-            "compare": CompareScreen,
-            "coach_checkin": CoachCheckinScreen,
-            "manager": ManagerScreen,
-            "fa_frenzy": FaFrenzyScreen,
-            "fantasy_draft": FantasyDraftScreen,
-            "scouting": ScoutingScreen,
-            "season_flow": SeasonFlowScreen,
-            "season_meeting": SeasonMeetingScreen,
-            "contract_negotiation": ContractNegotiationScreen,
-            "dressing_room": DressingRoomScreen,
-            "media_center": MediaCenterScreen,
-            "records": RecordsScreen,
-            "shortlist": ShortlistScreen,
-            "shot_chart_viewer": ShotChartViewerScreen,
-            "analytics": AnalyticsScreen,
-            "systems_clutch": SystemsClutchScreen,
-            "systems_circumstance": SystemsCircumstanceScreen,
-            "systems_discipline": SystemsDisciplineScreen,
-            "systems_rivalry": SystemsRivalryScreen,
-            "systems_deployment": SystemsDeploymentScreen,
-            "systems_condition": SystemsConditionScreen,
-        }
+
+        # Screen groups by feature category. Nested closures share the
+        # static imports above, so PyInstaller's AST analysis still
+        # sees every screen module imported in this method.
+        # Registration order matches the original single literal.
+        def _club_screens():
+            """Club screen name -> class map."""
+            return {
+                "roster": RosterScreen,
+                "player": PlayerProfileScreen,
+                "lines": LinesScreen,
+                "setup": SetupScreen,
+                "multiplayer": MultiplayerScreen,
+                "practice_center": PracticeCenterScreen,
+                "camp": CampScreen,
+                "captains": CaptainsScreen,
+                "staff": StaffScreen,
+                "staff_detail": StaffDetailScreen,
+                "contracts": ContractsScreen,
+                "morale": MoraleScreen,
+                "development": DevelopmentScreen,
+                "tactics": TacticsScreen,
+                "season_goals": SeasonGoalsScreen,
+                "offseason_programs": OffseasonProgramsScreen,
+                "jersey_numbers": JerseyNumbersScreen,
+                "gm_options": GMOptionsScreen,
+                "gm_relationships": GmRelationshipsScreen,
+            }
+        def _transactions_screens():
+            """Transactions screen name -> class map."""
+            return {
+                "trades": TradesScreen,
+                "free_agents": FreeAgentsScreen,
+                "waivers": WaiversScreen,
+                "offer_sheets": OfferSheetsScreen,
+                "trade_block": TradeBlockScreen,
+                "deadline": DeadlineScreen,
+            }
+        def _league_screens():
+            """League screen name -> class map."""
+            return {
+                "standings": StandingsScreen,
+                "stats": StatsScreen,
+                "schedule": ScheduleScreen,
+                "playoffs": PlayoffsScreen,
+                "draft": DraftScreen,
+                "draft_central": DraftCentralScreen,
+                "draft_recap": DraftRecapScreen,
+                "lottery": LotteryScreen,
+                "history": HistoryScreen,
+                "season_summary": SeasonSummaryScreen,
+                "awards_ceremony": AwardsCeremonyScreen,
+                "ahl": AhIScreen,
+                "calendar": CalendarScreen,
+                "team": TeamScreen,
+                "team_analytics": TeamAnalyticsScreen,
+                "inbox": InboxScreen,
+                "news": NewsScreen,
+                "finances": FinancesScreen,
+                "settings": SettingsScreen,
+                "save": SaveScreen,
+                "watch": WatchScreen,
+                "replay": ReplayScreen,
+                "recall_picker": RecallPickerScreen,
+                "compare": CompareScreen,
+                "coach_checkin": CoachCheckinScreen,
+                "manager": ManagerScreen,
+                "fa_frenzy": FaFrenzyScreen,
+                "fantasy_draft": FantasyDraftScreen,
+                "scouting": ScoutingScreen,
+                "season_flow": SeasonFlowScreen,
+                "season_meeting": SeasonMeetingScreen,
+                "contract_negotiation": ContractNegotiationScreen,
+                "dressing_room": DressingRoomScreen,
+                "media_center": MediaCenterScreen,
+                "records": RecordsScreen,
+                "shortlist": ShortlistScreen,
+                "shot_chart_viewer": ShotChartViewerScreen,
+                "analytics": AnalyticsScreen,
+            }
+        def _systems_screens():
+            """Systems screen name -> class map."""
+            return {
+                "systems_clutch": SystemsClutchScreen,
+                "systems_circumstance": SystemsCircumstanceScreen,
+                "systems_discipline": SystemsDisciplineScreen,
+                "systems_rivalry": SystemsRivalryScreen,
+                "systems_deployment": SystemsDeploymentScreen,
+                "systems_condition": SystemsConditionScreen,
+            }
+        _registry = {}
+        for _group in (_club_screens(), _transactions_screens(),
+                       _league_screens(), _systems_screens()):
+            _registry.update(_group)
+
 
         for name, cls in _registry.items():
             try:
