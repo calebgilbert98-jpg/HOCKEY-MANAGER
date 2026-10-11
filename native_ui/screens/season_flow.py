@@ -1045,7 +1045,20 @@ class SeasonFlowScreen(BaseScreen):
                                      f"{'s' if days != 1 else ''}\u2026",
                                _worker, on_done=_on_done,
                                status="Starting\u2026")
-            self._quick_dlg = dlg
+            # FIX-BACK (580e693 re-review): run_threaded can complete
+            # synchronously under automation bypass (PUCK_DYNASTY_NO_MODAL=1):
+            # on_done -> _finish_quick_advance already ran inside the call
+            # and cleared this run's state (_quick_dlg=None,
+            # _quick_cleaned=True). Arming _quick_dlg afterwards would leave
+            # a stale non-None marker that the busy guard reads as "quick
+            # advance in flight", refusing every later advance as "Busy".
+            # _quick_cleaned was reset to False in the in-try init above, so
+            # True here means this run's on_done already fired
+            # synchronously (bypass only -- the normal path cannot deliver
+            # on_done re-entrantly: the dialog is non-modal and completion
+            # is polled via the event loop).
+            if not self._quick_cleaned:
+                self._quick_dlg = dlg
             # FIX-D1(c): independent watchdog for a user-abandoned dialog.
             QTimer.singleShot(100, self._poll_quick_abandon)
         except Exception as e:
