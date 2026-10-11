@@ -25,7 +25,7 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
     QFrame, QComboBox, QListWidget, QLineEdit, QButtonGroup, QScrollArea,
-    QAbstractItemView,
+    QAbstractItemView, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -221,6 +221,52 @@ def _read_settings():
         return {}
 
 
+def _defaults():
+    """Factory defaults (mainline settings_window.default_settings).
+
+    Single source of truth, matching the backend resolution in _loader():
+    the game's own defaults when settings_window is importable, the local
+    mirror otherwise. Used by Reset to Defaults.
+    """
+    try:
+        import settings_window as sw
+        if hasattr(sw, "default_settings"):
+            d = sw.default_settings()
+        else:
+            d = _local_defaults()
+    except Exception:
+        d = _local_defaults()
+    # Effective factory defaults: mainline's SettingsWindow reads
+    # auto_fit_ui with a False fallback -- it has no entry in
+    # default_settings() -- so bake it in. Every field this screen
+    # manages must have exactly one factory default.
+    d.setdefault("ui_preferences", {}).setdefault("auto_fit_ui", False)
+    return d
+
+
+def reset_to_defaults():
+    """Reset every setting the screen manages to its factory default.
+
+    Mainline parity (settings_window._reset_to_defaults): defaults come
+    from factory defaults, NOT the last-saved file. Each field goes
+    through set_setting() so writes are validated, persisted to
+    settings.json, and verified via read-back. Keys this screen does not
+    manage are preserved untouched; nothing outside the settings store
+    is touched (no save-game data, no career state).
+
+    Returns (ok, failures) -- failures is a list of (tab, key, error).
+    """
+    defaults = _defaults()
+    failures = []
+    for tab, fields in _FIELDS.items():
+        for _label, key, _widget, _options, _hint in fields:
+            value = _field_value(tab, key, defaults)
+            ok, msg = set_setting(tab, key, value)
+            if not ok:
+                failures.append((tab, key, msg))
+    return (len(failures) == 0), failures
+
+
 def _field_value(tab, key, settings):
     sec = settings.get(tab, {}) if isinstance(settings, dict) else {}
     if key.startswith("email_"):
@@ -359,10 +405,24 @@ class SettingsScreen(BaseScreen):
         gl.addLayout(row)
         self._layout.addWidget(gd)
 
+        # --- footer: Reset to Defaults (mainline parity) + save feedback ---
+        footer = QHBoxLayout()
+        self._reset_btn = QPushButton("Reset to Defaults")
+        self._reset_btn.setCursor(Qt.PointingHandCursor)
+        self._reset_btn.setStyleSheet(
+            "QPushButton { padding: 10px 18px; border: 1px solid #2a3a55; "
+            "border-radius: 6px; background-color: #162032; color: #c7d0e0; "
+            "font-weight: 800; font-size: 13px; }"
+            "QPushButton:hover { border-color: #3B82F6; color: #ffffff; }")
+        self._reset_btn.clicked.connect(self._on_reset_clicked)
+        footer.addWidget(self._reset_btn)
+        footer.addStretch(1)
+
         # --- transient save feedback (web #settings-save-state parity) ---
         self._save_state = QLabel("")
         self._save_state.setStyleSheet("color: #8a94a8; font-size: 12px;")
-        self._layout.addWidget(self._save_state)
+        footer.addWidget(self._save_state)
+        self._layout.addLayout(footer)
         self._clear_timer = QTimer(self)
         self._clear_timer.setSingleShot(True)
         self._clear_timer.timeout.connect(
@@ -497,6 +557,27 @@ class SettingsScreen(BaseScreen):
     def _set_watch(self, mode):
         set_watch_mode(mode)
         self._save_state.setText("Saved ✓")
+        self._clear_timer.start(2000)
+
+    def _on_reset_clicked(self):
+        """Mainline parity: confirmation dialog before the destructive
+        reset, then every managed setting back to factory defaults and
+        the UI rebuilt from the loader so it shows the reset values."""
+        reply = QMessageBox.question(
+            self, "Reset Settings",
+            "Are you sure you want to reset all settings to defaults?\n\n"
+            "This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return  # Cancelled / dismissed: nothing changes.
+        ok, failures = reset_to_defaults()
+        if not ok:
+            details = "; ".join(
+                f"{tab}.{key}: {err}" for tab, key, err in failures[:5])
+            self._save_state.setText(f"Reset failed: {details}")
+            return
+        self.refresh()
+        self._save_state.setText("Reset to defaults ✓")
         self._clear_timer.start(2000)
 
     def _on_setting_changed(self, tab_id, key, value, control):
