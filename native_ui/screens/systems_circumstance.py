@@ -71,30 +71,44 @@ class SystemsCircumstanceScreen(BaseScreen):
     @staticmethod
     def _next_game(league, team, today):
         """Next scheduled game for the team: (date, home_team, away_team)."""
+        import logging
+        _logger = logging.getLogger(__name__)
         my = getattr(team, "team_name", "")
         best = None
         try:
-            for item in list(getattr(league, "schedule", None) or []):
-                try:
-                    if isinstance(item, dict):
-                        d, h, a = (item.get("date"), item.get("home_team"),
-                                   item.get("away_team"))
-                    elif isinstance(item, (tuple, list)) and len(item) >= 3:
-                        d, h, a = item[0], item[1], item[2]
-                    else:
-                        continue
-                    hn = getattr(h, "team_name", h)
-                    an = getattr(a, "team_name", a)
-                    if my not in (hn, an):
-                        continue
-                    if today is not None and d is not None and d <= today:
-                        continue
-                    if best is None or (d is not None and d < best[0]):
-                        best = (d, h, a)
-                except Exception:
-                    continue
+            entries = list(getattr(league, "schedule", None) or [])
         except Exception:
+            _logger.exception(
+                "Could not read schedule for next-game lookup (team=%r)",
+                my)
             return None
+        for idx, item in enumerate(entries):
+            try:
+                if isinstance(item, dict):
+                    d, h, a = (item.get("date"), item.get("home_team"),
+                               item.get("away_team"))
+                elif isinstance(item, (tuple, list)) and len(item) >= 3:
+                    d, h, a = item[0], item[1], item[2]
+                else:
+                    continue
+                hn = getattr(h, "team_name", h)
+                an = getattr(a, "team_name", a)
+                if my not in (hn, an):
+                    continue
+                if today is not None and d is not None and d <= today:
+                    continue
+                if best is None or (d is not None and d < best[0]):
+                    best = (d, h, a)
+            except Exception as exc:
+                # Schedule entries are heterogeneous (dicts, tuples,
+                # objects) and date fields may be str/date/datetime, so
+                # comparison can raise TypeError on malformed data.
+                # Skip the bad entry but log it so broken schedule data
+                # is diagnosable instead of silently disappearing.
+                _logger.warning(
+                    "Skipping malformed schedule entry %d "
+                    "(team=%r, entry=%r): %s", idx, my, item, exc)
+                continue
         return best
 
     def _build_game_context(self):
