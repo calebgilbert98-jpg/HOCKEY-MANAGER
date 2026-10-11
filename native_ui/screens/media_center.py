@@ -49,12 +49,12 @@ from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="media_center/resolve_gm") or game
 
 
 def _media_system(gm):
     """Resolve (or lazily create) the MediaSystem for this game manager."""
-    ms = safe_call(lambda: getattr(gm, "media_system", None))
+    ms = safe_call(lambda: getattr(gm, "media_system", None), context="media_center/resolve_media_system")
     if ms is not None:
         return ms
     try:
@@ -153,7 +153,7 @@ def _is_completed(event):
     if isinstance(event, dict):
         return (event.get("status") == "completed"
                 or bool(event.get("completed")))
-    return bool(safe_call(lambda: getattr(event, "completed", False), False))
+    return bool(safe_call(lambda: getattr(event, "completed", False), False, context="media_center/event_completed"))
 
 
 def _mark_completed(event, response_choice):
@@ -242,12 +242,14 @@ class InterviewView(QDialog):
             name = getattr(journalist, "name", "?")
             outlet = getattr(journalist, "outlet", "?")
             jtype = safe_call(
-                lambda: journalist.type.value, "?")
+                lambda: journalist.type.value, "?",
+                              context="media_center/dialog_journalist_type")
             header = QLabel(f"{name} ({outlet}) — {jtype}")
             header.setStyleSheet("font-weight: bold; font-size: 14px;")
             layout.addWidget(header)
             rel = safe_call(lambda: int(getattr(journalist, "relationship", 0)),
-                        0)
+                        0,
+                            context="media_center/dialog_journalist_relationship")
             rel_lbl = QLabel(f"Relationship: {rel:+d}")
             rel_lbl.setStyleSheet("color: #8b95ab;")
             layout.addWidget(rel_lbl)
@@ -472,21 +474,22 @@ class MediaCenterScreen(BaseScreen):
         if isinstance(event, dict):
             return dict(event)
         ms = _media_system(_resolve_gm(self.game))
-        details = safe_call(lambda: getattr(event, "details", None), None) or {}
+        details = safe_call(lambda: getattr(event, "details", None), None, context="media_center/event_details") or {}
         questions = []
         if ms is not None and hasattr(ms, "get_interview_questions"):
             try:
                 questions = ms.get_interview_questions(event) or []
             except Exception:
                 questions = []
-        importance = safe_call(lambda: getattr(event, "importance", 5), 5) or 5
+        importance = safe_call(lambda: getattr(event, "importance", 5), 5, context="media_center/event_importance") or 5
         return {
             "type": safe_call(lambda: getattr(event, "type", "media_event"),
-                          "media_event"),
+                          "media_event",
+                              context="media_center/event_type"),
             "journalist": details.get("journalist"),
             "questions": questions,
             "optional": bool(
-                safe_call(lambda: getattr(event, "auto_handled", False), False)),
+                safe_call(lambda: getattr(event, "auto_handled", False), False, context="media_center/event_auto_handled")),
             "impact_level": ("low" if importance < 4 else
                              "medium" if importance < 7 else "high"),
             "details": details,
@@ -551,10 +554,12 @@ class MediaCenterScreen(BaseScreen):
                 morale_change = -5
             if morale_change:
                 team = safe_call(
-                    lambda: getattr(ms.game_manager, "user_team", None))
+                    lambda: getattr(ms.game_manager, "user_team", None),
+                                 context="media_center/morale_team")
                 for player in safe_call(
                         lambda: list(getattr(team, "roster", None) or []),
-                        []) if team is not None else []:
+                        [],
+                                        context="media_center/morale_roster") if team is not None else []:
                     if hasattr(player, "morale"):
                         try:
                             player.morale = max(
@@ -566,7 +571,7 @@ class MediaCenterScreen(BaseScreen):
         """Dressing-room cascade the backend runs for dict events only."""
         try:
             import dressing_room as _dr
-            team = safe_call(lambda: getattr(ms.game_manager, "user_team", None))
+            team = safe_call(lambda: getattr(ms.game_manager, "user_team", None), context="media_center/user_team")
             if team is not None:
                 _dr.cascade_on_press(team, event, response_choice)
         except Exception:
@@ -681,7 +686,7 @@ class MediaCenterScreen(BaseScreen):
         ms = _media_system(_resolve_gm(self.game))
         if ms is None:
             return
-        pending = safe_call(lambda: list(ms.get_pending_media_events()), [])
+        pending = safe_call(lambda: list(ms.get_pending_media_events()), [], context="media_center/pending_events")
         if not pending:
             _modal.information(self, "No Events",
                                "There are no pending media events.")
@@ -730,12 +735,13 @@ class MediaCenterScreen(BaseScreen):
                 pos = 2
             self._engagement_slider.setValue(pos)
             level_value = safe_call(lambda: ms.engagement_level.value,
-                                str(ms.engagement_level))
+                                str(ms.engagement_level),
+                                    context="media_center/engagement_level")
             self._engagement_desc.setText(
                 _ENGAGEMENT_DESCRIPTIONS.get(level_value, ""))
             self._auto_handle_check.setChecked(
                 bool(getattr(ms, "auto_handle_minor_events", True)))
-            status = safe_call(lambda: ms.get_system_status(), {}) or {}
+            status = safe_call(lambda: ms.get_system_status(), {}, context="media_center/system_status") or {}
             self._status_lbl.setText(
                 f"Level: {status.get('engagement_level', '?')} | "
                 f"Pending: {status.get('pending_events', 0)} | "
@@ -757,10 +763,10 @@ class MediaCenterScreen(BaseScreen):
             if w is not None:
                 w.deleteLater()
 
-        pending = safe_call(lambda: list(ms.get_pending_media_events()), [])
+        pending = safe_call(lambda: list(ms.get_pending_media_events()), [], context="media_center/pending_events")
         if not pending:
             note = ("Media system disabled — no events will be generated."
-                    if safe_call(lambda: ms.engagement_level.value) == "Disabled"
+                    if safe_call(lambda: ms.engagement_level.value, context="media_center/engagement_disabled_check") == "Disabled"
                     else "No pending media events.\nEvents will appear here "
                          "based on your engagement level and recent team "
                          "activities.")
@@ -797,9 +803,10 @@ class MediaCenterScreen(BaseScreen):
             if journalist is not None:
                 jname = getattr(journalist, "name", "?")
                 joutlet = getattr(journalist, "outlet", "?")
-                jtype = safe_call(lambda: journalist.type.value, "")
+                jtype = safe_call(lambda: journalist.type.value, "", context="media_center/journalist_type")
                 rel = safe_call(lambda: int(getattr(journalist,
-                                                "relationship", 0)), 0)
+                                                "relationship", 0)), 0,
+                                context="media_center/journalist_relationship")
                 j_lbl = QLabel(f"{jname} ({joutlet})"
                                + (f" — {jtype}" if jtype else ""))
                 j_lbl.setStyleSheet("color: #FFB300;")
@@ -851,8 +858,8 @@ class MediaCenterScreen(BaseScreen):
 
     def refresh(self):
         gm = _resolve_gm(self.game)
-        league = safe_call(lambda: gm.league)
-        team = safe_call(lambda: gm.user_team)
+        league = safe_call(lambda: gm.league, context="media_center/reporters_league")
+        team = safe_call(lambda: gm.user_team, context="media_center/reporters_user_team")
         ms = _media_system(gm)
 
         # Ensure media state exists
@@ -877,11 +884,12 @@ class MediaCenterScreen(BaseScreen):
                 reporters = me.reporters_for(team) or []
             elif league is not None:
                 reporters = safe_call(
-                    lambda: list(getattr(league, "reporters", None) or []), [])
+                    lambda: list(getattr(league, "reporters", None) or []), [],
+                                      context="media_center/reporters_league_list")
         except Exception:
             pass
         if not reporters and ms is not None:
-            reporters = safe_call(lambda: list(ms.journalists or []), [])
+            reporters = safe_call(lambda: list(ms.journalists or []), [], context="media_center/reporters_fallback")
         self._journalist_table.setRowCount(len(reporters))
         for i, r in enumerate(reporters):
             self._journalist_table.setItem(
@@ -901,10 +909,12 @@ class MediaCenterScreen(BaseScreen):
         # Narratives & beefs
         self._narr_list.clear()
         narrs = safe_call(lambda: list(
-            getattr(league, "media_narratives", None) or []), []) \
+            getattr(league, "media_narratives", None) or []), [],
+                          context="media_center/narratives") \
             if league is not None else []
         beefs = safe_call(lambda: list(
-            getattr(league, "coach_media_beefs", None) or []), []) \
+            getattr(league, "coach_media_beefs", None) or []), [],
+                          context="media_center/beefs") \
             if league is not None else []
         for n in narrs:
             title = getattr(n, "title", getattr(n, "headline", str(n)))
@@ -916,7 +926,8 @@ class MediaCenterScreen(BaseScreen):
 
         # Fines ledger
         fines = safe_call(lambda: list(
-            getattr(league, "media_fines", None) or []), []) \
+            getattr(league, "media_fines", None) or []), [],
+                          context="media_center/fines") \
             if league is not None else []
         self._fines_table.setRowCount(len(fines))
         for i, f in enumerate(fines):
