@@ -342,6 +342,17 @@ class MultiplayerScreen(BaseScreen):
         except Exception:
             return
         if not self._mp_hook_active:
+            # Teardown raced the queued delivery: the hook already
+            # suppressed the downstream forward at emit time, so an
+            # "error" would vanish silently. Surface it via the
+            # pre-session dispatcher -- still exactly once.
+            if kind == "error":
+                try:
+                    orig = self._orig_notify
+                    if orig is not None:
+                        orig(kind, *args, **kwargs)
+                except Exception:
+                    pass
             return
         try:
             self._on_mp_notify(kind, *args, **kwargs)
@@ -572,7 +583,13 @@ class MultiplayerScreen(BaseScreen):
             try:
                 if game._ui_notify is hook:
                     game._ui_notify = self._orig_notify
-                    self._orig_notify = None
+                    # NOTE: _orig_notify is intentionally NOT cleared here.
+                    # A queued _on_mp_notify_queued delivery may still be
+                    # in flight (teardown raced it); its drop path needs
+                    # the pre-session dispatcher to surface "error" notifies
+                    # that were already suppressed downstream at emit time.
+                    # The next _install_notify_hook overwrites it, so a
+                    # stale value can never leak into a later session.
                     self._mp_hook_fn = None
             except Exception:
                 pass
