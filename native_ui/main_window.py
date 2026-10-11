@@ -2763,15 +2763,35 @@ class MainWindow(QMainWindow):
     }
 
     def show_blockers(self, blockers):
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame
+        """Blocker dialog: one card per blocker with its action buttons.
 
-        def _fire_action(cb):
-            """Run a blocker callback guarded -- never let a Tk-era
-            closure take down the dialog."""
-            try:
-                cb()
-            except Exception as e:
-                print(f"[native] blocker action failed: {e}")
+        Pure refactor of the previous monolithic body -- dialog assembly
+        and each per-blocker-type renderer now live in focused helpers
+        below. Behavior is identical.
+        """
+        dlg, layout = self._blocker_make_dialog(blockers)
+        for b in blockers:
+            self._blocker_render_card(b, dlg, layout)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        layout.addWidget(close)
+        # Centralized modal helper honors PUCK_DYNASTY_NO_MODAL for
+        # scripted UI drivers; real users get the blocking dialog.
+        _modal.exec_dialog(dlg, "blockers")
+        self._blocker_maybe_open_recall_picker()
+
+    @staticmethod
+    def _blocker_fire_action(cb):
+        """Run a blocker callback guarded -- never let a Tk-era
+        closure take down the dialog."""
+        try:
+            cb()
+        except Exception as e:
+            print(f"[native] blocker action failed: {e}")
+
+    def _blocker_make_dialog(self, blockers):
+        """Create the blocker dialog shell with its title label."""
+        from PySide6.QtWidgets import QDialog
         dlg = QDialog(self)
         dlg.setWindowTitle("Can't advance yet")
         dlg.setMinimumWidth(600)
@@ -2779,121 +2799,137 @@ class MainWindow(QMainWindow):
         title = QLabel(f"{len(blockers)} things need your attention")
         title.setObjectName("dialog-title")
         layout.addWidget(title)
-        for b in blockers:
-            card = QFrame()
-            card.setObjectName("blocker-card")
-            cl = QVBoxLayout(card)
-            t = QLabel(b.get("title", "Blocker"))
-            t.setObjectName("blocker-title")
-            d = QLabel(b.get("detail", ""))
-            d.setObjectName("blocker-detail")
-            d.setWordWrap(True)
-            cl.addWidget(t)
-            cl.addWidget(d)
-            # Render action button if blocker provides one
-            # New format: action_id + action_label (UI-agnostic)
-            # Old format: action tuple (label, callable) - deprecated
-            action_id = b.get("action_id")
-            action_label = b.get("action_label", "Open")
-            if action_id:
+        return dlg, layout
+
+    def _blocker_render_card(self, b, dlg, layout):
+        """Render one blocker card: title, detail, and action buttons."""
+        card = QFrame()
+        card.setObjectName("blocker-card")
+        cl = QVBoxLayout(card)
+        t = QLabel(b.get("title", "Blocker"))
+        t.setObjectName("blocker-title")
+        d = QLabel(b.get("detail", ""))
+        d.setObjectName("blocker-detail")
+        d.setWordWrap(True)
+        cl.addWidget(t)
+        cl.addWidget(d)
+        self._blocker_render_primary_action(b, cl, dlg)
+        self._blocker_render_secondary_action(b, cl, dlg)
+        self._blocker_render_auto_action(b, cl, dlg)
+        layout.addWidget(card)
+
+    def _blocker_render_primary_action(self, b, cl, dlg):
+        """Primary action button: new action_id format or legacy
+        (label, callable) tuple format."""
+        # Render action button if blocker provides one
+        # New format: action_id + action_label (UI-agnostic)
+        # Old format: action tuple (label, callable) - deprecated
+        action_id = b.get("action_id")
+        action_label = b.get("action_label", "Open")
+        if action_id:
+            try:
+                # Map action IDs to native screens
+                native_target = self._BLOCKER_SCREEN_MAP.get(action_id)
+                if native_target:
+                    btn = QPushButton(action_label)
+                    btn.setObjectName("primary-btn")
+                    btn.clicked.connect(
+                        lambda _=False, n=native_target: (
+                            dlg.accept(), self.show_screen(n)))
+                    cl.addWidget(btn)
+                else:
+                    # Unknown action_id: LOUD, never a dead button.
+                    # Rendering a button with zero `clicked` receivers
+                    # is the exact failure mode that burned trust.
+                    print(f"[native] show_blockers: unknown "
+                          f"action_id {action_id!r} -- no button "
+                          f"rendered")
+            except Exception:
+                pass
+        else:
+            # Fallback: old tuple format
+            action = b.get("action")
+            if action:
                 try:
-                    # Map action IDs to native screens
-                    native_target = self._BLOCKER_SCREEN_MAP.get(action_id)
+                    label, callback = action
+                    btn = QPushButton(label)
+                    btn.setObjectName("primary-btn")
+                    blocker_id = b.get("id", "")
+                    native_target = self._BLOCKER_SCREEN_MAP.get(
+                        blocker_id)
                     if native_target:
-                        btn = QPushButton(action_label)
-                        btn.setObjectName("primary-btn")
+                        # Known blocker id: navigate to the native
+                        # screen (roster_limit_23 -> roster,
+                        # dress_minimum -> recall_picker). The raw
+                        # tuple callback is a Tk-era closure and is
+                        # deliberately NOT used.
                         btn.clicked.connect(
                             lambda _=False, n=native_target: (
                                 dlg.accept(), self.show_screen(n)))
-                        cl.addWidget(btn)
                     else:
-                        # Unknown action_id: LOUD, never a dead button.
-                        # Rendering a button with zero `clicked` receivers
-                        # is the exact failure mode that burned trust.
-                        print(f"[native] show_blockers: unknown "
-                              f"action_id {action_id!r} -- no button "
-                              f"rendered")
+                        # Unknown blocker id (e.g. pending popup
+                        # items' "Go to it"): fire the tuple callback
+                        # guarded. The GameManager.show_screen bridge
+                        # installed in __init__ lets Tk-era closures
+                        # like the pending-item _jump resolve.
+                        btn.clicked.connect(
+                            lambda _=False, cb=callback: (
+                                dlg.accept(),
+                                self._blocker_fire_action(cb)))
+                    cl.addWidget(btn)
                 except Exception:
                     pass
-            else:
-                # Fallback: old tuple format
-                action = b.get("action")
-                if action:
-                    try:
-                        label, callback = action
-                        btn = QPushButton(label)
-                        btn.setObjectName("primary-btn")
-                        blocker_id = b.get("id", "")
-                        native_target = self._BLOCKER_SCREEN_MAP.get(
-                            blocker_id)
-                        if native_target:
-                            # Known blocker id: navigate to the native
-                            # screen (roster_limit_23 -> roster,
-                            # dress_minimum -> recall_picker). The raw
-                            # tuple callback is a Tk-era closure and is
-                            # deliberately NOT used.
-                            btn.clicked.connect(
-                                lambda _=False, n=native_target: (
-                                    dlg.accept(), self.show_screen(n)))
-                        else:
-                            # Unknown blocker id (e.g. pending popup
-                            # items' "Go to it"): fire the tuple callback
-                            # guarded. The GameManager.show_screen bridge
-                            # installed in __init__ lets Tk-era closures
-                            # like the pending-item _jump resolve.
-                            btn.clicked.connect(
-                                lambda _=False, cb=callback: (
-                                    dlg.accept(), _fire_action(cb)))
-                        cl.addWidget(btn)
-                    except Exception:
-                        pass
-                # Render secondary_action button if present (e.g. the IR
-                # quick-fix on the roster-limit blocker)
-                secondary_action = b.get("secondary_action")
-                if secondary_action:
-                    try:
-                        sec_label, sec_cb = secondary_action
-                        sec_btn = QPushButton(sec_label)
-                        sec_btn.setObjectName("secondary-btn")
-                        sec_btn.clicked.connect(
-                            lambda _=False, cb=sec_cb: (
-                                dlg.accept(), _fire_action(cb)))
-                        cl.addWidget(sec_btn)
-                    except Exception:
-                        pass
-            # Render auto_action button if present (e.g. Auto-pick Captains,
-            # Auto-shed salary). These callbacks are UI-agnostic game logic
-            # (roster_limits._auto_demote / _auto_recall, game_manager
-            # _auto_captains / _auto_fix_cap, coach_season_meeting._auto) --
-            # fire them directly via _fire_action so the button actually
-            # does what its label promises. The old captaincy special-case
-            # that only navigated to the captains screen is gone: the
-            # captaincy callback IS the real auto-pick (same code path the
-            # headless auto-resolve uses), so "Auto-pick Captains" picks.
-            auto_action = b.get("auto_action")
-            if auto_action:
-                try:
-                    auto_label, auto_cb = auto_action
-                    auto_btn = QPushButton(auto_label)
-                    auto_btn.setObjectName("primary-btn")
-                    # NOTE: clicked(bool) passes a `checked` positional, so
-                    # the slot must swallow it first. Connecting
-                    # `def f(cb=auto_cb)` directly made `cb` receive False,
-                    # and False() raised TypeError inside a swallowed
-                    # except -- dead buttons that only closed the dialog.
-                    auto_btn.clicked.connect(
-                        lambda _=False, cb=auto_cb: (
-                            dlg.accept(), _fire_action(cb)))
-                    cl.addWidget(auto_btn)
-                except Exception:
-                    pass
-            layout.addWidget(card)
-        close = QPushButton("Close")
-        close.clicked.connect(dlg.accept)
-        layout.addWidget(close)
-        # Centralized modal helper honors PUCK_DYNASTY_NO_MODAL for
-        # scripted UI drivers; real users get the blocking dialog.
-        _modal.exec_dialog(dlg, "blockers")
+
+    def _blocker_render_secondary_action(self, b, cl, dlg):
+        """Secondary-action button (e.g. the IR quick-fix on the
+        roster-limit blocker)."""
+        # Render secondary_action button if present (e.g. the IR
+        # quick-fix on the roster-limit blocker)
+        secondary_action = b.get("secondary_action")
+        if secondary_action:
+            try:
+                sec_label, sec_cb = secondary_action
+                sec_btn = QPushButton(sec_label)
+                sec_btn.setObjectName("secondary-btn")
+                sec_btn.clicked.connect(
+                    lambda _=False, cb=sec_cb: (
+                        dlg.accept(), self._blocker_fire_action(cb)))
+                cl.addWidget(sec_btn)
+            except Exception:
+                pass
+
+    def _blocker_render_auto_action(self, b, cl, dlg):
+        """Auto-action button (e.g. Auto-pick Captains, Auto-shed
+        salary). These callbacks are UI-agnostic game logic
+        (roster_limits._auto_demote / _auto_recall, game_manager
+        _auto_captains / _auto_fix_cap, coach_season_meeting._auto) --
+        fire them directly via _blocker_fire_action so the button
+        actually does what its label promises. The old captaincy
+        special-case that only navigated to the captains screen is
+        gone: the captaincy callback IS the real auto-pick (same code
+        path the headless auto-resolve uses), so "Auto-pick Captains"
+        picks.
+        """
+        auto_action = b.get("auto_action")
+        if auto_action:
+            try:
+                auto_label, auto_cb = auto_action
+                auto_btn = QPushButton(auto_label)
+                auto_btn.setObjectName("primary-btn")
+                # NOTE: clicked(bool) passes a `checked` positional, so
+                # the slot must swallow it first. Connecting
+                # `def f(cb=auto_cb)` directly made `cb` receive False,
+                # and False() raised TypeError inside a swallowed
+                # except -- dead buttons that only closed the dialog.
+                auto_btn.clicked.connect(
+                    lambda _=False, cb=auto_cb: (
+                        dlg.accept(), self._blocker_fire_action(cb)))
+                cl.addWidget(auto_btn)
+            except Exception:
+                pass
+
+    def _blocker_maybe_open_recall_picker(self):
+        """Offer the AHL recall picker when the club can't dress 18+2."""
         # If the club can't dress 18+2, offer the AHL recall picker.
         # maybe_open_recall_picker is a no-op when there's no shortfall.
         try:
@@ -2901,7 +2937,6 @@ class MainWindow(QMainWindow):
             maybe_open_recall_picker(self.game, parent=self)
         except Exception as e:
             print(f"[native] recall picker failed: {e}")
-
     def refresh(self):
         if self.game:
             self.hub.refresh(self.game)
