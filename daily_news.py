@@ -164,6 +164,26 @@ def _pts(p):
     return _g(p) + _a(p)
 
 
+def _unavailable(p):
+    """True if the player is missing games for a known non-scratch reason.
+
+    A star with a low game count who is injured, on IR/LTIR, or serving a
+    suspension is NOT a healthy scratch -- the absence is explained, not a
+    coach's message. Scratch-watch (and any similar bucket) must skip them.
+    Reads getattr-safe: old saves / duck-typed player-likes may lack these.
+    """
+    if _safe(lambda: bool(p.is_injured), False):
+        return True
+    if (_safe(lambda: int(p.games_remaining_injured), 0) or 0) > 0:
+        return True
+    ir = str(_safe(lambda: p.ir_status, "") or "").upper()
+    if ir in ("IR", "LTIR"):
+        return True
+    if (_safe(lambda: int(p.suspension_games_remaining), 0) or 0) > 0:
+        return True
+    return False
+
+
 def _all_teams(app):
     gm = _safe(lambda: app.game_manager)
     league = _safe(lambda: gm.league) or _safe(lambda: app.league)
@@ -434,43 +454,65 @@ def _controversies(app, game_date, rng):
     """Plausible speculation grounded in real game state."""
     stories = []
     players = _all_players(app)
-    # Healthy scratches: high-OVR players with very few games played
+    # Healthy scratches: high-OVR players with very few games played --
+    # gated on REAL scratch candidacy (REV-A3 follow-up to F-1). The bare
+    # "gp <= 3" gate fired for every 78+ OVR player in week 1 (everyone has
+    # gp <= 3 when the season just started) and for injured stars -- false
+    # premises. A scratch story now requires ALL of:
+    #   * the player's TEAM has played >= 10 games (season-progress floor:
+    #     nobody is "scratched" two games into the season),
+    #   * the player is not sidelined by injury/IR/suspension
+    #     (_unavailable: a known absence is not a coach's message),
+    #   * the player is a skater (backup goalies sit by roster design),
+    #   * the player has dressed for fewer than HALF the team's games
+    #     (a star who dressed 2 of 2 is not scratched; 2 of 12 might be).
     for p, t in players:
         try:
             ovr = _ovr(p)
             gp = _gp(p)
             # B6: garbage OVR must not qualify or render
-            if _ovr_ok(ovr) and ovr >= 78 and gp <= 3:
-                key = f"player:{_safe(lambda: p.id, id(p))}"
-                if not _recent_ok(app, key, "scratch", game_date):
-                    continue
-                story = rng.choice([
-                    "SCRATCH WATCH: {name} ({ovr} OVR) has dressed for just {gp} games. Is {coach} sending a message in {team}?",
-                    "{name} can't crack the {team} lineup -- {gp} games for a {ovr} OVR talent is hard to justify.",
-                    "SCRATCH WATCH: {name} watched again -- {gp} games for a {ovr} OVR player is raising eyebrows in {team}.",
-                    "{coach} keeps going back to the same lineup card, and {name} ({ovr} OVR) keeps sitting -- {gp} games and counting.",
-                    "SCRATCH WATCH: {team} is healthy-scratching a {ovr} OVR talent in {name}. Something has to give.",
-                    "{name} has played {gp} games. For a {ovr} OVR player in {team}, that's a statement from {coach}.",
-                    "The {team} press box has a {ovr} OVR regular in {name} -- {coach} isn't budging.",
-                    "SCRATCH WATCH: {name}'s situation in {team} is one to watch -- {gp} games, {ovr} OVR, and questions piling up.",
-                    "Whatever the reason in {team}, {name} sitting at {gp} games tells its own story.",
-                    "With {ovr} OVR and {gp} games, {name} has no clear path back in {team} -- something has to give.",
-                    "A {ovr} OVR player should not be watching from the press box -- {name} has {gp} games in {team}.",
-                    "{name} is out of the lineup again -- in {team}, people notice these things.",
-                    "SCRATCH WATCH: {name} needs a fresh start -- {gp} games in {team} isn't it for a {ovr} OVR talent.",
-                    "The message from {coach} is clear, even if the reason isn't: {name} sits again for {team}.",
-                    "{team} paid for a {ovr} OVR contributor and is getting {gp} games from {name} -- the math doesn't work.",
-                    "SCRATCH WATCH: {name} keeps sitting -- {gp} games in {team} is a long stretch to go unnoticed.",
-                    "The {team} brass are preaching patience with {name} -- {gp} games into the season, fans aren't buying it.",
-                    "You don't healthy-scratch {ovr} OVR talent without a reason -- but {coach} isn't sharing his in {team}.",
-                    "SCRATCH WATCH: {name} keeps sitting -- that's the {team} story at {gp} games.",
-                    "If {name} isn't in {coach}'s plans, {team} owes it to a {ovr} OVR asset to find him a new home.",
-                ]).format(name=_pname(p), ovr=int(ovr), gp=gp,
-                          team=_tname(t),
-                          coach=_coach_name(_head_coach(t)) or "the coach")
-                stories.append(story)
-                _mark_recent(app, key, "scratch", game_date)
-                break
+            if not (_ovr_ok(ovr) and ovr >= 78):
+                continue
+            w, l, otl = _team_record(t)
+            team_gp = w + l + otl
+            if team_gp < 10:
+                continue
+            if _unavailable(p):
+                continue
+            if _pos(p).upper() in ("G", "GOALIE"):
+                continue
+            if gp * 2 >= team_gp:
+                continue
+            key = f"player:{_safe(lambda: p.id, id(p))}"
+            if not _recent_ok(app, key, "scratch", game_date):
+                continue
+            story = rng.choice([
+                "SCRATCH WATCH: {name} ({ovr} OVR) has dressed for just {gp} games. Is {coach} sending a message in {team}?",
+                "{name} can't crack the {team} lineup -- {gp} games for a {ovr} OVR talent is hard to justify.",
+                "SCRATCH WATCH: {name} watched again -- {gp} games for a {ovr} OVR player is raising eyebrows in {team}.",
+                "{coach} keeps going back to the same lineup card, and {name} ({ovr} OVR) keeps sitting -- {gp} games and counting.",
+                "SCRATCH WATCH: {team} is healthy-scratching a {ovr} OVR talent in {name}. Something has to give.",
+                "{name} has played {gp} games. For a {ovr} OVR player in {team}, that's a statement from {coach}.",
+                "The {team} press box has a {ovr} OVR regular in {name} -- {coach} isn't budging.",
+                "SCRATCH WATCH: {name}'s situation in {team} is one to watch -- {gp} games, {ovr} OVR, and questions piling up.",
+                "Whatever the reason in {team}, {name} sitting at {gp} games tells its own story.",
+                "With {ovr} OVR and {gp} games, {name} has no clear path back in {team} -- something has to give.",
+                "A {ovr} OVR player should not be watching from the press box -- {name} has {gp} games in {team}.",
+                "{name} is out of the lineup again -- in {team}, people notice these things.",
+                "SCRATCH WATCH: {name} needs a fresh start -- {gp} games in {team} isn't it for a {ovr} OVR talent.",
+                "The message from {coach} is clear, even if the reason isn't: {name} sits again for {team}.",
+                "{team} paid for a {ovr} OVR contributor and is getting {gp} games from {name} -- the math doesn't work.",
+                "SCRATCH WATCH: {name} keeps sitting -- {gp} games in {team} is a long stretch to go unnoticed.",
+                "The {team} brass are preaching patience with {name} -- {gp} games into the season, fans aren't buying it.",
+                "You don't healthy-scratch {ovr} OVR talent without a reason -- but {coach} isn't sharing his in {team}.",
+                "SCRATCH WATCH: {name} keeps sitting -- that's the {team} story at {gp} games.",
+                "If {name} isn't in {coach}'s plans, {team} owes it to a {ovr} OVR asset to find him a new home.",
+            ]).format(name=_pname(p), ovr=int(ovr), gp=gp,
+                      team=_tname(t),
+                      coach=_coach_name(_head_coach(t)) or "the coach")
+            stories.append(story)
+            _mark_recent(app, key, "scratch", game_date)
+            break
         except Exception:
             continue
     # Trade rumors: underperforming stars (high OVR, low points per game)
