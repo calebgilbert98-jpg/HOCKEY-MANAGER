@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
     QSizePolicy, QComboBox,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QFont, QShortcut, QKeySequence
 
 from .theme import THEME_QSS
@@ -1909,8 +1909,44 @@ class HubPage(QWidget):
         super().resizeEvent(event)
 
 
+class _UiNotifyRequest:
+    """One worker-thread -> UI-thread _ui_notify rendezvous.
+
+    Created on the worker thread, delivered to the UI thread through
+    MainWindow._ui_notify_signal (Qt.QueuedConnection), executed there,
+    then answered back: the slot stores result/error and sets ``done``.
+    Each request owns its event and boxes, so rapid successive (or
+    concurrent) notifies can never cross answers.
+    """
+    __slots__ = ("kind", "args", "kwargs", "result", "error", "done")
+
+    def __init__(self, kind, args, kwargs):
+        self.kind = kind
+        self.args = args
+        self.kwargs = kwargs
+        self.result = None
+        self.error = None
+        self.done = threading.Event()
+
+
+# Backstop for _ui_notify_from_worker: the UI-thread slot always answers,
+# so the worker's wait only ever ends by timeout when the UI thread itself
+# can no longer process events (app teardown / hard UI stall). 300s is
+# deliberately generous -- request/response modals (ask_game_mode, ...)
+# legitimately wait on a human -- while still guaranteeing a stuck worker
+# can never wedge the sim session forever. On timeout the notify resolves
+# to None (the same safe default as an unhandled kind).
+_UI_NOTIFY_TIMEOUT_S = 300.0
+
+
 class MainWindow(QMainWindow):
     """Puck Dynasty native application window."""
+
+    # Cross-thread _ui_notify marshal. Emitted on any worker thread;
+    # Qt.QueuedConnection posts it to this window's (UI) thread event
+    # loop -- including nested modal-dialog loops -- where the
+    # _on_ui_notify_request slot runs the handler and answers the worker.
+    _ui_notify_signal = Signal(object)
 
     def __init__(self, game=None):
         super().__init__()
@@ -1947,6 +1983,16 @@ class MainWindow(QMainWindow):
                     game.show_screen = _gm_show_screen
                 except Exception as e:
                     print(f"[native] show_screen bridge failed: {e}")
+        # Cross-thread marshal for the _ui_notify dispatcher below:
+        # worker threads emit _ui_notify_signal; the slot is forced
+        # onto the UI thread via Qt.QueuedConnection (AutoConnection
+        # would resolve the same way by thread affinity, but explicit
+        # is safer than implicit for a ship-blocker path).
+        try:
+            self._ui_notify_signal.connect(
+                self._on_ui_notify_request, Qt.QueuedConnection)
+        except Exception as e:
+            print(f"[native] _ui_notify signal wiring failed: {e}")
         self.setWindowTitle("Puck Dynasty")
         self.setMinimumSize(1280, 800)
 
@@ -2409,30 +2455,48 @@ class MainWindow(QMainWindow):
     def _ui_notify_from_worker(self, kind, *args, **kwargs):
         """Marshal a _ui_notify call from a worker thread to the UI thread.
 
-        Blocks the worker until the UI thread completes the handler and
-        returns its result. Uses QTimer.singleShot(0) which is processed
-        by the UI thread's event loop (including modal dialog loops).
+        Root-cause fix for the ship-blocker deadlock: the previous code
+        used ``QTimer.singleShot(0, cb)`` here, but that static creates
+        its timer on the *calling* thread -- a worker thread with no Qt
+        event loop -- so the callback never fired and the ``done.wait()``
+        below blocked forever (any worker-thread ``simulate_day()`` hung
+        on its first ``_set_continue_feedback`` notify).
+
+        This emits ``_ui_notify_signal`` instead. Qt posts the emission
+        to the UI thread's event loop (Qt.QueuedConnection -- nested
+        modal-dialog loops deliver it too), the ``_on_ui_notify_request``
+        slot runs the real handler there and answers through the
+        request's event. The UI thread never blocks on the worker, so
+        the UI stays responsive and no UI-side deadlock is possible;
+        the worker blocks only on its own per-request event, with a
+        generous backstop timeout (see _UI_NOTIFY_TIMEOUT_S).
         """
-        from PySide6.QtCore import QTimer
-        result_box = {}
-        error_box = {}
-        done = threading.Event()
-
-        def _run_on_ui():
-            try:
-                result_box["value"] = self._ui_notify_on_ui_thread(
-                    kind, *args, **kwargs)
-            except Exception as e:  # noqa: BLE001 -- reported to caller
-                error_box["error"] = e
-            finally:
-                done.set()
-
-        QTimer.singleShot(0, _run_on_ui)
-        done.wait()
-        if "error" in error_box:
-            print(f"[native] _ui_notify {kind!r} failed: {error_box['error']}")
+        request = _UiNotifyRequest(kind, args, kwargs)
+        self._ui_notify_signal.emit(request)
+        answered = request.done.wait(timeout=_UI_NOTIFY_TIMEOUT_S)
+        if not answered:
+            print(f"[native] _ui_notify {kind!r} timed out after "
+                  f"{_UI_NOTIFY_TIMEOUT_S:.0f}s waiting for the UI thread")
             return None
-        return result_box.get("value")
+        if request.error is not None:
+            print(f"[native] _ui_notify {kind!r} failed: {request.error}")
+            return None
+        return request.result
+
+    @Slot(object)
+    def _on_ui_notify_request(self, request):
+        """UI-thread slot: run the notify handler, answer the worker.
+
+        Always sets ``request.done`` (finally) so the emitting worker
+        can never wait forever, even if the handler raises.
+        """
+        try:
+            request.result = self._ui_notify_on_ui_thread(
+                request.kind, *request.args, **request.kwargs)
+        except Exception as e:  # noqa: BLE001 -- reported to caller
+            request.error = e
+        finally:
+            request.done.set()
 
     def _ui_notify_on_ui_thread(self, kind, *args, **kwargs):
         """Original _ui_notify dispatch logic. Must run on the UI thread."""
