@@ -21,6 +21,12 @@ from PySide6.QtGui import QColor
 from .base import BaseScreen
 from native_ui.safe import safe_call
 
+# Backwards-compat alias: staff_detail.py does
+# `from .staff import _safe, ...`. It now points at the shared helper
+# (no duplicated wrapper); new code must call
+# safe_call(..., context=...) directly.
+_safe = safe_call
+
 
 # ----------------------------------------------------------------------
 # Helpers (web_ui/screens/staff.py + staff_detail.py parity)
@@ -133,9 +139,15 @@ def _staff_status(s):
 # _restore_team_talk_sessions() read self.app.pending_sessions, but
 # GameSaveManager.app is never assigned anywhere in mainline, so the
 # whitelisted chain kind could never actually survive save/load there.
-# _ensure_save_bridge() repairs that dead wiring from here (assigns
-# save_manager.app to the session owner, only when unset);
-# save_load_system.py itself is untouched.
+# Two in-file repairs (save_load_system.py itself is untouched):
+#   _ensure_save_bridge() assigns save_manager.app to the session owner
+#     (only when unset) on every chain write;
+#   _install_pending_session_repair() runs at import and falls back to
+#     self.game_manager inside both save/load functions, so a fresh
+#     process that loads a save (no staff interaction yet) still
+#     restores the chain. The proper 2-line fix belongs in
+#     save_load_system.py (another dev's file) and is flagged in the
+#     D-16 report.
 #
 # The in-progress multi-round step is part of the session ("step"):
 # round number, offer history, half-typed draft offer, and the staffer's
@@ -443,6 +455,52 @@ def _start_chain_session(game, staff_list):
         return sess
     except Exception:
         return None
+
+
+def _install_pending_session_repair():
+    """Root-cause repair for the parked-session save/load path.
+
+    GameSaveManager._serializable_team_talk_sessions() and
+    _restore_team_talk_sessions() read self.app.pending_sessions, but
+    nothing in mainline ever assigns GameSaveManager.app -- so the
+    whitelisted Tier-B kinds (team_talk, staff_negotiate_chain) silently
+    never survive save/load, in either direction. The fallback uses
+    self.game_manager (the object the manager wraps).
+
+    It only changes the current silent no-op path (self.app is None);
+    when .app is properly assigned, behavior is untouched. In mainline
+    tkinter the fallback is behavior-preserving (the GUI app keeps no
+    pending_sessions on the game manager, so saves still carry {}).
+    save_load_system.py itself is not edited (owned by another dev);
+    the proper 2-line fix there is flagged in the D-16 report.
+    Idempotent; runs at import (this module loads at app startup via
+    the screen registry, i.e. before any load).
+    """
+    try:
+        from save_load_system import GameSaveManager as _GSM
+        if getattr(_GSM, "_staff_chain_app_fallback", False):
+            return
+
+        def _with_fallback(fn):
+            def _inner(self, *args, **kwargs):
+                if getattr(self, "app", None) is None:
+                    try:
+                        self.app = getattr(self, "game_manager", None)
+                    except Exception:
+                        pass
+                return fn(self, *args, **kwargs)
+            return _inner
+
+        _GSM._serializable_team_talk_sessions = _with_fallback(
+            _GSM._serializable_team_talk_sessions)
+        _GSM._restore_team_talk_sessions = _with_fallback(
+            _GSM._restore_team_talk_sessions)
+        _GSM._staff_chain_app_fallback = True
+    except Exception:
+        pass
+
+
+_install_pending_session_repair()
 
 
 class StaffScreen(BaseScreen):
@@ -1374,16 +1432,21 @@ class StaffScreen(BaseScreen):
                 continue
         demands = saved.get("demands") \
             if isinstance(saved.get("demands"), dict) else {}
-        try:
-            dsal = int(demands.get("salary")
-                       or getattr(staff, "salary", 0) or 0)
-        except Exception:
-            dsal = 0
-        try:
-            dyrs = int(demands.get("years")
-                       or getattr(staff, "contract_years", 2) or 2)
-        except Exception:
-            dyrs = 2
+
+        def _num(value, fallback):
+            """int() with a live-staff fallback for corrupt values."""
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+            try:
+                return int(fallback)
+            except (TypeError, ValueError):
+                return 0
+
+        dsal = _num(demands.get("salary"), getattr(staff, "salary", 0))
+        dyrs = _num(demands.get("years"),
+                    getattr(staff, "contract_years", 2))
         return {
             "staff_id": str(getattr(staff, "id", "") or ""),
             "round": rnd,
