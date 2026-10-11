@@ -20,6 +20,12 @@ def safe_call(fn, default=None, *, context=""):
 
     The exception is logged at ERROR level with the given context so that
     swallowed failures can be traced back to the screen/action that hit them.
+    A ``None`` result mapped to ``default`` is logged at DEBUG (not
+    ERROR/WARNING): None is a *routine* outcome for UI getters
+    (e.g. ``getattr(game, "game_manager", None)`` when there is no game
+    manager, which callers fall back on), so WARNING would spam every
+    screen refresh. DEBUG keeps the substitution trail visible for
+    diagnosis without noise in normal logs.
     """
     try:
         v = fn()
@@ -27,4 +33,9 @@ def safe_call(fn, default=None, *, context=""):
         _logger.exception(
             "Native UI operation failed%s", f" ({context})" if context else "")
         return default
-    return default if v is None else v
+    if v is None:
+        _logger.debug(
+            "Native UI fallback: None mapped to default%s",
+            f" ({context})" if context else "")
+        return default
+    return v
