@@ -29,7 +29,11 @@ writes into command-queue ops; here we call the same underlying
                                  path only)
 - preferred tactics            : ``tactics.save_preferred_tactics`` /
                                  ``tactics.get_preferred_tactics``
-- legacy slider pills         : plain ``setattr(team, tactic_*, value)``
+- legacy slider pills         : ``_apply_legacy_tactic_change`` -- the
+                                 GM-owned whiteboard writes directly via
+                                 setattr; coach-owned stages into
+                                 ``self._pending_legacy``; fail-closed when
+                                 the reputation service is down
 - weekly practice plan         : ``team.dressing_room["practice_plan"]``
 """
 
@@ -175,13 +179,28 @@ class TacticsScreen(BaseScreen):
         # mainline tactics_window._pending. Clicks stage while the coach owns
         # the whiteboard; Suggest / Enforce / Take Over consume them.
         self._pending = {}
+        # Staged legacy game-management slider changes (attr -> value). The
+        # legacy pills carry plain team attributes (tactic_even_strength,
+        # ...), not whiteboard catalog keys, so they can't ride in
+        # self._pending -- the reputation engine applies that map via
+        # tactics.set_team_system, which is a no-op for unknown categories.
+        # They stage in this parallel map, consumed at the same commit
+        # points (Suggest accept / Enforce / Take Over).
+        self._pending_legacy = {}
         # Response lines that survive tab rebuilds (mainline _response_text).
         self._coach_msg = ""
         self._systems_msg = ""
-        # T2: double-click guard -- ignore single clicks landing within this
-        # many seconds after a handled double-click (Qt still emits
-        # clicked() on release after the double-click).
-        self._last_pill_dblclick = 0.0
+        self._legacy_msg = ""
+        # Human-readable group titles for the legacy staging message.
+        self._legacy_labels = {attr: title
+                               for title, attr, _d, _v, _h in TACTIC_GROUPS}
+        # T2: double-click-guard timestamps live ON THE PILL
+        # (pill._last_dblclick), set at creation. Qt still emits clicked()
+        # on release after a handled double-click -- the pill records when
+        # its own dblclick was handled so _on_module_pill_clicked can
+        # ignore that trailing click. A single global timestamp swallowed
+        # single clicks on NEIGHBORING pills within 300ms of any handled
+        # double-click, so it was replaced with the per-pill version.
         # T6: identity of the team _pending was staged for -- pending is
         # cleared whenever the resolved team changes (career switches).
         self._pending_team_marker = None
@@ -200,6 +219,9 @@ class TacticsScreen(BaseScreen):
             if team is not None else None
         if marker != self._pending_team_marker:
             self._pending.clear()
+            # T6: legacy stages belong to the same team -- drop them too.
+            self._pending_legacy.clear()
+            self._legacy_msg = ""
             self._pending_team_marker = marker
         return self._team
 
@@ -461,6 +483,8 @@ class TacticsScreen(BaseScreen):
                 # single-click installs; dblclick opens the inspector
                 # instead (disambiguated with a short timer).
                 pill._pending = None
+                # T2: per-pill double-click-guard timestamp (see __init__).
+                pill._last_dblclick = 0.0
                 pill._cat = cat
                 pill._detail = detail
                 pill.clicked.connect(self._on_module_pill_clicked)
@@ -477,6 +501,11 @@ class TacticsScreen(BaseScreen):
             "fold into the engine.")
         sub.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         lay.addWidget(sub)
+        self._legacy_out = QLabel(self._legacy_msg)
+        self._legacy_out.setStyleSheet(f"color: {WARN}; font-size: 12px;")
+        self._legacy_out.setWordWrap(True)
+        self._legacy_out.setVisible(bool(self._legacy_msg))
+        lay.addWidget(self._legacy_out)
         for title, attr, default, values, hint_text in TACTIC_GROUPS:
             box = QGroupBox(title)
             box_lay = QVBoxLayout(box)
@@ -491,9 +520,14 @@ class TacticsScreen(BaseScreen):
                 safe_call(lambda: setattr(team, attr, current),
                           context="tactics/legacy_attr")
             for v in values:
-                pill = self._make_pill(v, active=(v == current))
+                pill = self._make_pill(
+                    v,
+                    # A staged change shows as the selected one (mainline
+                    # parity), same as the whiteboard module pills.
+                    active=(v == self._pending_legacy.get(attr, current)))
                 pill.setProperty("tactic_attr", attr)
                 pill.setProperty("tactic_value", v)
+                pill.setProperty("tactic_default", default)
                 pill.clicked.connect(self._on_legacy_pill_clicked)
                 row.addWidget(pill)
             row.addStretch(1)
@@ -624,10 +658,12 @@ class TacticsScreen(BaseScreen):
             if t is not None and t.isActive():
                 t.stop()
             # T2: Qt still emits clicked() on release after the double
-            # click -- record the timestamp so _on_module_pill_clicked can
-            # ignore that trailing click instead of starting a new timer
-            # nothing cancels (which would install the system anyway).
-            self._last_pill_dblclick = time.monotonic()
+            # click -- record the timestamp ON THE PILL so
+            # _on_module_pill_clicked ignores only that pill's trailing
+            # click instead of starting a new timer nothing cancels (which
+            # would install the system anyway). A global timestamp here
+            # swallowed single clicks on neighboring pills too.
+            obj._last_dblclick = time.monotonic()
             self._show_inspector(obj)
             return True
         return super().eventFilter(obj, event)
@@ -637,7 +673,10 @@ class TacticsScreen(BaseScreen):
         if pill is None:
             return
         # T2: ignore the clicked() that trails a handled double-click.
-        if time.monotonic() - self._last_pill_dblclick < 0.3:
+        # The guard is per-pill: only this pill's own double-click
+        # suppresses its trailing click, so fast clicks on neighboring
+        # pills still go through.
+        if time.monotonic() - getattr(pill, "_last_dblclick", 0.0) < 0.3:
             return
         old = getattr(pill, "_pending", None)
         if old is not None and old.isActive():
@@ -725,6 +764,80 @@ class TacticsScreen(BaseScreen):
             pass
         self.refresh()
 
+    def _apply_legacy_tactic_change(self, attr, value, default, operation):
+        """Apply a legacy game-management slider change through the canonical
+        ownership flow (mirrors _apply_system_change).
+
+        - GM owns the whiteboard -> apply directly via setattr.
+        - Coach owns it -> STAGE the change in ``self._pending_legacy``
+          (attr -> value); it flows through Suggest / Enforce / Take Over
+          from the Coach tab. Control never flips here.
+        - Reputation service unavailable while the coach owns the
+          whiteboard -> block the mutation and show an actionable error
+          instead of silently bypassing coach consequences (fail closed).
+        """
+        team = self._team
+        if team is None:
+            QMessageBox.warning(
+                self, "Tactics",
+                "No team is loaded. No changes were made.")
+            return False
+        if _tx is None:
+            QMessageBox.warning(
+                self, "Tactics",
+                "The tactics engine is unavailable. No changes were made.")
+            return False
+        control = safe_call(
+            lambda: _tx.get_tactics_control(team), "coach",
+            context="tactics/get_control")
+        if control == "gm":
+            try:
+                setattr(team, attr, value)
+            except Exception:
+                pass
+            self._pending_legacy.pop(attr, None)
+            self._legacy_msg = ""
+            return True
+        # Coach owns the whiteboard: stage, never write directly.
+        if _rs is None:
+            self._warn_rs_unavailable("legacy game-management change")
+            return False
+        current = safe_call(lambda: getattr(team, attr, default), default,
+                            context="tactics/legacy_attr")
+        if value == current:
+            self._pending_legacy.pop(attr, None)
+            self._legacy_msg = ""
+            self.refresh()
+            return True
+        self._pending_legacy[attr] = value
+        label = self._legacy_labels.get(attr, attr)
+        self._legacy_msg = (
+            f"Staged: {label} → {value}. "
+            "Go to the Coach tab to Suggest, Enforce, or Take Over.")
+        self.refresh()
+        return False
+
+    def _apply_staged_legacy(self):
+        """Commit staged legacy game-management changes via setattr.
+
+        Called at the same commit points that consume ``self._pending``
+        (Suggest accept / Enforce / Take Over). Returns the count applied.
+        """
+        team = self._team
+        staged = list(self._pending_legacy.items())
+        self._pending_legacy.clear()
+        self._legacy_msg = ""
+        if team is None:
+            return 0
+        n = 0
+        for attr, value in staged:
+            try:
+                setattr(team, attr, value)
+                n += 1
+            except Exception:
+                pass
+        return n
+
     def _on_legacy_pill_clicked(self):
         pill = self.sender()
         if pill is None:
@@ -732,8 +845,10 @@ class TacticsScreen(BaseScreen):
         try:
             attr = pill.property("tactic_attr")
             value = pill.property("tactic_value")
+            default = pill.property("tactic_default")
             if attr and attr.startswith("tactic_"):
-                setattr(self._team, attr, value)
+                self._apply_legacy_tactic_change(attr, value, default,
+                                                 "legacy_pill")
         except Exception:
             pass
         self.refresh()
@@ -1184,7 +1299,7 @@ class TacticsScreen(BaseScreen):
             if _rs is None:
                 self._warn_rs_unavailable("suggestion")
                 return
-            if not self._pending:
+            if not self._pending and not self._pending_legacy:
                 _show_recommendation()
                 return
             # T3: when the GM owns the whiteboard there is no coach to
@@ -1195,6 +1310,18 @@ class TacticsScreen(BaseScreen):
                 self._coach_msg = (
                     "You already own the whiteboard -- your changes apply "
                     "immediately, so there is nothing to suggest.")
+                self.refresh()
+                return
+            if not self._pending:
+                # Legacy-only stages: the coach's preview/summary engine is
+                # keyed on whiteboard categories, so Suggest can't float
+                # game-management sliders past him -- Enforce or Take Over
+                # applies them instead.
+                self._coach_msg = (
+                    "Only game-management tweaks are staged — the coach "
+                    "discusses whiteboard systems over Suggest, not "
+                    "game-management sliders. Use Enforce or Take Over to "
+                    "put the staged tweaks in.")
                 self.refresh()
                 return
             res = {}
@@ -1209,10 +1336,18 @@ class TacticsScreen(BaseScreen):
                 return
             if res.get("applied"):
                 self._pending.clear()
+                # Staged legacy sliders ride along with the accepted
+                # package: the coach bought in, so commit them too.
+                n_legacy = self._apply_staged_legacy()
                 text = res.get("text", "")
+                if n_legacy:
+                    text += (f" ({n_legacy} game-management tweak"
+                             f"{'s' if n_legacy != 1 else ''} applied too.)")
                 if text:
                     self._push_tactics_news(f"Tactics: {text}")
-            self._coach_msg = res.get("text", "")
+                self._coach_msg = text
+            else:
+                self._coach_msg = res.get("text", "")
             self.refresh()
 
         def _enforce():
@@ -1225,9 +1360,10 @@ class TacticsScreen(BaseScreen):
             if _rs is None:
                 self._warn_rs_unavailable("enforcement")
                 return
-            if not self._pending:
-                self._coach_msg = ("Nothing staged — pick systems on the "
-                                   "Systems tab first.")
+            if not self._pending and not self._pending_legacy:
+                self._coach_msg = ("Nothing staged — pick systems or "
+                                   "game-management tweaks on the Systems "
+                                   "tab first.")
                 self.refresh()
                 return
             # T3: when the GM owns the whiteboard there was no overrule --
@@ -1247,6 +1383,18 @@ class TacticsScreen(BaseScreen):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ans != QMessageBox.Yes:
                 return
+            if not self._pending:
+                # Legacy-only enforce: the trust/morale engine is keyed on
+                # whiteboard categories (an empty package would crash its
+                # summary), so commit the staged game-management tweaks
+                # directly -- the GM confirmed the overrule above.
+                n = self._apply_staged_legacy()
+                self._coach_msg = (
+                    f"Enforced {n} game-management tweak"
+                    f"{'s' if n != 1 else ''} over the coach's objections.")
+                self._push_tactics_news(f"Tactics: {self._coach_msg}")
+                self.refresh()
+                return
             res = {}
             try:
                 res = _rs.enforce_tactics(
@@ -1259,10 +1407,18 @@ class TacticsScreen(BaseScreen):
                 return
             if res.get("applied"):
                 self._pending.clear()
+                # Staged legacy sliders ride along with the enforced
+                # package: commit them too.
+                n_legacy = self._apply_staged_legacy()
                 text = res.get("text", "")
+                if n_legacy:
+                    text += (f" ({n_legacy} game-management tweak"
+                             f"{'s' if n_legacy != 1 else ''} applied too.)")
                 if text:
                     self._push_tactics_news(f"Tactics: {text}")
-            self._coach_msg = res.get("text", "")
+                self._coach_msg = text
+            else:
+                self._coach_msg = res.get("text", "")
             self.refresh()
 
         def _takeover():
@@ -1373,6 +1529,8 @@ class TacticsScreen(BaseScreen):
                 for cat, key in list(self._pending.items()):
                     _tx.set_team_system(team, cat, key)
                 self._pending.clear()
+                # Staged legacy game-management tweaks are yours now too.
+                self._apply_staged_legacy()
             except Exception:
                 pass
             text = res.get("text", "")
