@@ -920,294 +920,33 @@ class HubPage(QWidget):
 
     # ---------- refresh ----------
     def refresh(self, game=None):
-        if game is None:
-            game = getattr(self._main, "game", None)
-        if game is None:
+        """Rebuild every hub widget from current game state.
+
+        Orchestrator: resolves shared state once, then delegates to
+        per-domain helpers (theming, header, strip cells, next game,
+        inbox badge, panels, ticker). Pure refactor -- behavior is
+        identical to the previous monolithic body.
+        """
+        resolved = self._refresh_resolve_game(game)
+        if resolved is None:
             return
+        game, gm, team = resolved
         try:
-            gm = getattr(game, "game_manager", None) or game
-            team = getattr(gm, "user_team", None) or getattr(game, "user_team", None)
-            if not team:
-                return
-            # loading indicator (mirrors web "LOADING FRANCHISE…" spinner)
-            try:
-                self._loading.resize(self.size())
-                self._loading.move(0, 0)
-                self._loading.show()
-                self._loading.raise_()
-                QApplication.processEvents()
-            except Exception:
-                pass
+            self._refresh_show_loading()
             team_name = getattr(team, "team_name", "") or ""
             primary, deep, soft, wash, glow = self._team_colors(team_name)
-
-            # Canonical standings data for the hub: the engine's
-            # league.standings table (Points = 2*W + 1*OTL), built and
-            # sorted exactly like the standings screen (_rich_team_rows +
-            # _apply_standings_sort). Team attributes are only a fallback:
-            # Team.update_record tracks OT losses in `ot_losses` (there is
-            # no Team.otl), so the old `wins*2 + otl` math silently dropped
-            # every OTL point from the hub record/rank/points.
-            div_rows = []
-            my_row = None
-            try:
-                from native_ui.screens.standings import (
-                    _apply_standings_sort, _rich_team_rows)
-                _all_rows, _ = _rich_team_rows(game)
-                my_row = next((r for r in _all_rows
-                               if r["name"] == team_name), None)
-                _division = getattr(team, "division", "") or ""
-                div_rows = _apply_standings_sort(
-                    [r for r in _all_rows
-                     if _division and r["division"] == _division],
-                    "Points")
-            except Exception:
-                div_rows = []
-
-            # ---- team theming ----
-            self.eyebrow.setStyleSheet(
-                "font-size: 12px; font-weight: 800; letter-spacing: 3px; "
-                "color: %s;" % primary)
-            self.hero.setStyleSheet(
-                "#hub-hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-                " stop:0 %s, stop:0.55 #1f5ad0, stop:1 #16367f);"
-                " border-radius: 12px; }" % deep)
-            for _key, tile in self._nav_tiles.items():
-                tile.setStyleSheet(
-                    "#hub-nav-tile { background: #0d1526;"
-                    " border: 1px solid rgba(255,255,255,0.09);"
-                    " border-top: 3px solid %s;"
-                    " border-radius: 10px; }" % soft)
-            for _key, cell in self._strip.items():
-                cell.setStyleSheet(
-                    "#hub-strip-cell { background: #131a26;"
-                    " border: 1px solid rgba(255,255,255,0.07);"
-                    " border-top: 2px solid %s;"
-                    " border-radius: 4px; padding: 8px 10px; }" % soft)
-
-            # ---- header ----
-            self.team_label.setText(team_name.upper())
-            if my_row is not None:
-                # Canonical record from the engine's standings table.
-                wins, losses, otl = my_row["w"], my_row["l"], my_row["otl"]
-            else:
-                wins = getattr(team, "wins", 0) or 0
-                losses = getattr(team, "losses", 0) or 0
-                otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
-            self.record_label.setText("%d-%d-%d" % (wins, losses, otl))
-
-            try:
-                date = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
-                datestr = str(date) if date else ""
-                m = re.search(r"(19|20)\d{2}", datestr)
-                if m:
-                    y = int(m.group(0))
-                    self.eyebrow.setText(
-                        "FRANCHISE \u00b7 %d-%s SEASON" % (y, str(y + 1)[2:]))
-                if date:
-                    try:
-                        self.date_pill.setText(
-                            "\U0001f4c5 " + date.strftime("%B %d, %Y"))
-                    except Exception:
-                        self.date_pill.setText("\U0001f4c5 " + datestr)
-            except Exception:
-                pass
-
-            try:
-                recent = self._team_recent_results(gm, team, 10)
-                if recent:
-                    self.streak_pill.setText(
-                        "\U0001f525 " + str(recent[-1]).upper())
-                else:
-                    self.streak_pill.setText("\U0001f525 \u2014")
-            except Exception:
-                pass
-
-            # ---- strip ----
-            gp = wins + losses + otl
-            self._strip["record"]._val.setText("%d-%d-%d" % (wins, losses, otl))
-            self._strip["record"]._sub.setText("%d GP" % gp)
-
-            division = getattr(team, "division", "") or ""
-            try:
-                # Canonical division rank: div_rows are built and sorted by
-                # the standings screen's own machinery (points desc, wins
-                # desc, name asc). Points come straight from the engine's
-                # standings table (2*W + 1*OTL) -- no local formula.
-                rank = next((i + 1 for i, r in enumerate(div_rows)
-                             if r["name"] == team_name), None)
-                pts = my_row["pts"] if my_row is not None else wins * 2 + otl
-                self._strip["points"]._val.setText(str(pts))
-                if rank:
-                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
-                    self._strip["points"]._sub.setText(
-                        "%d%s in division" % (rank, suffix))
-                else:
-                    self._strip["points"]._sub.setText(division or "")
-            except Exception:
-                pass
-
-            try:
-                gf = getattr(team, "goals_for", 0) or 0
-                ga = getattr(team, "goals_against", 0) or 0
-                if gp > 0:
-                    self._strip["gf"]._val.setText("%.1f" % (gf / gp))
-                    self._strip["ga"]._val.setText("%.1f" % (ga / gp))
-                # league ranks under offense/defense (mirrors web sublabels)
-                try:
-                    _lg = getattr(game, "league", None) or getattr(gm, "league", None)
-                    _teams = list(getattr(_lg, "teams", []) or []) if _lg else []
-
-                    def _rank_suffix(n):
-                        if 10 <= n % 100 <= 20:
-                            return "th"
-                        return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-
-                    if _teams:
-                        # Rank by per-game rates (not raw totals) so teams
-                        # with different games played are comparable.
-                        def _gf_pg(t):
-                            gp = getattr(t, "games_played", 0) or 0
-                            gf = getattr(t, "goals_for", 0) or 0
-                            return (gf / gp) if gp > 0 else 0.0
-
-                        def _ga_pg(t):
-                            gp = getattr(t, "games_played", 0) or 0
-                            ga = getattr(t, "goals_against", 0) or 0
-                            return (ga / gp) if gp > 0 else float("inf")
-
-                        _by_off = sorted(_teams, key=_gf_pg, reverse=True)
-                        _orank = next(
-                            (i + 1 for i, t in enumerate(_by_off) if t is team),
-                            None)
-                        _by_def = sorted(_teams, key=_ga_pg)
-                        _drank = next(
-                            (i + 1 for i, t in enumerate(_by_def) if t is team),
-                            None)
-                        self._strip["gf"]._sub.setText(
-                            "Offense: %d%s" % (_orank, _rank_suffix(_orank))
-                            if _orank else "Offense")
-                        self._strip["ga"]._sub.setText(
-                            "Defense: %d%s" % (_drank, _rank_suffix(_drank))
-                            if _drank else "Defense")
-                    else:
-                        self._strip["gf"]._sub.setText("Offense")
-                        self._strip["ga"]._sub.setText("Defense")
-                except Exception:
-                    self._strip["gf"]._sub.setText("Offense")
-                    self._strip["ga"]._sub.setText("Defense")
-            except Exception:
-                pass
-
-            try:
-                pp = getattr(team, "power_play_pct", None)
-                pk = getattr(team, "penalty_kill_pct", None)
-                self._strip["pp"]._val.setText(
-                    ("%.1f%%" % pp) if pp is not None else "\u2014")
-                self._strip["pk"]._val.setText(
-                    ("%.1f%%" % pk) if pk is not None else "\u2014")
-                self._strip["pp"]._sub.setText("Conversion")
-                self._strip["pk"]._sub.setText("Kill rate")
-            except Exception:
-                pass
-
-            try:
-                recent = self._team_recent_results(gm, team, 10)
-                if recent:
-                    last10 = recent[-10:]
-                    w = sum(1 for r in last10 if str(r).upper().startswith("W"))
-                    l = sum(1 for r in last10 if str(r).upper().startswith("L"))
-                    o = len(last10) - w - l
-                    self._strip["streak"]._val.setText(
-                        ("%d-%d-%d" % (w, l, o)) if o else ("%d-%d" % (w, l)))
-                else:
-                    self._strip["streak"]._val.setText("\u2014")
-                self._strip["streak"]._sub.setText("Last 10")
-            except Exception:
-                pass
-
-            try:
-                from salary_cap_system import cap_breakdown
-                bd = cap_breakdown(team)
-                space = bd.get("space", 0)
-                self._strip["cap"]._val.setText("$%.2fM" % (space / 1e6))
-                self._strip["cap"]._sub.setText("Salary cap")
-            except Exception:
-                pass
-
-            # ---- next game (date-driven) ----
-            # A game dated today is "next" only if it hasn't been played yet;
-            # the engine sims games when their date == current_date.
-            next_txt = "Next: \u2014"
-            next_game = None
-            try:
-                league = getattr(game, "league", None) or getattr(gm, "league", None)
-                sched = getattr(league, "schedule", None) or []
-                today = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
-                upcoming = []
-                for g in sched:
-                    try:
-                        if not self._sched_is_game(g):
-                            continue
-                        gd = self._sched_date(g)
-                        if gd is None:
-                            continue
-                        if today is not None and gd < today:
-                            continue
-                        if (today is not None and gd == today
-                                and self._sched_played(g, game, gm)):
-                            continue
-                        home, away = self._sched_teams(g)
-                        if team_name and team_name in (home, away):
-                            upcoming.append((gd, g))
-                    except Exception:
-                        continue
-                upcoming.sort(key=lambda x: x[0])
-                if upcoming:
-                    next_game = upcoming[0][1]
-                    home, away = self._sched_teams(next_game)
-                    if home == team_name:
-                        next_txt = "Next: %s at %s" % (away, team_name)
-                    else:
-                        next_txt = "Next: %s at %s" % (team_name, home)
-            except Exception:
-                pass
-            self.hero_next.setText(next_txt)
-            if next_game is not None:
-                self._fill_next_panel(next_game, team_name)
-
-            # ---- inbox badge ----
-            try:
-                inbox = getattr(game, "inbox", None) or getattr(gm, "inbox", None) or []
-                unread = 0
-                for msg in inbox:
-                    if isinstance(msg, dict):
-                        if not msg.get("read", False):
-                            unread += 1
-                    elif not getattr(msg, "read", False):
-                        unread += 1
-                if unread > 0:
-                    self.inbox_badge.setText(str(unread))
-                    self.inbox_badge.show()
-                else:
-                    self.inbox_badge.hide()
-            except Exception:
-                pass
-
-            # ---- panels ----
-            self._fill_standings(div_rows, team_name, division, primary, wash)
-            self._fill_leaders(team)
-            self._fill_form(team, gm)
-            # Batch D: the 7 HTML panels the native hub was missing
-            self._fill_sched_panel(game, gm, team, team_name)
-            self._fill_injuries(team)
-            self._fill_morale_panel(team)
-            self._fill_prospects(team)
-            self._fill_milestones(team)
-            self._fill_iconic(team)
-            self._fill_inbox_recent(team)
-
-            # ---- ticker ----
+            div_rows, my_row = self._refresh_standings_rows(game, team)
+            self._refresh_apply_theming(primary, deep, soft)
+            wins, losses, otl = self._refresh_header(
+                game, gm, team, team_name, my_row)
+            self._refresh_strip_record_points(
+                team, team_name, wins, losses, otl, div_rows, my_row)
+            self._refresh_strip_offense_defense(game, gm, team, wins, losses, otl)
+            self._refresh_strip_special_teams(gm, team)
+            self._refresh_next_game(game, gm, team_name)
+            self._refresh_inbox_badge(game, gm)
+            self._refresh_hub_panels(
+                game, gm, team, team_name, div_rows, primary, wash)
             self._fill_ticker(game, gm)
         except Exception as e:
             print("[hub] refresh failed: %s" % e)
@@ -1216,6 +955,322 @@ class HubPage(QWidget):
             except Exception:
                 pass
 
+    def _refresh_resolve_game(self, game):
+        """Resolve (game, gm, team). Returns None when nothing to show."""
+        if game is None:
+            game = getattr(self._main, "game", None)
+        if game is None:
+            return None
+        gm = getattr(game, "game_manager", None) or game
+        team = getattr(gm, "user_team", None) or getattr(game, "user_team", None)
+        if not team:
+            return None
+        return game, gm, team
+
+    def _refresh_show_loading(self):
+        """Loading indicator (mirrors web "LOADING FRANCHISE\u2026" spinner)."""
+        try:
+            self._loading.resize(self.size())
+            self._loading.move(0, 0)
+            self._loading.show()
+            self._loading.raise_()
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+    def _refresh_standings_rows(self, game, team):
+        """Canonical (div_rows, my_row) for the hub from the engine's
+        league.standings table (Points = 2*W + 1*OTL), built and sorted
+        exactly like the standings screen (_rich_team_rows +
+        _apply_standings_sort). Team attributes are only a fallback:
+        Team.update_record tracks OT losses in `ot_losses` (there is
+        no Team.otl), so the old `wins*2 + otl` math silently dropped
+        every OTL point from the hub record/rank/points.
+        """
+        team_name = getattr(team, "team_name", "") or ""
+        div_rows = []
+        my_row = None
+        try:
+            from native_ui.screens.standings import (
+                _apply_standings_sort, _rich_team_rows)
+            _all_rows, _ = _rich_team_rows(game)
+            my_row = next((r for r in _all_rows
+                           if r["name"] == team_name), None)
+            _division = getattr(team, "division", "") or ""
+            div_rows = _apply_standings_sort(
+                [r for r in _all_rows
+                 if _division and r["division"] == _division],
+                "Points")
+        except Exception:
+            div_rows = []
+        return div_rows, my_row
+
+    def _refresh_apply_theming(self, primary, deep, soft):
+        """Apply team colors to eyebrow, hero, nav tiles, and strip."""
+        # ---- team theming ----
+        self.eyebrow.setStyleSheet(
+            "font-size: 12px; font-weight: 800; letter-spacing: 3px; "
+            "color: %s;" % primary)
+        self.hero.setStyleSheet(
+            "#hub-hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 %s, stop:0.55 #1f5ad0, stop:1 #16367f);"
+            " border-radius: 12px; }" % deep)
+        for _key, tile in self._nav_tiles.items():
+            tile.setStyleSheet(
+                "#hub-nav-tile { background: #0d1526;"
+                " border: 1px solid rgba(255,255,255,0.09);"
+                " border-top: 3px solid %s;"
+                " border-radius: 10px; }" % soft)
+        for _key, cell in self._strip.items():
+            cell.setStyleSheet(
+                "#hub-strip-cell { background: #131a26;"
+                " border: 1px solid rgba(255,255,255,0.07);"
+                " border-top: 2px solid %s;"
+                " border-radius: 4px; padding: 8px 10px; }" % soft)
+
+    def _refresh_header(self, game, gm, team, team_name, my_row):
+        """Header: team name, record, season eyebrow, date and streak
+        pills. Returns (wins, losses, otl) for the strip helpers.
+        """
+        # ---- header ----
+        self.team_label.setText(team_name.upper())
+        if my_row is not None:
+            # Canonical record from the engine's standings table.
+            wins, losses, otl = my_row["w"], my_row["l"], my_row["otl"]
+        else:
+            wins = getattr(team, "wins", 0) or 0
+            losses = getattr(team, "losses", 0) or 0
+            otl = getattr(team, "otl", 0) or getattr(team, "ties", 0) or 0
+        self.record_label.setText("%d-%d-%d" % (wins, losses, otl))
+
+        try:
+            date = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+            datestr = str(date) if date else ""
+            m = re.search(r"(19|20)\d{2}", datestr)
+            if m:
+                y = int(m.group(0))
+                self.eyebrow.setText(
+                    "FRANCHISE \u00b7 %d-%s SEASON" % (y, str(y + 1)[2:]))
+            if date:
+                try:
+                    self.date_pill.setText(
+                        "\U0001f4c5 " + date.strftime("%B %d, %Y"))
+                except Exception:
+                    self.date_pill.setText("\U0001f4c5 " + datestr)
+        except Exception:
+            pass
+
+        try:
+            recent = self._team_recent_results(gm, team, 10)
+            if recent:
+                self.streak_pill.setText(
+                    "\U0001f525 " + str(recent[-1]).upper())
+            else:
+                self.streak_pill.setText("\U0001f525 \u2014")
+        except Exception:
+            pass
+        return wins, losses, otl
+
+    def _refresh_strip_record_points(self, team, team_name, wins, losses,
+                                     otl, div_rows, my_row):
+        """Strip cells: record and points/division rank."""
+        # ---- strip ----
+        gp = wins + losses + otl
+        self._strip["record"]._val.setText("%d-%d-%d" % (wins, losses, otl))
+        self._strip["record"]._sub.setText("%d GP" % gp)
+
+        division = getattr(team, "division", "") or ""
+        try:
+            # Canonical division rank: div_rows are built and sorted by
+            # the standings screen's own machinery (points desc, wins
+            # desc, name asc). Points come straight from the engine's
+            # standings table (2*W + 1*OTL) -- no local formula.
+            rank = next((i + 1 for i, r in enumerate(div_rows)
+                         if r["name"] == team_name), None)
+            pts = my_row["pts"] if my_row is not None else wins * 2 + otl
+            self._strip["points"]._val.setText(str(pts))
+            if rank:
+                suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank, "th")
+                self._strip["points"]._sub.setText(
+                    "%d%s in division" % (rank, suffix))
+            else:
+                self._strip["points"]._sub.setText(division or "")
+        except Exception:
+            pass
+
+    def _refresh_strip_offense_defense(self, game, gm, team, wins, losses, otl):
+        """Strip cells: goals for/against per game + league ranks."""
+        gp = wins + losses + otl
+        try:
+            gf = getattr(team, "goals_for", 0) or 0
+            ga = getattr(team, "goals_against", 0) or 0
+            if gp > 0:
+                self._strip["gf"]._val.setText("%.1f" % (gf / gp))
+                self._strip["ga"]._val.setText("%.1f" % (ga / gp))
+            # league ranks under offense/defense (mirrors web sublabels)
+            try:
+                _lg = getattr(game, "league", None) or getattr(gm, "league", None)
+                _teams = list(getattr(_lg, "teams", []) or []) if _lg else []
+
+                def _rank_suffix(n):
+                    if 10 <= n % 100 <= 20:
+                        return "th"
+                    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+                if _teams:
+                    # Rank by per-game rates (not raw totals) so teams
+                    # with different games played are comparable.
+                    def _gf_pg(t):
+                        gp = getattr(t, "games_played", 0) or 0
+                        gf = getattr(t, "goals_for", 0) or 0
+                        return (gf / gp) if gp > 0 else 0.0
+
+                    def _ga_pg(t):
+                        gp = getattr(t, "games_played", 0) or 0
+                        ga = getattr(t, "goals_against", 0) or 0
+                        return (ga / gp) if gp > 0 else float("inf")
+
+                    _by_off = sorted(_teams, key=_gf_pg, reverse=True)
+                    _orank = next(
+                        (i + 1 for i, t in enumerate(_by_off) if t is team),
+                        None)
+                    _by_def = sorted(_teams, key=_ga_pg)
+                    _drank = next(
+                        (i + 1 for i, t in enumerate(_by_def) if t is team),
+                        None)
+                    self._strip["gf"]._sub.setText(
+                        "Offense: %d%s" % (_orank, _rank_suffix(_orank))
+                        if _orank else "Offense")
+                    self._strip["ga"]._sub.setText(
+                        "Defense: %d%s" % (_drank, _rank_suffix(_drank))
+                        if _drank else "Defense")
+                else:
+                    self._strip["gf"]._sub.setText("Offense")
+                    self._strip["ga"]._sub.setText("Defense")
+            except Exception:
+                self._strip["gf"]._sub.setText("Offense")
+                self._strip["ga"]._sub.setText("Defense")
+        except Exception:
+            pass
+
+    def _refresh_strip_special_teams(self, gm, team):
+        """Strip cells: PP/PK percentages, last-10 streak, cap space."""
+        try:
+            pp = getattr(team, "power_play_pct", None)
+            pk = getattr(team, "penalty_kill_pct", None)
+            self._strip["pp"]._val.setText(
+                ("%.1f%%" % pp) if pp is not None else "\u2014")
+            self._strip["pk"]._val.setText(
+                ("%.1f%%" % pk) if pk is not None else "\u2014")
+            self._strip["pp"]._sub.setText("Conversion")
+            self._strip["pk"]._sub.setText("Kill rate")
+        except Exception:
+            pass
+
+        try:
+            recent = self._team_recent_results(gm, team, 10)
+            if recent:
+                last10 = recent[-10:]
+                w = sum(1 for r in last10 if str(r).upper().startswith("W"))
+                l = sum(1 for r in last10 if str(r).upper().startswith("L"))
+                o = len(last10) - w - l
+                self._strip["streak"]._val.setText(
+                    ("%d-%d-%d" % (w, l, o)) if o else ("%d-%d" % (w, l)))
+            else:
+                self._strip["streak"]._val.setText("\u2014")
+            self._strip["streak"]._sub.setText("Last 10")
+        except Exception:
+            pass
+
+        try:
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(team)
+            space = bd.get("space", 0)
+            self._strip["cap"]._val.setText("$%.2fM" % (space / 1e6))
+            self._strip["cap"]._sub.setText("Salary cap")
+        except Exception:
+            pass
+
+    def _refresh_next_game(self, game, gm, team_name):
+        """Hero 'next game' line and the next-game side panel."""
+        # ---- next game (date-driven) ----
+        # A game dated today is "next" only if it hasn't been played yet;
+        # the engine sims games when their date == current_date.
+        next_txt = "Next: \u2014"
+        next_game = None
+        try:
+            league = getattr(game, "league", None) or getattr(gm, "league", None)
+            sched = getattr(league, "schedule", None) or []
+            today = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+            upcoming = []
+            for g in sched:
+                try:
+                    if not self._sched_is_game(g):
+                        continue
+                    gd = self._sched_date(g)
+                    if gd is None:
+                        continue
+                    if today is not None and gd < today:
+                        continue
+                    if (today is not None and gd == today
+                            and self._sched_played(g, game, gm)):
+                        continue
+                    home, away = self._sched_teams(g)
+                    if team_name and team_name in (home, away):
+                        upcoming.append((gd, g))
+                except Exception:
+                    continue
+            upcoming.sort(key=lambda x: x[0])
+            if upcoming:
+                next_game = upcoming[0][1]
+                home, away = self._sched_teams(next_game)
+                if home == team_name:
+                    next_txt = "Next: %s at %s" % (away, team_name)
+                else:
+                    next_txt = "Next: %s at %s" % (team_name, home)
+        except Exception:
+            pass
+        self.hero_next.setText(next_txt)
+        if next_game is not None:
+            self._fill_next_panel(next_game, team_name)
+
+    def _refresh_inbox_badge(self, game, gm):
+        """Unread-count badge on the inbox tile."""
+        # ---- inbox badge ----
+        try:
+            inbox = getattr(game, "inbox", None) or getattr(gm, "inbox", None) or []
+            unread = 0
+            for msg in inbox:
+                if isinstance(msg, dict):
+                    if not msg.get("read", False):
+                        unread += 1
+                elif not getattr(msg, "read", False):
+                    unread += 1
+            if unread > 0:
+                self.inbox_badge.setText(str(unread))
+                self.inbox_badge.show()
+            else:
+                self.inbox_badge.hide()
+        except Exception:
+            pass
+
+    def _refresh_hub_panels(self, game, gm, team, team_name, div_rows,
+                            primary, wash):
+        """All hub content panels (standings, leaders, form, schedule,
+        injuries, morale, prospects, milestones, iconic, inbox)."""
+        division = getattr(team, "division", "") or ""
+        # ---- panels ----
+        self._fill_standings(div_rows, team_name, division, primary, wash)
+        self._fill_leaders(team)
+        self._fill_form(team, gm)
+        # Batch D: the 7 HTML panels the native hub was missing
+        self._fill_sched_panel(game, gm, team, team_name)
+        self._fill_injuries(team)
+        self._fill_morale_panel(team)
+        self._fill_prospects(team)
+        self._fill_milestones(team)
+        self._fill_iconic(team)
+        self._fill_inbox_recent(team)
     def _fill_next_panel(self, g, team_name):
         panel = self.panel_next
         self._clear_panel(panel)
