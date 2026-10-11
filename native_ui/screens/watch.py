@@ -1340,6 +1340,8 @@ class WatchScreen(BaseScreen):
                 name = meta.get(best_pid, {}).get("name", "Player")
                 self._btn_camera.setText(f"🎥 Following: {name}")
                 self._apply_camera()
+                # D-11: player card popup (mainline InGamePopup port).
+                self._show_player_card(best_pid)
             else:
                 # Empty ice: release follow, back to full rink.
                 if self._follow_player_pid:
@@ -1554,10 +1556,306 @@ class WatchScreen(BaseScreen):
         except Exception:
             pass
 
+    # -- D-11 in-game tactics whiteboard (mainline pbp_visual_sim parity) --
+
+    def _my_tac_team(self):
+        """The user's club in this game (falls back to home)."""
+        try:
+            with _watch_lock:
+                home, away = _watch["home"], _watch["away"]
+            gm = _resolve_gm(self.game)
+            user_team = safe_call(lambda: getattr(gm, "user_team", None),
+                                  None, context="watch/tactics:user_team")
+            un = _team_name(user_team)
+            if un and un not in ("?", ""):
+                if un == _team_name(home):
+                    return home
+                if un == _team_name(away):
+                    return away
+        except Exception:
+            pass
+        with _watch_lock:
+            return _watch["home"]
+
+    def _opp_tac_team(self):
+        my = self._my_tac_team()
+        with _watch_lock:
+            home, away = _watch["home"], _watch["away"]
+        return away if my is home else home
+
+    def _tac_ctx(self):
+        """In-game context for the coach's response: losing big = dry spell."""
+        ctx = {"win_pct": 0.5, "losing_streak": 0}
+        try:
+            my = self._my_tac_team()
+            with _watch_lock:
+                home = _watch["home"]
+            hs, aws = self._score["home"], self._score["away"]
+            diff = (hs - aws) if my is home else (aws - hs)
+            if diff <= -2:
+                ctx["losing_streak"] = 3
+        except Exception:
+            pass
+        return ctx
+
+    def _clear_tac(self):
+        while self._tac_layout.count():
+            item = self._tac_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _refresh_tactics_tab(self):
+        """Rebuild the whiteboard (mainline _refresh_tactics_tab parity)."""
+        self._clear_tac()
+        try:
+            import tactics as _tx
+        except Exception:
+            lbl = QLabel("Tactics unavailable.")
+            lbl.setStyleSheet("color: #8b95ab;")
+            self._tac_layout.addWidget(lbl)
+            return
+        my, opp = self._my_tac_team(), self._opp_tac_team()
+        if my is None:
+            lbl = QLabel("No live game — start one from the Visual tab.")
+            lbl.setStyleSheet("color: #8b95ab;")
+            self._tac_layout.addWidget(lbl)
+            return
+        try:
+            _tx.ensure_team_tactics(my)
+            if opp is not None:
+                _tx.ensure_team_tactics(opp)
+        except Exception:
+            pass
+        my_abbr = _abbr(_team_name(my))
+        control = safe_call(lambda: _tx.get_tactics_control(my), "coach",
+                            context="watch/tactics:control")
+
+        hdr = QHBoxLayout()
+        title = QLabel("TACTICS")
+        title.setStyleSheet("font-size: 14px; font-weight: bold; "
+                            "color: #7bc96f;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        badge = QLabel("YOU CALL IT" if control == "gm"
+                       else "COACH IN CONTROL")
+        if control == "gm":
+            badge.setStyleSheet("font-weight: bold; color: #FFD166;")
+        else:
+            badge.setStyleSheet("font-weight: bold; color: #AEB6C8;")
+        hdr.addWidget(badge)
+        self._tac_layout.addLayout(hdr)
+
+        wb = QLabel(f"{my_abbr} — YOUR WHITEBOARD")
+        wb.setStyleSheet("font-weight: bold;")
+        self._tac_layout.addWidget(wb)
+
+        cur = safe_call(lambda: _tx.team_tactics(my), {},
+                        context="watch/tactics:current") or {}
+        for cat, short, attr in _TAC_CATS:
+            catalog = getattr(_tx, attr, {}) or {}
+            row = QHBoxLayout()
+            lab = QLabel(short)
+            lab.setStyleSheet("color: #AEB6C8; font-weight: bold;")
+            lab.setFixedWidth(70)
+            row.addWidget(lab)
+            names = [v.get("name", k) for k, v in catalog.items()]
+            key_of = {v.get("name", k): k for k, v in catalog.items()}
+            combo = QComboBox()
+            combo.addItems(names)
+            shown_key = self._tac_pending.get(cat, cur.get(cat))
+            shown_name = catalog.get(shown_key, {}).get("name")
+            if shown_name in names:
+                combo.blockSignals(True)
+                combo.setCurrentText(shown_name)
+                combo.blockSignals(False)
+            combo.currentTextChanged.connect(
+                lambda _t, c=cat, ko=key_of, cb=combo:
+                self._on_tac_pick(c, ko, cb))
+            row.addWidget(combo, 1)
+            self._tac_layout.addLayout(row)
+
+        fam = float(safe_call(lambda: getattr(my, "tactics_familiarity", 85),
+                              85, context="watch/tactics:familiarity") or 85)
+        fl = QLabel(f"Familiarity {fam:.0f}% — changes take effect live "
+                    f"(new reads are messy mid-game).")
+        fl.setStyleSheet("color: #AEB6C8; font-size: 12px;")
+        fl.setWordWrap(True)
+        self._tac_layout.addWidget(fl)
+        try:
+            ident = " / ".join(_tx.describe_team_tactics(my))
+        except Exception:
+            ident = ""
+        if ident:
+            il = QLabel(ident)
+            il.setWordWrap(True)
+            il.setStyleSheet("font-size: 12px;")
+            self._tac_layout.addWidget(il)
+        if self._tac_response_text:
+            rl = QLabel(self._tac_response_text)
+            rl.setWordWrap(True)
+            rl.setStyleSheet("color: #FFD166; font-size: 12px; "
+                             "font-style: italic;")
+            self._tac_layout.addWidget(rl)
+
+        brow = QHBoxLayout()
+        if control == "coach" and self._tac_pending:
+            for label, fn in (("Suggest", self._on_tac_suggest),
+                              ("Enforce", self._on_tac_enforce),
+                              ("Take over", self._on_tac_takeover)):
+                b = QPushButton(label)
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(fn)
+                brow.addWidget(b)
+        elif control == "gm":
+            b = QPushButton("Hand back")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip("Give the whiteboard back to your head coach")
+            b.clicked.connect(self._on_tac_handback)
+            brow.addWidget(b)
+        brow.addStretch()
+        self._tac_layout.addLayout(brow)
+
+        # Opponent (AI) systems, read-only.
+        if opp is not None:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            self._tac_layout.addWidget(sep)
+            oh = QLabel(f"{_abbr(_team_name(opp))} — OPPONENT (AI)")
+            oh.setStyleSheet("font-weight: bold; color: #7bc96f;")
+            self._tac_layout.addWidget(oh)
+            ocur = safe_call(lambda: _tx.team_tactics(opp), {},
+                             context="watch/tactics:opp_current") or {}
+            for cat, short, attr in _TAC_CATS:
+                catalog = getattr(_tx, attr, {}) or {}
+                val = catalog.get(ocur.get(cat), {}).get("name", "--")
+                row = QHBoxLayout()
+                lab = QLabel(short)
+                lab.setStyleSheet("color: #AEB6C8; font-weight: bold;")
+                lab.setFixedWidth(70)
+                row.addWidget(lab)
+                row.addWidget(QLabel(val), 1)
+                self._tac_layout.addLayout(row)
+            ofam = float(safe_call(
+                lambda: getattr(opp, "tactics_familiarity", 85), 85,
+                context="watch/tactics:opp_familiarity") or 85)
+            cname = ""
+            try:
+                for stf in getattr(opp, "staff", []) or []:
+                    role = getattr(getattr(stf, "role", None), "value", "")
+                    if "Head Coach" in str(role):
+                        cname = getattr(stf, "full_name", "")
+                        break
+            except Exception:
+                pass
+            ol = QLabel(f"Familiarity {ofam:.0f}%"
+                        + (f" — coached by {cname}" if cname else ""))
+            ol.setStyleSheet("color: #AEB6C8; font-size: 12px;")
+            ol.setWordWrap(True)
+            self._tac_layout.addWidget(ol)
+        self._tac_layout.addStretch()
+
+    def _on_tac_pick(self, cat, key_of, combo):
+        try:
+            import tactics as _tx
+            my = self._my_tac_team()
+            if my is None:
+                return
+            key = key_of.get(combo.currentText())
+            if not key:
+                return
+            cur = safe_call(lambda: _tx.team_tactics(my).get(cat), None,
+                            context="watch/tactics:pick_current")
+            if key == cur:
+                self._tac_pending.pop(cat, None)
+            elif safe_call(lambda: _tx.get_tactics_control(my), "coach",
+                           context="watch/tactics:pick_control") == "gm":
+                # GM owns the whiteboard: applies live, mid-game.
+                _tx.set_team_system(my, cat, key, mid_game=True)
+                self._tac_pending.pop(cat, None)
+                self._tac_response_text = ""
+            else:
+                self._tac_pending[cat] = key
+            self._refresh_tactics_tab()
+        except Exception as e:
+            print(f"[watch] tac pick failed: {e}")
+
+    def _on_tac_suggest(self):
+        try:
+            import reputation_system as _rs
+            my = self._my_tac_team()
+            if not self._tac_pending or my is None:
+                return
+            res = _rs.suggest_tactics_to_coach(my, dict(self._tac_pending),
+                                               self._tac_ctx(), mid_game=True)
+            if (res or {}).get("applied"):
+                self._tac_pending.clear()
+            self._tac_response_text = (res or {}).get("text", "")
+            self._refresh_tactics_tab()
+        except Exception as e:
+            print(f"[watch] tac suggest failed: {e}")
+
+    def _on_tac_enforce(self):
+        try:
+            import reputation_system as _rs
+            my = self._my_tac_team()
+            if not self._tac_pending or my is None:
+                return
+            ans = QMessageBox.question(
+                self, "Enforce Tactics",
+                "Overrule your head coach and enforce these systems right "
+                "now? He won't forget it.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+            res = _rs.enforce_tactics(my, dict(self._tac_pending),
+                                      self._tac_ctx(), mid_game=True)
+            if (res or {}).get("applied"):
+                self._tac_pending.clear()
+            self._tac_response_text = (res or {}).get("text", "")
+            self._refresh_tactics_tab()
+        except Exception as e:
+            print(f"[watch] tac enforce failed: {e}")
+
+    def _on_tac_takeover(self):
+        try:
+            import reputation_system as _rs
+            import tactics as _tx
+            my = self._my_tac_team()
+            if my is None:
+                return
+            ans = QMessageBox.question(
+                self, "Take Over Tactics",
+                "Take the whiteboard from your head coach for the rest of "
+                "this game?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+            res = _rs.take_over_tactics(my, self._tac_ctx())
+            if (res or {}).get("changed"):
+                for cat, key in list(self._tac_pending.items()):
+                    _tx.set_team_system(my, cat, key, mid_game=True)
+                self._tac_pending.clear()
+            self._tac_response_text = (res or {}).get("text", "")
+            self._refresh_tactics_tab()
+        except Exception as e:
+            print(f"[watch] tac takeover failed: {e}")
+
+    def _on_tac_handback(self):
+        try:
+            import reputation_system as _rs
+            my = self._my_tac_team()
+            if my is None:
+                return
+            res = _rs.hand_back_tactics(my)
+            self._tac_response_text = (res or {}).get("text", "")
+            self._refresh_tactics_tab()
+        except Exception as e:
+            print(f"[watch] tac handback failed: {e}")
+
     def _apply_camera(self):
         try:
-            if self._follow_player_pid and self._follow_player_pid in self._dots:
-                # Follow a specific player (click-to-follow).
+            if self._follow_player_pid and self._follow_player_pid in self._dots:                # Follow a specific player (click-to-follow).
                 item = self._dots[self._follow_player_pid]
                 px, py = item.pos().x(), item.pos().y()
                 self._view.fitInView(QRectF(px - 45, py - 30, 90, 60),
@@ -2106,6 +2404,163 @@ class WatchScreen(BaseScreen):
                 fn(player)
         except Exception as e:
             print(f"[watch] box player click failed: {e}")
+
+    # -- D-11 InGamePopup ports (mainline pbp_visual_sim parity) --------
+
+    def _show_player_card(self, pid):
+        """Player card popup for a clicked dot (InGamePopup port)."""
+        try:
+            with _watch_lock:
+                meta = dict(_watch["id_meta"])
+                sim = _watch["sim"]
+                home_name, away_name = _watch["home_name"], _watch["away_name"]
+            m = meta.get(str(pid), {})
+            name = m.get("name", "Player")
+            is_home = m.get("team") == 0
+            team = home_name if is_home else away_name
+            player = None
+            try:
+                for team_obj in (getattr(sim, "home_team", None),
+                                 getattr(sim, "away_team", None)):
+                    for p in (getattr(team_obj, "roster", None) or []):
+                        if str(getattr(p, "id", "")) == str(pid):
+                            player = p
+                            break
+                    if player is not None:
+                        break
+            except Exception:
+                pass
+            pos = _pos_short(player)
+            if not pos:
+                pos = "G" if m.get("goalie") else "?"
+            # Talent tier (mainline directive: numeric overall is never
+            # shown to the user).
+            try:
+                from attribute_composites import talent_tier_for_player
+                tier = (talent_tier_for_player(player)
+                        if player is not None else "?")
+            except Exception:
+                tier = "?"
+            # Live game stats from the sim.
+            rows = []
+            try:
+                gs = _normalize_gs(
+                    safe_call(lambda: getattr(sim, "game_stats", None), {},
+                              context="watch/card:game_stats") or {})
+                st = gs.get(str(pid), {})
+                if m.get("goalie"):
+                    sv = int(st.get("saves", 0) or 0)
+                    sa = int(st.get("shots_against", 0) or 0)
+                    rows = [("Saves", str(sv)), ("Shots faced", str(sa)),
+                            ("SV%", f"{(sv / sa * 100):.1f}%"
+                             if sa else "–")]
+                else:
+                    g = int(st.get("g", 0) or 0)
+                    a = int(st.get("a", 0) or 0)
+                    rows = [("Goals", str(g)), ("Assists", str(a)),
+                            ("Points", str(g + a)),
+                            ("Shots", str(int(st.get("shots_on_goal", 0)
+                                             or 0))),
+                            ("Hits", str(int(st.get("hits", 0) or 0)))]
+            except Exception:
+                pass
+            if self._card_dialog is not None:
+                try:
+                    self._card_dialog.close()
+                except Exception:
+                    pass
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Player")
+            dlg.setMinimumWidth(240)
+            lay = QVBoxLayout(dlg)
+            nm = QLabel(name)
+            nm.setStyleSheet("font-size: 14px; font-weight: bold;")
+            nm.setWordWrap(True)
+            lay.addWidget(nm)
+            sub = QLabel(f"{team} · {pos} · {tier}")
+            sub.setStyleSheet("color: #7bc96f; font-weight: bold;")
+            lay.addWidget(sub)
+            for k, v in rows:
+                r = QLabel(f"<b>{k}:</b> {v}")
+                lay.addWidget(r)
+            close = QPushButton("Close")
+            close.setCursor(Qt.PointingHandCursor)
+            close.clicked.connect(dlg.close)
+            lay.addWidget(close)
+            self._card_dialog = dlg
+            dlg.show()  # non-modal: the game keeps playing
+        except Exception as e:
+            print(f"[watch] player card failed: {e}")
+
+    def _show_three_stars(self):
+        """Three-stars popup at game end (mainline _show_stars port)."""
+        try:
+            with _watch_lock:
+                sim = _watch["sim"]
+                meta = dict(_watch["id_meta"])
+                home_name, away_name = _watch["home_name"], _watch["away_name"]
+            if sim is None:
+                return
+            gs = _normalize_gs(
+                safe_call(lambda: getattr(sim, "game_stats", None), {},
+                          context="watch/stars:game_stats") or {})
+            if not gs:
+                return
+            cands = []
+            for pid, st in gs.items():
+                try:
+                    m = meta.get(str(pid), {})
+                    name = m.get("name") or "?"
+                    ti = 0 if m.get("team", 0) == 0 else 1
+                    tname = home_name if ti == 0 else away_name
+                    if m.get("goalie"):
+                        sv = int(st.get("saves", 0) or 0)
+                        sa = int(st.get("shots_against", 0) or 0)
+                        svp = f"{(sv / sa * 100):.1f}%" if sa else "–"
+                        cands.append((sv, name, tname,
+                                      f"{sv} saves · {svp}"))
+                    else:
+                        g = int(st.get("g", 0) or 0)
+                        a = int(st.get("a", 0) or 0)
+                        cands.append((g * 2 + a, name, tname,
+                                      f"{g}G {a}A · {g + a} pts"))
+                except Exception:
+                    continue
+            cands.sort(key=lambda c: c[0], reverse=True)
+            stars = [c for c in cands if c[0] > 0][:3] or cands[:3]
+            if not stars:
+                return
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Three Stars")
+            dlg.setMinimumWidth(300)
+            lay = QVBoxLayout(dlg)
+            title = QLabel("THREE STARS")
+            title.setStyleSheet("font-size: 14px; font-weight: bold; "
+                                "color: #7bc96f;")
+            title.setAlignment(Qt.AlignCenter)
+            lay.addWidget(title)
+            medals = ("1st", "2nd", "3rd")
+            for i, (_score, name, tname, line) in enumerate(stars[:3]):
+                card = QFrame()
+                card.setFrameShape(QFrame.StyledPanel)
+                cl = QVBoxLayout(card)
+                ml = QLabel(f"{medals[i]} STAR")
+                ml.setStyleSheet("color: #FFD166; font-weight: bold;")
+                cl.addWidget(ml)
+                nl = QLabel(name)
+                nl.setStyleSheet("font-size: 13px; font-weight: bold;")
+                cl.addWidget(nl)
+                sl = QLabel(f"{tname} · {line}")
+                sl.setStyleSheet("color: #aeb6c8;")
+                cl.addWidget(sl)
+                lay.addWidget(card)
+            close = QPushButton("Close")
+            close.setCursor(Qt.PointingHandCursor)
+            close.clicked.connect(dlg.close)
+            lay.addWidget(close)
+            dlg.show()  # non-modal
+        except Exception as e:
+            print(f"[watch] three stars failed: {e}")
 
     @staticmethod
     def _empty(msg):
