@@ -20,6 +20,7 @@ Design notes:
 - Everything is defensive: missing data skips the story, never crashes.
 """
 
+import math
 import random
 from datetime import date
 
@@ -44,9 +45,9 @@ def _safe(fn, default=None):
 
 
 def _pname(p):
-    """Full player name."""
-    fn = _safe(lambda: p.first_name, "")
-    ln = _safe(lambda: p.last_name, "")
+    """Full player name. None-safe: None parts coalesce to '', never render."""
+    fn = _safe(lambda: p.first_name, "") or ""
+    ln = _safe(lambda: p.last_name, "") or ""
     full = f"{fn} {ln}".strip()
     return full or "Unknown Player"
 
@@ -57,6 +58,17 @@ def _tname(t):
 
 def _ovr(p):
     return _safe(lambda: float(p.overall), 0.0) or 0.0
+
+
+def _ovr_ok(v):
+    """OVR sanity gate: the display scale is 1-100. Reject non-finite
+    (inf/nan), non-numeric, and out-of-range values so garbage OVR can
+    never qualify a player for a story or render in one."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and 1.0 <= f <= 100.0
 
 
 def _pot(p):
@@ -140,8 +152,12 @@ def _head_coach(team):
 def _coach_name(c):
     if c is None:
         return ""
-    return (_safe(lambda: c.name, "")
-            or f"{_safe(lambda: c.first_name, '')} {_safe(lambda: c.last_name, '')}".strip())
+    name = _safe(lambda: c.name, "") or ""
+    if name:
+        return name
+    fn = _safe(lambda: c.first_name, "") or ""
+    ln = _safe(lambda: c.last_name, "") or ""
+    return f"{fn} {ln}".strip()
 
 
 # Module-level variety window for the current pass. _generate runs a strict
@@ -221,8 +237,44 @@ def _prospect_watch(app, game_date, rng):
     templates = [
         "RISING STAR: {name} ({pos}, {age}) is turning heads in the {team} system{extra}.",
         "PROSPECT WATCH: {team} fans should learn the name {name} -- the {age}-year-old {pos} is trending toward the NHL{extra}.",
-        "FUTURE WATCH: Scouts rave about {name}'s development with {team}{extra}.",
-        "{name} continues to climb {team}'s prospect rankings, flashing top-six upside.",
+        "FUTURE WATCH: {name}'s development with {team} is tracking well{extra}.",
+        "{name} keeps flashing top-six upside in the {team} system.",
+        "The {team} pipeline keeps producing -- {name} ({pos}, {age}) is next in line{extra}.",
+        "{name} is making a strong case for an NHL look with {team}, and he's only {age}{extra}.",
+        "{name}'s two-way game is ahead of schedule{extra} -- {team} may have a steal.",
+        "{team} development staff are thrilled with {age}-year-old {pos} {name}{extra}.",
+        "Don't be surprised if {name} forces {team}'s hand at camp next fall{extra}.",
+        "RISING: {name} ({pos}) keeps impressing and knocking on {team}'s door.",
+        "{name}'s compete level has {team} brass talking -- the {age}-year-old {pos} keeps getting better{extra}.",
+        "PROSPECT NOTEBOOK: {name}'s development has {team} excited about the {age}-year-old {pos}.",
+        "The jump {name} has made this year is exactly what {team} hoped to see{extra}.",
+        "{age}-year-old {name} is separating himself in the {team} system{extra}.",
+        "If {name} keeps this up, {team} will have a decision to make.",
+        "PROSPECT WATCH: {name}'s edge work and pace are turning heads{extra}.",
+        "{team} may have found a keeper in {pos} {name}, still just {age}{extra}.",
+        "{name} is a name to remember from {team}'s prospect camp.",
+        "The {team} system is deep, and {age}-year-old {name} is a big reason why{extra}.",
+        "RISING STAR: {name}'s development curve has {team} fast-tracking his timeline.",
+        "{name} ({pos}) plays a pro-style game well beyond his {age} years{extra}.",
+        "{team} fans, circle the name {name} -- the {pos} is coming{extra}.",
+        "PROSPECT WATCH: {name} is checking every box for {team} this season.",
+        "The patience {team} is showing with {name} is paying off in a big way{extra}.",
+        "{name}'s hockey sense sets him apart -- {team} sees a future regular{extra}.",
+        "RISING: {age}-year-old {pos} {name} keeps turning heads in the {team} system.",
+        "{team}'s scouts nailed the pick with {name}, who's thriving at {age}{extra}.",
+        "PROSPECT WATCH: {name}'s upside has {team} dreaming big{extra}.",
+        "The {team} pipeline is high on {name} -- the {age}-year-old keeps trending up.",
+        "{name} has that pro frame and pro pace -- {team} likes what it sees{extra}.",
+        "RISING STAR: {name} ({age}) is forcing {team} to rethink its timeline.",
+        "PROSPECT NOTEBOOK: {name} has real upside -- the tools are obvious in the {team} system{extra}.",
+        "{name} plays the game the right way -- {team}'s coaches love his habits{extra}.",
+        "RISING STAR: The {team} system has a gem in {age}-year-old {name}.",
+        "{name} ({pos}) keeps showing why {team} is high on him{extra}.",
+        "PROSPECT WATCH: {name}'s trajectory points straight at the NHL{extra}.",
+        "{team} keeps liking what it sees from {age}-year-old {pos} {name}{extra}.",
+        "RISING: {name} keeps answering every challenge {team} throws at him.",
+        "{name} is tracking toward the pro game -- {team} is impressed with the {age}-year-old{extra}.",
+        "FUTURE WATCH: {name} has the tools to make the jump for {team}{extra}.",
     ]
     for p, t in candidates[:3]:
         key = f"prospect:{_safe(lambda: p.id, id(p))}"
@@ -230,7 +282,9 @@ def _prospect_watch(app, game_date, rng):
             continue
         extra = ""
         ovr = _ovr(p)
-        if ovr >= 70:
+        # B3/B6: only finite, in-range OVR may render -- int(inf) would
+        # OverflowError and kill the whole generator.
+        if _ovr_ok(ovr) and ovr >= 70:
             extra = f" and already grades out at {int(ovr)} OVR"
         story = rng.choice(templates).format(
             name=_pname(p), pos=_pos(p) or "prospect",
@@ -261,6 +315,24 @@ def _coach_stories(app, game_date, rng):
                 story = rng.choice([
                     "HOT SEAT: {coach} is feeling the heat in {team} -- {w}-{l}-{otl} has the board's confidence at {conf}%.",
                     "{team}'s {w}-{l}-{otl} start has {coach} squarely on the hot seat.",
+                    "The seat is getting warm: {coach}'s {team} sits at {w}-{l}-{otl} and the room is searching for answers.",
+                    "HOT SEAT WATCH: {coach} needs wins -- {team} is {w}-{l}-{otl} and board confidence is down to {conf}%.",
+                    "Fair or not, {coach} is taking the heat for {team}'s {w}-{l}-{otl} slide.",
+                    "{team} has dropped to {w}-{l}-{otl}, and {coach}'s seat keeps getting warmer.",
+                    "HOT SEAT: At {w}-{l}-{otl}, {coach} is coaching for his job in {team}.",
+                    "{team}'s {w}-{l}-{otl} record is doing the talking -- and it isn't saying much for {coach}.",
+                    "{w}-{l}-{otl} wasn't the plan in {team} -- and {coach} is feeling it.",
+                    "HOT SEAT WATCH: {conf}% board confidence and a {w}-{l}-{otl} record -- {coach} is on thin ice in {team}.",
+                    "{coach} is running out of answers as {team} sinks to {w}-{l}-{otl}.",
+                    "Another loss and the {coach} questions in {team} will only get louder -- they're {w}-{l}-{otl}.",
+                    "HOT SEAT: {team} is {w}-{l}-{otl} and sinking under {coach}.",
+                    "{team} still sits at {w}-{l}-{otl} -- and the questions for {coach} keep coming.",
+                    "The vultures are circling: {coach}'s {team} is {w}-{l}-{otl} with confidence at {conf}%.",
+                    "The {team} room can't hide from {w}-{l}-{otl} -- and it all falls on {coach}.",
+                    "The {team} slide continues at {w}-{l}-{otl} -- and the pressure on {coach} keeps building.",
+                    "HOT SEAT: {team}'s {w}-{l}-{otl} start has {coach}'s job security at {conf}% and falling.",
+                    "If {team} doesn't turn {w}-{l}-{otl} around soon, {coach} may not get the chance.",
+                    "The heat is on {coach}: {team} sits {w}-{l}-{otl}, and the board's patience is wearing thin.",
                 ]).format(coach=cname, team=_tname(t), w=w, l=l, otl=otl,
                           conf=int(conf))
                 stories.append(story)
@@ -269,8 +341,26 @@ def _coach_stories(app, game_date, rng):
             elif (gp >= 10 and w / max(gp, 1) > 0.70
                     and _recent_ok(app, key, "cotm", game_date)):
                 story = rng.choice([
-                    "{coach} is earning early Coach of the Year buzz with {team} sitting at {w}-{l}-{otl}.",
+                    "{coach} is earning Coach of the Year buzz with {team} sitting at {w}-{l}-{otl}.",
                     "COACHING MASTERCLASS: {coach} has {team} rolling at {w}-{l}-{otl}.",
+                    "{coach} has {team} playing sixty full minutes a night -- {w}-{l}-{otl} speaks for itself.",
+                    "Give {coach} credit: {team} is {w}-{l}-{otl} and buying in completely.",
+                    "COACH OF THE YEAR WATCH: {coach}'s {team} keeps winning at a {w}-{l}-{otl} clip.",
+                    "{team} is {w}-{l}-{otl}, and {coach} is pushing all the right buttons.",
+                    "The {coach} system is humming -- {team} sits at {w}-{l}-{otl}.",
+                    "{coach} has turned {team} into a wagon at {w}-{l}-{otl}.",
+                    "COACHING MASTERCLASS: {team}'s structure under {coach} has them at {w}-{l}-{otl}.",
+                    "Opponents are running out of answers for {coach}'s {team} ({w}-{l}-{otl}).",
+                    "{coach} deserves real Coach of the Year consideration with {team} at {w}-{l}-{otl}.",
+                    "{team} plays hard for {coach} -- that's how you get to {w}-{l}-{otl}.",
+                    "The buy-in is total: {coach} has {team} at {w}-{l}-{otl} and climbing.",
+                    "COACH OF THE YEAR WATCH: Nobody is getting more out of a roster than {coach} ({w}-{l}-{otl}).",
+                    "{team}'s {w}-{l}-{otl} record is a testament to {coach}'s preparation.",
+                    "{coach} has {team} defending with structure and attacking with pace -- {w}-{l}-{otl}.",
+                    "The {team} room believes, and {w}-{l}-{otl} shows why -- credit to {coach}.",
+                    "COACHING MASTERCLASS: {coach} is squeezing every drop out of {team} at {w}-{l}-{otl}.",
+                    "{w}-{l}-{otl} doesn't happen by accident -- {coach} has {team} dialed in.",
+                    "Credit where it's due: {coach} has {team} at {w}-{l}-{otl}.",
                 ]).format(coach=cname, team=_tname(t), w=w, l=l, otl=otl)
                 stories.append(story)
                 _mark_recent(app, key, "cotm", game_date)
@@ -290,13 +380,32 @@ def _controversies(app, game_date, rng):
         try:
             ovr = _ovr(p)
             gp = _gp(p)
-            if ovr >= 78 and gp <= 3:
+            # B6: garbage OVR must not qualify or render
+            if _ovr_ok(ovr) and ovr >= 78 and gp <= 3:
                 key = f"player:{_safe(lambda: p.id, id(p))}"
                 if not _recent_ok(app, key, "scratch", game_date):
                     continue
                 story = rng.choice([
                     "SCRATCH WATCH: {name} ({ovr} OVR) has dressed for just {gp} games. Is {coach} sending a message in {team}?",
-                    "{name} can't crack the {team} lineup despite a {ovr} OVR rating -- trade winds are swirling.",
+                    "{name} can't crack the {team} lineup -- {gp} games for a {ovr} OVR talent is hard to justify.",
+                    "SCRATCH WATCH: {name} watched again -- {gp} games for a {ovr} OVR player is raising eyebrows in {team}.",
+                    "{coach} keeps going back to the same lineup card, and {name} ({ovr} OVR) keeps sitting -- {gp} games and counting.",
+                    "SCRATCH WATCH: {team} is healthy-scratching a {ovr} OVR talent in {name}. Something has to give.",
+                    "{name} has played {gp} games. For a {ovr} OVR player in {team}, that's a statement from {coach}.",
+                    "The {team} press box has a {ovr} OVR regular in {name} -- {coach} isn't budging.",
+                    "SCRATCH WATCH: {name}'s situation in {team} is one to watch -- {gp} games, {ovr} OVR, and questions piling up.",
+                    "Whatever the reason in {team}, {name} sitting at {gp} games tells its own story.",
+                    "With {ovr} OVR and {gp} games, {name} has no clear path back in {team} -- something has to give.",
+                    "A {ovr} OVR player should not be watching from the press box -- {name} has {gp} games in {team}.",
+                    "{name} is out of the lineup again -- in {team}, people notice these things.",
+                    "SCRATCH WATCH: {name} needs a fresh start -- {gp} games in {team} isn't it for a {ovr} OVR talent.",
+                    "The message from {coach} is clear, even if the reason isn't: {name} sits again for {team}.",
+                    "{team} paid for a {ovr} OVR contributor and is getting {gp} games from {name} -- the math doesn't work.",
+                    "SCRATCH WATCH: {name} keeps sitting -- {gp} games in {team} is a long stretch to go unnoticed.",
+                    "The {team} line is patience with {name} -- {gp} games into the season, fans aren't buying it.",
+                    "You don't healthy-scratch {ovr} OVR talent without a reason -- but {coach} isn't sharing his in {team}.",
+                    "SCRATCH WATCH: {name} keeps sitting -- that's the {team} story at {gp} games.",
+                    "If {name} isn't in {coach}'s plans, {team} owes it to a {ovr} OVR asset to find him a new home.",
                 ]).format(name=_pname(p), ovr=int(ovr), gp=gp,
                           team=_tname(t),
                           coach=_coach_name(_head_coach(t)) or "the coach")
@@ -312,7 +421,7 @@ def _controversies(app, game_date, rng):
             try:
                 ovr = _ovr(p)
                 gp = _gp(p)
-                if ovr >= 80 and gp >= 15 and _pts(p) / gp < 0.5:
+                if _ovr_ok(ovr) and ovr >= 80 and gp >= 15 and _pts(p) / gp < 0.5:
                     cands.append((p, t))
             except Exception:
                 continue
@@ -322,8 +431,26 @@ def _controversies(app, game_date, rng):
             if not _recent_ok(app, key, "rumor", game_date):
                 continue
             story = rng.choice([
-                "RUMOR MILL: Rival execs are calling on {name} -- the {team} star has just {pts} points in {gp} games.",
+                "RUMOR MILL: {name} is a natural speculation target -- the {team} star has just {pts} points in {gp} games.",
                 "Is {name}'s time in {team} running out? {pts} points in {gp} games isn't cutting it for an {ovr} OVR player.",
+                "RUMOR MILL: {name}'s name keeps surfacing -- {pts} points in {gp} games and the speculation isn't dying down.",
+                "RUMOR MILL: With {pts} points in {gp} games, {name} is the name that keeps coming up in {team} speculation.",
+                "RUMOR MILL: A change of scenery could unlock {name} -- {ovr} OVR talent always draws trade speculation.",
+                "{pts} points in {gp} games isn't the {name} {team} paid for -- and it's starting to show.",
+                "RUMOR MILL: {team} won't say {name} is available. They won't say he isn't, either.",
+                "The {name} watch is on: {pts} in {gp} for a {ovr} OVR player rarely stays quiet in {team}.",
+                "RUMOR MILL: Could a contender buy low on {name}? {pts} points in {gp} games makes it a debate worth having.",
+                "Is {name}'s future in {team} in doubt? {pts} points in {gp} games keeps the rumor mill fed.",
+                "RUMOR MILL: {name}'s production has dipped in {team} -- and the rumor mill is only getting louder.",
+                "Don't be shocked if {name} is wearing different colors by spring -- {pts} in {gp} has {team} rethinking.",
+                "RUMOR MILL: Landing {name} won't come cheap -- {team} knows what a {ovr} OVR star is worth.",
+                "{name} would look good in a lot of top sixes -- {team} knows it, and {pts} points in {gp} hasn't scared anyone off.",
+                "RUMOR MILL: If {name} were ever available, {ovr} OVR talent wouldn't stay on the market long.",
+                "The longer {name} sits at {pts} points in {gp} games, the louder the {team} rumor mill gets.",
+                "RUMOR MILL: {name} is the big swing -- {ovr} OVR talent at {pts} points in {gp} games.",
+                "Retool or reload? {team}'s answer may decide {name}'s future -- {pts} points in {gp} games.",
+                "{team} fans are split on {name} -- but {pts} points in {gp} games is below the {ovr} OVR bar.",
+                "RUMOR MILL: If {team} sells, {name} is the headline piece -- {pts} points in {gp} games.",
             ]).format(name=_pname(p), team=_tname(t), pts=_pts(p),
                       gp=_gp(p), ovr=int(_ovr(p)))
             stories.append(story)
@@ -334,13 +461,31 @@ def _controversies(app, game_date, rng):
             try:
                 yrs = _safe(lambda: int(p.contract_years_left), 99)
                 ovr = _ovr(p)
-                if yrs is not None and yrs <= 1 and ovr >= 82:
+                if _ovr_ok(ovr) and yrs is not None and yrs <= 1 and ovr >= 82:
                     key = f"player:{_safe(lambda: p.id, id(p))}"
                     if not _recent_ok(app, key, "holdout", game_date):
                         continue
                     story = rng.choice([
                         "CONTRACT WATCH: {name} is unsigned past this season. {team} risks losing an {ovr} OVR star for nothing.",
-                        "{name}'s expiring deal looms over {team} -- extension talks are reportedly 'quiet'.",
+                        "{name}'s expiring deal looms over {team} -- and the {ovr} OVR star still hasn't signed.",
+                        "CONTRACT WATCH: The clock is ticking on {name} in {team} -- no extension for the {ovr} OVR star.",
+                        "{team} can't let {name} walk for nothing -- but the {ovr} OVR star remains unsigned.",
+                        "CONTRACT WATCH: {name} holds all the cards -- {team} needs the {ovr} OVR cornerstone locked up.",
+                        "Every day without a deal, {name}'s price goes up -- {team} is playing with fire.",
+                        "CONTRACT WATCH: {team}'s priority list starts and ends with {name} ({ovr} OVR).",
+                        "{name} is unsigned past this season -- and {team} fans are focused on the contract.",
+                        "CONTRACT WATCH: Letting an {ovr} OVR player like {name} reach free agency would haunt {team}.",
+                        "The {name} negotiation is the story in {team} -- until the {ovr} OVR star signs, it stays that way.",
+                        "{name} is unsigned -- now {team} has to pay the {ovr} OVR market rate or risk losing him.",
+                        "CONTRACT WATCH: No news is bad news on the {name} front in {team}.",
+                        "If {team} won't pay {name}, someone will -- that's the fear with the {ovr} OVR star unsigned.",
+                        "CONTRACT WATCH: Time is {team}'s enemy here -- leverage belongs to the {ovr} OVR star in {name}.",
+                        "{team}'s window and {name}'s contract are on the same clock -- the {ovr} OVR star needs a deal.",
+                        "CONTRACT WATCH: The longer this drags, the more {name} costs {team}.",
+                        "July 1 gets closer every day -- {team} still has no deal with {ovr} OVR star {name}.",
+                        "CONTRACT WATCH: {name} is {team}'s most important signature -- and it's still missing.",
+                        "The {team} faithful are getting nervous: no extension yet for {name}, the {ovr} OVR engine.",
+                        "CONTRACT WATCH: {name} to the open market is {team}'s nightmare scenario -- {ovr} OVR talent doesn't grow on trees.",
                     ]).format(name=_pname(p), team=_tname(t), ovr=int(ovr))
                     stories.append(story)
                     _mark_recent(app, key, "holdout", game_date)
@@ -351,7 +496,11 @@ def _controversies(app, game_date, rng):
 
 
 def _draft_stories(app, game_date, rng):
-    """Draft-season coverage, Jan-Jun."""
+    """Prospect-riser coverage during draft season (Jan-Jun).
+
+    Draws from team-owned prospects (``t.prospects``), so every template is
+    framed as organizational riser coverage -- never as draft-eligible
+    hype, which these players are not."""
     stories = []
     try:
         if game_date.month not in (1, 2, 3, 4, 5, 6):
@@ -359,19 +508,41 @@ def _draft_stories(app, game_date, rng):
     except Exception:
         return stories
     prospects = _all_prospects(app)
-    # Sort by potential then overall for a rough "rankings" feel
+    # Sort by overall for a rough "rankings" feel. Key-based sort only:
+    # tuples hold player objects, and tuple comparison on an OVR tie
+    # would fall through to comparing players -> TypeError (B1).
     ranked = []
     for p, t in prospects:
         try:
-            ranked.append((_ovr(p), p, t))
+            ovr = _ovr(p)
+            if _ovr_ok(ovr):
+                ranked.append((ovr, p, t))
         except Exception:
             continue
-    ranked.sort(reverse=True)
+    ranked.sort(key=lambda r: r[0], reverse=True)
     if ranked and _recent_ok(app, "draft:risers", "draft", game_date):
         top = ranked[0]
         story = rng.choice([
-            "DRAFT RISERS: {name} ({team}) is climbing draft boards with a strong {season}.",
-            "MOCK DRAFT BUZZ: {name} could go as high as the top five in June.",
+            "PROSPECT RISERS: {name} ({team}) has impact-player upside -- one to watch this {season}.",
+            "PROSPECT RISERS: {name} is an exciting name to watch for {team} heading into the {season}.",
+            "{name} has star-level upside in the {team} system -- keep an eye on him this {season}.",
+            "PROSPECT RISERS: {name} keeps demanding a longer look from the big club -- all the tools are there for {team}.",
+            "PROSPECT RISERS: Don't be surprised if {name} pushes for NHL ice time soon -- the {team} prospect has the toolkit for it.",
+            "PROSPECT RISERS: {name} ({team}) is a legitimate NHL prospect on tools alone.",
+            "{name}'s ceiling is real -- a gem worth watching in {team}'s system this {season}.",
+            "PROSPECT RISERS: {name} plays a pro-style game -- {team} likes how he projects for the {season}.",
+            "PROSPECT RISERS: {name}'s projection keeps rising -- {team} may have something special here.",
+            "PROSPECT RISERS: {name} plays with the kind of compete {team} covets in a prospect.",
+            "{name}'s stock has never been higher -- {team} sees a future impact player for the {season} ahead.",
+            "PROSPECT RISERS: {name} ({team}) checks a lot of boxes -- the upside is obvious this {season}.",
+            "PROSPECT RISERS: {name} is on the call-up radar -- the toolkit says he's getting close.",
+            "PROSPECT RISERS: {name}'s two-way detail is advanced for his age -- {team} may have a steal.",
+            "The way {name} is trending for {team} is knocking-on-the-door material -- a big {season} ahead.",
+            "PROSPECT RISERS: {name} is making {team}'s drafting look smart -- the upside keeps getting harder to ignore.",
+            "PROSPECT RISERS: {name} is turning heads on tools alone.",
+            "PROSPECT RISERS: {name} projects as a real young talent for {team} -- the ceiling is real.",
+            "{name} has that coveted blend of skill and compete -- a rising {season} storyline for {team}.",
+            "PROSPECT RISERS: {name} ({team}) is a name to know this {season} -- the upside speaks for itself.",
         ]).format(name=_pname(top[1]), team=_tname(top[2]),
                   season="first half" if game_date.month < 4 else "stretch run")
         # guard against placeholder-y output
@@ -379,8 +550,23 @@ def _draft_stories(app, game_date, rng):
             stories.append(story)
             _mark_recent(app, "draft:risers", "draft", game_date)
     if len(ranked) >= 5 and len(stories) < 2 and _recent_ok(app, "draft:depth", "draft", game_date):
-        story = ("DRAFT DEPTH: Scouts call this year's class deep -- "
-                 "as many as ten prospects grade out with first-round talent.")
+        story = rng.choice([
+            "DRAFT DEPTH: This year's class looks deep -- quality options stretch well into round one.",
+            "DRAFT DEPTH: It's a deep year -- the first round looks loaded with legitimate talent.",
+            "DRAFT DEPTH: Teams picking late in round one could still land top-end talent -- that's how deep this class is.",
+            "DRAFT DEPTH: It's a deep draft, with first-round grades reaching far down the board.",
+            "DRAFT DEPTH: The first round might as well be two rounds -- this class is that deep.",
+            "DRAFT DEPTH: The depth is real: first-round talent and quality well into round two.",
+            "DRAFT DEPTH: It's a deep first round -- difference-makers available well past the lottery.",
+            "DRAFT DEPTH: Deep and balanced -- first-round talents headline a class with contributors into the middle rounds.",
+            "DRAFT DEPTH: A deep first round is prime trade-up territory.",
+            "DRAFT DEPTH: A deep class, with first-round grades up and down the board.",
+            "DRAFT DEPTH: The drop-off doesn't come for a while -- talent runs deep in this class.",
+            "DRAFT DEPTH: Quality and quantity -- this deep class boasts first-round talent throughout the round.",
+            "DRAFT DEPTH: A deep draft means talent everywhere -- this class has real quantity.",
+            "DRAFT DEPTH: The second tier of this class runs deep -- quality well past the lottery.",
+            "DRAFT DEPTH: A class this deep doesn't come along every year -- first-round talent everywhere.",
+        ])
         stories.append(story)
         _mark_recent(app, "draft:depth", "draft", game_date)
     return stories
@@ -390,7 +576,9 @@ def _team_stories(app, game_date, rng):
     """Streaks, slumps, rivalry watch, fan morale."""
     stories = []
     teams = _all_teams(app)
-    # Compute streaks from recent schedule if available
+    # High-win% team coverage. No recent-game data is available here, so
+    # these celebrate the record -- they never claim an active streak,
+    # a standings gap, or unit-level (PP/PK/goaltending/line) causes.
     for t in teams:
         try:
             w, l, otl = _team_record(t)
@@ -401,15 +589,51 @@ def _team_stories(app, game_date, rng):
             pct = w / gp
             if pct >= 0.75 and _recent_ok(app, key, "streak", game_date):
                 story = rng.choice([
-                    "{team} is the league's hottest team at {w}-{l}-{otl}.",
-                    "Nobody wants to face {team} right now -- {w}-{l}-{otl} and rolling.",
-                ]).format(team=_tname(t), w=w, l=l, otl=otl)
+                    "What a record: {team} sits at {w}-{l}-{otl}.",
+                    "{w}-{l}-{otl}. Read it twice -- that's {team}'s record.",
+                    "{w} wins in {gp} games: {team} owns a {w}-{l}-{otl} record.",
+                    "RECORD WATCH: The numbers are loud -- {team} is {w}-{l}-{otl}.",
+                    "No asterisks, no fine print: {team}'s record reads {w}-{l}-{otl}.",
+                    "Take a bow, {team}: {w}-{l}-{otl} through {gp} games.",
+                    "{team} is {w}-{l}-{otl}, and that's worth savoring.",
+                    "RECORD WATCH: A dream start for {team} -- {w}-{l}-{otl} through {gp}.",
+                    "Do the math: {w} wins in {gp} games. {team} is {w}-{l}-{otl}.",
+                    "RECORD WATCH: {w}-{l}-{otl} -- {team} is having some kind of season.",
+                    "Just look at it: {team}, {w}-{l}-{otl}.",
+                    "{team}'s record is {w}-{l}-{otl} -- the kind of number that needs no spin.",
+                    "RECORD WATCH: {w}-{l}-{otl} for {team}. Some records need no explanation.",
+                    "A {w}-{l}-{otl} ledger for {team} -- the record speaks for itself.",
+                    "Bank the points: {team} is {w}-{l}-{otl}.",
+                    "{team} has authored a {w}-{l}-{otl} record through {gp} games.",
+                    "RECORD WATCH: {w}-{l}-{otl}. That's {team}'s record, plain and simple.",
+                    "Say it out loud: {team} is {w}-{l}-{otl} through {gp} games.",
+                    "Pin this one to the board: {team} is {w}-{l}-{otl}.",
+                    "One more look at the ledger: {team}, {w}-{l}-{otl}.",
+                ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp)
                 stories.append(story)
                 _mark_recent(app, key, "streak", game_date)
             elif pct <= 0.25 and _recent_ok(app, key, "slump", game_date):
                 story = rng.choice([
-                    "{team} is free-falling at {w}-{l}-{otl}. Something has to give.",
                     "SLUMP WATCH: {team} has managed just {w} wins in {gp} games.",
+                    "The numbers are ugly: {team} is {w}-{l}-{otl} and searching for answers.",
+                    "SLUMP WATCH: {w}-{l}-{otl} -- {team}'s record needs no sugarcoating.",
+                    "Ouch. {team} is {w}-{l}-{otl} through {gp} games.",
+                    "SLUMP WATCH: Just {w} wins in {gp} games for {team} -- the record says it all.",
+                    "{team}'s {w}-{l}-{otl} mark is the kind that gives a beat writer nightmares.",
+                    "SLUMP WATCH: {w}-{l}-{otl}. There's no way to dress that up for {team}.",
+                    "The ledger is brutal: {team} sits at {w}-{l}-{otl}.",
+                    "SLUMP WATCH: {team} is {w}-{l}-{otl} -- the losses column is doing the talking.",
+                    "{w} wins. {gp} games. {team}'s record is {w}-{l}-{otl}, and it's rough.",
+                    "SLUMP WATCH: Read the record and wince: {team} is {w}-{l}-{otl}.",
+                    "Not much to like in {team}'s {w}-{l}-{otl} record through {gp}.",
+                    "SLUMP WATCH: {team} is staring at {w}-{l}-{otl} through {gp} games.",
+                    "A {w}-{l}-{otl} record for {team} -- the kind that gets circled in red ink.",
+                    "SLUMP WATCH: {w} wins in {gp} games. That is {team}'s season so far.",
+                    "Yikes: {team} is {w}-{l}-{otl} through {gp} games.",
+                    "SLUMP WATCH: The {team} ledger reads {w}-{l}-{otl} -- and it's not pretty.",
+                    "{team}'s {w}-{l}-{otl} record is a tough look through {gp} games.",
+                    "SLUMP WATCH: {w}-{l}-{otl} for {team}. The record is what it is.",
+                    "File this under rough: {team} is {w}-{l}-{otl} through {gp} games.",
                 ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp)
                 stories.append(story)
                 _mark_recent(app, key, "slump", game_date)
@@ -438,8 +662,24 @@ def _milestone_watch(app, game_date, rng):
                     key = f"player:{_safe(lambda: p.id, id(p))}"
                     if not _recent_ok(app, key, "milestone", game_date):
                         break
-                    story = (f"MILESTONE WATCH: {_pname(p)} ({_tname(t)}) sits at "
-                             f"{cg} career goals -- {mark - cg} away from {mark}.")
+                    story = rng.choice([
+                        "MILESTONE WATCH: {name} ({team}) sits at {cg} career goals -- {away} away from {mark}.",
+                        "The countdown is on: {name} needs {away} more for {mark} career goals -- he's at {cg} with {team}.",
+                        "MILESTONE WATCH: {name} ({team}) is {away} goals shy of {mark} for his career.",
+                        "{cg} down, {away} to go -- {name} is closing in on {mark} career goals with {team}.",
+                        "MILESTONE WATCH: History beckons for {name} -- {away} goals from {mark}.",
+                        "{name} ({team}) keeps climbing the all-time list -- {cg} goals, {away} from {mark}.",
+                        "MILESTONE WATCH: The {team} faithful are counting down -- {name} needs {away} for {mark}.",
+                        "Elite company awaits: {name} is {away} goals away from {mark} in his career.",
+                        "MILESTONE WATCH: {name}'s next {away} goals carry history -- {mark} is within reach.",
+                        "{team}'s {name} sits at {cg} -- the march to {mark} is nearly over.",
+                        "MILESTONE WATCH: {name} needs {away} -- the {mark}-goal club is calling.",
+                        "Chase for {mark}: {name} ({team}) is at {cg}, just {away} back.",
+                        "MILESTONE WATCH: {away} to go for {name} -- {team} fans are ready to celebrate {mark}.",
+                        "The building will be loud when {name} gets {away} more -- {mark} career goals is close.",
+                        "MILESTONE WATCH: {name} ({team}): {cg} career goals and counting -- {mark} is {away} away.",
+                    ]).format(name=_pname(p), team=_tname(t), cg=cg,
+                              away=mark - cg, mark=mark)
                     stories.append(story)
                     _mark_recent(app, key, "milestone", game_date)
                     break
@@ -462,14 +702,38 @@ def _depth_stories(app, game_date, rng):
                 continue
             s = _stats(p)
             gp = _gp(p)
-            svp = _safe(lambda: float(s.save_percentage), 0) or 0
-            if 3 <= gp <= 12 and svp >= 0.915:
+            svp = _safe(lambda: float(s.save_percentage), 0.0)
+            # B4: bound the save percentage. _safe/or doesn't filter inf/nan
+            # (both truthy), so reject non-finite and anything above 1.0 --
+            # impossible values must never qualify or render.
+            if not math.isfinite(svp if svp is not None else 0.0):
+                continue
+            svp = svp or 0.0
+            if 3 <= gp <= 12 and 0.915 <= svp <= 1.0:
                 key = f"player:{_safe(lambda: p.id, id(p))}"
                 if not _recent_ok(app, key, "backup", game_date):
                     continue
                 story = rng.choice([
                     "GOALIE DEBATE: {name} is {svp} through {gp} games -- is there a crease controversy brewing in {team}?",
                     "{name}'s {svp} save percentage in limited action has {team} fans asking questions.",
+                    "GOALIE DEBATE: {name} keeps stopping pucks ({svp} in {gp} games) -- how long before {team} leans on him more?",
+                    "{team} has a good problem in the crease: {name} is {svp} through {gp} games.",
+                    "GOALIE DEBATE: The numbers don't lie -- {name}'s {svp} in {gp} games demands a longer look in {team}.",
+                    "{name} is making his case between the pipes -- {svp} across {gp} appearances for {team}.",
+                    "GOALIE DEBATE: {team}'s crease is getting crowded -- {name} is {svp} in {gp} games.",
+                    "Small sample, big numbers: {name} sits at {svp} through {gp} games for {team}.",
+                    "GOALIE DEBATE: {name} has been rock solid ({svp}) -- {team} may have a tandem on its hands.",
+                    "{team} fans are taking notice of {name} -- {svp} in {gp} games is hard to ignore.",
+                    "GOALIE DEBATE: Is {name} {team}'s best goalie right now? {svp} through {gp} says maybe.",
+                    "{name} is stopping everything in sight -- {svp} across {gp} games for {team}.",
+                    "GOALIE DEBATE: {team} didn't expect a controversy, but {name}'s {svp} is forcing the conversation.",
+                    "The crease competition is heating up: {name} is {svp} in {gp} games for {team}.",
+                    "GOALIE DEBATE: {name}'s calm, positional game has him at {svp} -- {team} is taking notice.",
+                    "{gp} games, {svp} save percentage -- {name} is earning {team}'s trust one start at a time.",
+                    "GOALIE DEBATE: Split the starts? {name}'s {svp} through {gp} makes the case in {team}.",
+                    "{name} has given {team} quality minutes -- {svp} in {gp} games.",
+                    "GOALIE DEBATE: {name} keeps the net small -- {svp} through {gp} for {team}.",
+                    "{team}'s goaltending depth is showing -- {name} is {svp} across {gp} games.",
                 ]).format(name=_pname(p), svp=f"{svp:.3f}", gp=gp,
                           team=_tname(t))
                 stories.append(story)
@@ -486,12 +750,29 @@ def _depth_stories(app, game_date, rng):
                     continue
                 ovr = _ovr(p)
                 gp = _gp(p)
-                if ovr < 74 and gp >= 15 and _pts(p) / gp >= 0.6:
+                # B6: garbage OVR must not qualify or render
+                if _ovr_ok(ovr) and ovr < 74 and gp >= 15 and _pts(p) / gp >= 0.6:
                     key = f"player:{_safe(lambda: p.id, id(p))}"
                     if not _recent_ok(app, key, "grinder", game_date):
                         continue
-                    story = (f"UNDERDOG: {_pname(p)} ({int(ovr)} OVR) has {_pts(p)} points "
-                             f"in {gp} games for {_tname(t)} -- earning every shift.")
+                    story = rng.choice([
+                        "UNDERDOG: {name} ({ovr} OVR) has {pts} points in {gp} games for {team} -- earning every shift.",
+                        "Nobody outworks {name}: the {ovr} OVR grinder has {pts} points in {gp} games for {team}.",
+                        "UNDERDOG: {name}'s play is making a statement -- {pts} points in {gp} games for {team}.",
+                        "UNDERDOG: {name} ({ovr} OVR) has {pts} in {gp} for {team} -- production nobody saw coming.",
+                        "UNDERDOG: {name} does the dirty work and the scoresheet is noticing -- {pts} points in {gp} games.",
+                        "Ice time is earned, and {name} is earning his -- the {team} grinder has {pts} points in {gp} games.",
+                        "UNDERDOG: {ovr} OVR, {pts} points, zero quit -- {name} is {team}'s heartbeat.",
+                        "{name} does the little things right, and now he's scoring -- {pts} in {gp} for {team}.",
+                        "UNDERDOG: {team} found a gem in {name} -- {pts} points in {gp} games from a {ovr} OVR depth piece.",
+                        "The {team} room loves {name} -- {pts} points in {gp} games of honest hockey.",
+                        "UNDERDOG: {name} is making the most of every shift -- {pts} in {gp}.",
+                        "Shift after shift, {name} does the dirty work -- with {pts} points in {gp} games to show for it.",
+                        "UNDERDOG: Don't look now, but {name} ({ovr} OVR) is producing -- {pts} in {gp}.",
+                        "{name} is the kind of player who wins you playoff games -- {team} is seeing it now with {pts} in {gp}.",
+                        "UNDERDOG: {name}'s compete never wavers -- {pts} points in {gp} games for {team}.",
+                    ]).format(name=_pname(p), ovr=int(ovr), pts=_pts(p),
+                              gp=gp, team=_tname(t))
                     stories.append(story)
                     _mark_recent(app, key, "grinder", game_date)
                     break
@@ -510,20 +791,78 @@ def _offseason_beat(app, game_date, rng):
     except Exception:
         return stories
     players = _all_players(app)
-    # Training focus: tie to a real weak attribute where possible
-    cands = [(p, t) for p, t in players if _ovr(p) >= 70]
+    # Training focus: position-gated summer work. Goalies never take
+    # faceoffs, kill penalties, or take one-timers, so they draw from a
+    # goalie-only list; skaters draw from position-appropriate lists.
+    # (Deliberately flavor, not a scouting report: the item is not tied
+    # to the player's real weak attributes.)
+    cands = [(p, t) for p, t in players
+             if _ovr_ok(_ovr(p)) and _ovr(p) >= 70]
     rng.shuffle(cands)
     for p, t in cands[:2]:
         key = f"player:{_safe(lambda: p.id, id(p))}"
         if not _recent_ok(app, key, "offseason", game_date):
             continue
-        focus = rng.choice([
-            "skating stride", "shot release", "defensive positioning",
-            "faceoff technique", "core strength",
-        ])
+        pos = _pos(p).upper()
+        # Explicit goalie check first: a blank/missing position must never
+        # fall through to skater items (one-timer timing, penalty-kill
+        # reads) for someone who is actually a goalie.
+        if pos in ("G", "GOALIE"):
+            focus_items = [
+                "lateral quickness", "rebound control",
+                "tracking pucks through screens",
+                "post-to-post explosiveness", "glove positioning",
+                "playing the puck", "crease depth management",
+                "second-effort recoveries", "reading releases",
+                "staying square through traffic",
+            ]
+        elif pos in ("D", "LD", "RD", "DEFENSE", "DEFENCE"):
+            focus_items = [
+                "gap control", "first-pass accuracy",
+                "defensive positioning", "point shot",
+                "penalty-kill reads", "skating stride",
+                "stick-on-puck defending", "core strength",
+                "net-front battles", "transition passing",
+            ]
+        elif pos in ("C", "CENTER", "LW", "RW", "F", "FORWARD", "W", "WINGER"):
+            focus_items = [
+                "skating stride", "shot release", "defensive positioning",
+                "core strength", "first-step quickness",
+                "stickhandling in traffic", "net-front presence",
+                "penalty-kill reads", "one-timer timing",
+                "faceoff technique" if pos in ("C", "CENTER") else "backchecking detail",
+            ]
+        else:
+            # Blank/unknown position: stick to items true of any skater
+            # AND goalie, so nobody gets position-nonsense items.
+            focus_items = [
+                "conditioning", "core strength", "flexibility",
+                "lower-body power", "recovery and nutrition",
+                "durability", "off-ice cardio", "mobility",
+                "mental preparation", "leadership",
+            ]
+        focus = rng.choice(focus_items)
         story = rng.choice([
-            "{name} ({team}) is reportedly focused on {focus} this summer.",
+            "{name} ({team}) is focused on {focus} this summer.",
             "{team} expects big things from {name} after a summer dedicated to {focus}.",
+            "SUMMER WORK: {name} is putting in the hours on {focus} -- {team} will reap the benefits.",
+            "OFFSEASON: {name}'s summer priority is {focus}, and {team} loves the commitment.",
+            "OFFSEASON: Improving {focus} is {name}'s summer mission -- {team} loves the commitment.",
+            "SUMMER WORK: The {focus} gains are showing for {name} -- {team} is optimistic.",
+            "{name} knows {focus} is the next step -- {team} expects a leap this fall.",
+            "OFFSEASON: {name} has attacked his {focus} all summer long.",
+            "The {team} staff made {focus} {name}'s summer project.",
+            "SUMMER WORK: {name} is determined to sharpen his {focus} before camp.",
+            "{focus} is {name}'s summer priority -- he's determined to take a step.",
+            "OFFSEASON: {team} loves {name}'s dedication to improving his {focus}.",
+            "SUMMER WORK: {name} has {focus} circled as the key to his next step with {team}.",
+            "{team} is counting on {name} taking a step -- {focus} is where it starts.",
+            "OFFSEASON: The work {name} is putting into {focus} hasn't gone unnoticed in {team}.",
+            "{name} wants a bigger role -- it starts with {focus} this summer.",
+            "SUMMER WORK: {team} development staff are thrilled with {name}'s commitment to {focus}.",
+            "{focus}, {focus}, {focus} -- that's been {name}'s summer mantra.",
+            "OFFSEASON: {name} is betting a summer of {focus} turns into a breakout fall with {team}.",
+            "{team} fans should watch {name} at camp -- a summer of {focus} could unlock another level.",
         ]).format(name=_pname(p), team=_tname(t), focus=focus)
         stories.append(story)
         _mark_recent(app, key, "offseason", game_date)
@@ -537,8 +876,20 @@ def _offseason_beat(app, game_date, rng):
                     key = f"prospect:{_safe(lambda: p.id, id(p))}"
                     if not _recent_ok(app, key, "devcamp", game_date):
                         continue
-                    story = (f"DEVELOPMENT CAMP: {t and _tname(t)} prospect {_pname(p)} "
-                             f"impressed coaches with his compete level.")
+                    story = rng.choice([
+                        "DEVELOPMENT CAMP: {tname} prospect {pname} impressed coaches with his compete level.",
+                        "DEVELOPMENT CAMP: {pname} stood out among {tname} prospects with his pace and detail.",
+                        "DEVELOPMENT CAMP: {tname} prospect {pname} looked like a standout all week at camp.",
+                        "DEVELOPMENT CAMP: {pname} opened eyes at {tname} development camp.",
+                        "DEVELOPMENT CAMP: The {tname} staff loves {pname}'s habits -- a strong week at camp.",
+                        "DEVELOPMENT CAMP: {pname} was a noticeable presence all week at {tname} camp.",
+                        "DEVELOPMENT CAMP: {tname} prospect {pname} keeps trending the right way.",
+                        "DEVELOPMENT CAMP: {pname}'s compete level set the tone at {tname} camp.",
+                        "DEVELOPMENT CAMP: {tname} coaches came away impressed with {pname}'s two-way detail.",
+                        "DEVELOPMENT CAMP: Keep an eye on {pname} -- {tname}'s camp standout.",
+                        "DEVELOPMENT CAMP: {pname} looked like he belonged at {tname} camp.",
+                        "DEVELOPMENT CAMP: {tname} prospect {pname} finished the week strong.",
+                    ]).format(tname=(t and _tname(t)), pname=_pname(p))
                     stories.append(story)
                     _mark_recent(app, key, "devcamp", game_date)
                     break
@@ -563,12 +914,64 @@ def _league_notes(app, game_date, rng):
             lead = skaters[0][0]
             key = "league:scoring_race"
             if _recent_ok(app, key, "notes", game_date):
-                story = rng.choice([
-                    "SCORING RACE: {name} ({team}) leads the league with {pts} points in {gp} games.",
-                    "{name} sits atop the scoring charts at {pts} points -- {gap} clear of second place.",
-                ]).format(name=_pname(lead), team=_tname(skaters[0][1]),
-                          pts=_pts(lead), gp=_gp(lead),
-                          gap=_pts(lead) - (_pts(skaters[1][0]) if len(skaters) > 1 else _pts(lead)))
+                lead_pts = _pts(lead)
+                # B7: gap can be 0 when the leader is tied (or alone, when
+                # there is no second qualifier). Never render "0 clear of
+                # second place" -- split templates on tied-vs-leading.
+                gap = (lead_pts - _pts(skaters[1][0])
+                       if len(skaters) > 1 else None)
+                if gap is not None and gap > 0:
+                    story = rng.choice([
+                        "SCORING RACE: {name} ({team}) leads the league with {pts} points in {gp} games.",
+                        "{name} sits atop the scoring charts at {pts} points -- {gap} clear of second place.",
+                        "SCORING RACE: {name} is setting the pace -- {pts} points in {gp} games for {team}.",
+                        "{name} can't be stopped -- {pts} points in {gp} games leads the league.",
+                        "SCORING RACE: {gap} points separate {name} from the pack -- {pts} in {gp} for {team}.",
+                        "The {team} superstar is lapping the field: {name} has {pts} points in {gp} games.",
+                        "SCORING RACE: {name}'s {pts} points in {gp} games have him {gap} clear at the top.",
+                        "{name} is playing chess while everyone else plays checkers -- {pts} in {gp}.",
+                        "SCORING RACE: Nobody is keeping pace with {name} ({pts} points, {gp} games).",
+                        "The scoring title runs through {name} -- {pts} points in {gp} games for {team}.",
+                        "SCORING RACE: {name} is on another planet -- {pts} in {gp}, {gap} ahead of second.",
+                        "{team} rides {name} nightly -- the league leader has {pts} points in {gp} games.",
+                        "SCORING RACE: The gap is {gap} and growing -- {name} keeps piling up points.",
+                        "{name} makes it look easy: {pts} points in {gp} games for {team}.",
+                        "SCORING RACE: Second place is playing for pride -- {name} is {gap} points clear.",
+                        "Night after night, {name} delivers -- {pts} points in {gp} games.",
+                        "SCORING RACE: {name} ({team}) is threatening to run away with it at {pts} in {gp}.",
+                        "The {name} show continues: {pts} points in {gp} games, best in the league.",
+                        "SCORING RACE: {gap} points of daylight between {name} and the field.",
+                        "{name} is the engine of {team} -- and the league's scoring leader at {pts} in {gp}.",
+                    ]).format(name=_pname(lead), team=_tname(skaters[0][1]),
+                              pts=lead_pts, gp=_gp(lead), gap=gap)
+                elif gap == 0:
+                    story = rng.choice([
+                        "SCORING RACE: {name} ({team}) shares the league lead with {pts} points in {gp} games.",
+                        "{name} sits in a tie atop the scoring charts at {pts} points.",
+                        "SCORING RACE: Dead even at the top -- {name} has {pts} points in {gp} games for {team}.",
+                        "Nobody has separated from the pack: {name} is tied for the league lead at {pts} points.",
+                        "SCORING RACE: {name} and the chasing pack are deadlocked at {pts} points in {gp} games.",
+                        "{name} holds a share of the scoring lead -- {pts} in {gp} for {team}.",
+                        "SCORING RACE: It's a logjam at the top, and {name} ({pts} in {gp}) is right in it.",
+                        "The scoring title is up for grabs -- {name} is tied at the top with {pts} points.",
+                        "SCORING RACE: {name} ({team}) is knotted at the top of the charts with {pts} points.",
+                        "{pts} points in {gp} games -- {name} shares the league lead.",
+                        "SCORING RACE: Dead heat at the top -- {name} has {pts} in {gp} for {team}.",
+                        "It's anyone's scoring title -- {name} is tied at the top with {pts} points in {gp} games.",
+                    ]).format(name=_pname(lead), team=_tname(skaters[0][1]),
+                              pts=lead_pts, gp=_gp(lead))
+                else:
+                    story = rng.choice([
+                        "SCORING RACE: {name} ({team}) sets the pace with {pts} points in {gp} games.",
+                        "{name} is the man to catch -- {pts} points in {gp} games for {team}.",
+                        "SCORING RACE: {name} leads the way at {pts} in {gp}.",
+                        "The scoring lead belongs to {name} -- {pts} points in {gp} games.",
+                        "SCORING RACE: {name} ({pts} points, {gp} games) is the early pacesetter.",
+                        "{name} is setting the standard -- {pts} points in {gp} games for {team}.",
+                        "SCORING RACE: All eyes on {name} -- {pts} in {gp}, tops in the league.",
+                        "The {team} star is out front: {name} has {pts} points in {gp} games.",
+                    ]).format(name=_pname(lead), team=_tname(skaters[0][1]),
+                              pts=lead_pts, gp=_gp(lead))
                 stories.append(story)
                 _mark_recent(app, key, "notes", game_date)
     except Exception:
@@ -583,13 +986,27 @@ def _league_notes(app, game_date, rng):
                 gp = w + l + otl
                 if gp >= 5:
                     ranked.append((w / gp, t, w, l, otl))
-            ranked.sort(reverse=True)
+            # B2: key-based sort only -- tuples hold team objects, and a
+            # win-pct tie would fall through to comparing them -> TypeError.
+            ranked.sort(key=lambda r: r[0], reverse=True)
             if ranked:
                 pct, t, w, l, otl = ranked[0]
                 key = "league:best_team"
                 if _recent_ok(app, key, "notes", game_date):
-                    story = (f"POWER RANKINGS: {_tname(t)} holds the league's best "
-                             f"record at {w}-{l}-{otl}.")
+                    story = rng.choice([
+                        "POWER RANKINGS: {team} holds the league's best record at {w}-{l}-{otl}.",
+                        "POWER RANKINGS: Nobody has been better than {team} -- {w}-{l}-{otl} leads the league.",
+                        "POWER RANKINGS: {team} sits at the top at {w}-{l}-{otl}.",
+                        "POWER RANKINGS: The team to beat is {team} -- {w}-{l}-{otl}.",
+                        "POWER RANKINGS: {team}'s {w}-{l}-{otl} mark is the league's gold standard.",
+                        "POWER RANKINGS: The numbers say {team} is the league's best -- {w}-{l}-{otl}.",
+                        "POWER RANKINGS: {team} keeps banking points -- {w}-{l}-{otl}, best in the league.",
+                        "POWER RANKINGS: The view from the top belongs to {team} at {w}-{l}-{otl}.",
+                        "POWER RANKINGS: {w}-{l}-{otl} -- that's {team}, the league's measuring stick.",
+                        "POWER RANKINGS: {team} is setting the pace at {w}-{l}-{otl}.",
+                        "POWER RANKINGS: Contenders are chasing {team} and its league-best {w}-{l}-{otl}.",
+                        "POWER RANKINGS: {team} owns the league's best record at {w}-{l}-{otl}.",
+                    ]).format(team=_tname(t), w=w, l=l, otl=otl)
                     stories.append(story)
                     _mark_recent(app, key, "notes", game_date)
         except Exception:
@@ -621,7 +1038,25 @@ def _performance_stories(app, game_date, rng):
         ppg = _pts(p) / max(_gp(p), 1)
         story = rng.choice([
             "{name} is on another level -- {pts} points in {gp} games ({ppg}/game) for {team}.",
-            "SCORCHING: {name}'s {ppg}-point pace has him in the scoring race.",
+            "SCORCHING: {name}'s {ppg}-point pace speaks for itself.",
+            "SCORCHING: {name} can't stop scoring -- {pts} points in {gp} games for {team}.",
+            "{name} is torching the league at a {ppg}-point clip -- {pts} in {gp}.",
+            "SCORCHING: The puck is finding {name} -- {pts} points in {gp} games ({ppg}/game).",
+            "{team}'s {name} is on fire: {pts} points in {gp} games.",
+            "SCORCHING: {name}'s {ppg} points-per-game pace is elite -- {pts} in {gp}.",
+            "Good luck stopping {name} -- {pts} points in {gp} games for {team}.",
+            "SCORCHING: {name} is producing at {ppg} a game -- video-game numbers.",
+            "{name} is in the zone -- {pts} points in {gp} games ({ppg}/game).",
+            "SCORCHING: {team} leans on {name}, and he delivers -- {pts} in {gp}.",
+            "Nobody wants to see {name} coming -- {pts} points in {gp} games.",
+            "SCORCHING: {name} keeps the line moving -- {pts} in {gp} at {ppg} a night.",
+            "{ppg} points a night. That's {name} through {gp} games for {team}.",
+            "SCORCHING: {name} is driving {team}'s offense -- {pts} points in {gp} games.",
+            "Pick your poison with {name} -- he's at {pts} points in {gp} games.",
+            "SCORCHING: {name}'s vision is on another level -- {pts} in {gp} ({ppg}/game).",
+            "{name} is filling the scoresheet -- {pts} points in {gp} games.",
+            "SCORCHING: {team} goes as {name} goes -- {pts} in {gp}.",
+            "The league has no answer for {name} -- {pts} points in {gp} games at {ppg} a night.",
         ]).format(name=_pname(p), pts=_pts(p), gp=_gp(p),
                   ppg=f"{ppg:.2f}", team=_tname(t))
         stories.append(story)

@@ -1106,6 +1106,235 @@ PREMATCH_QUESTIONS = [
              "Harsh. Young players were hurt by that."),
         ],
     },
+    {
+        "id": "netminder",
+        # DEV-B4: reworded premise-safe -- no assertion about crease
+        # controversy or form (that state isn't in the prematch ctx).
+        "ask": "The crease is always under the microscope. Who starts in goal against {opp} tonight?",
+        "answers": [
+            ("We're riding the hot hand", "confident", 1, 0, 1,
+             "The starter hears the vote of confidence loud and clear."),
+            ("We'll keep them guessing", "evasive", 0, 0, 0,
+             "Nobody learns anything. Both goalies stay on edge."),
+            ("Whoever earns it in warmup", "calm", 0, 1, 0,
+             "Meritocracy. The board likes the accountability."),
+        ],
+    },
+    {
+        "id": "specialteams",
+        # DEV-B4: gated on real state -- danger_level is computed from the
+        # opponent's offense+goaltending (generate_opposition_report), so
+        # only a "high"-danger side enters this pool.
+        # DEV-B5: reworded -- the guard measures overall danger, not the
+        # power play specifically, so the ask no longer asserts a "lethal
+        # power play". Keeps the special-teams/discipline topical frame the
+        # answers need.
+        "when": lambda ctx: (ctx or {}).get("opp_word") == "high",
+        "ask": "Facing a {opp_word}-danger {opp} team, how do you keep the special-teams battle from swinging it?",
+        "answers": [
+            ("Discipline wins hockey games", "calm", 1, 1, 0,
+             "The room nods. Simple message, well received."),
+            ("Let them take penalties too -- we'll match them", "passionate", 1, -1, 1,
+             "Fire and brimstone. The fans are buzzing, the board less so."),
+            ("Our PK can handle anything", "confident", 1, 0, 1,
+             "Bold. The penalty killers stand a little taller."),
+        ],
+    },
+    {
+        "id": "matchup",
+        "ask": "They'll try to dictate the matchups. With the team {form_word}, how do you respond against {opp}?",
+        "answers": [
+            ("We roll four lines regardless", "confident", 1, 0, 1,
+             "The depth players love hearing that."),
+            ("We'll take the matchups we want, wherever we play", "calm", 0, 1, 0,
+             "Tactical. The assistants get to work."),
+            ("Match their best with our best, all night", "passionate", 1, 0, 1,
+             "Old school. The top line is fired up."),
+        ],
+    },
+    {
+        "id": "captaincy",
+        # DEV-B4: reworded premise-safe -- the prematch ctx carries no
+        # captain-production state, so the ask no longer asserts he has
+        # been quiet.
+        "ask": "What do you need from your leaders against {opp} with the club {form_word}?",
+        "answers": [
+            ("They lead in ways you don't always see", "defensive", 1, 0, 0,
+             "The captain appreciates the shield."),
+            ("Every leader needs to step up", "honest", 0, 1, 1,
+             "A challenge laid down. The room heard it."),
+            ("They'll answer on the ice", "confident", 1, 0, 1,
+             "Faith shown publicly. The fans like the loyalty."),
+        ],
+    },
+    {
+        "id": "physicality",
+        # DEV-B4: reworded premise-safe -- per-facet opponent physicality
+        # isn't in the prematch ctx, so the ask no longer asserts {opp}
+        # play a heavy game.
+        "ask": "How do you handle the physical battle against {opp} tonight?",
+        "answers": [
+            ("We're not backing down from anyone", "passionate", 1, -1, 2,
+             "The building will be rocking. The board worries about the fines."),
+            ("We play our game, not theirs", "calm", 1, 1, 0,
+             "Composed. The veterans approve."),
+            ("We can play heavy too", "confident", 1, 0, 1,
+             "The fourth line is grinning."),
+        ],
+    },
+    {
+        "id": "schedule",
+        # DEV-B4: reworded premise-safe -- the prematch ctx carries no
+        # schedule-demand state, so the ask no longer asserts a demanding
+        # schedule. Keeps the real form_word premise.
+        # DEV-B5: dropped the "demanding schedule" assertion (untracked in
+        # the prematch ctx); ask is now form-only.
+        "ask": "The form's been {form_word}. How do you manage the energy against {opp}?",
+        "answers": [
+            ("Short shifts, smart changes", "calm", 1, 1, 0,
+             "Sports science approves. So does the board."),
+            ("Adrenaline takes care of it", "confident", 1, 0, 1,
+             "The room feeds off the energy."),
+            ("No excuses -- everyone plays", "demanding", 0, 0, -1,
+             "Tough love. A few veterans exchange glances."),
+        ],
+    },
+    {
+        "id": "rookie",
+        # DEV-B4: reworded premise-safe -- no assertion that a prospect is
+        # knocking; the question is now hypothetical, which the answers
+        # already were.
+        "ask": "When does a prospect get his chance? With {opp} {opp_word}, could it be tonight?",
+        "answers": [
+            ("If he's ready, he plays", "confident", 1, 1, 1,
+             "The kids in the system are buzzing."),
+            ("Not against this opposition", "calm", 0, 0, -1,
+             "Protective. The fans wanted to see the kid."),
+            ("He'll get his chance soon", "calm", 0, 1, 0,
+             "Patient. Nobody's upset."),
+        ],
+    },
+    {
+        "id": "blueline",
+        "ask": "Your system asks a lot of the defense. Against a {opp_word} {opp} team, does anything change?",
+        "answers": [
+            ("The system is the system", "confident", 1, 0, 0,
+             "Belief. The defensemen stand taller."),
+            ("We tighten up the gaps", "calm", 0, 1, 0,
+             "Adjustment made. The coaches' room nods."),
+            ("They'll have to earn every inch", "passionate", 1, 0, 1,
+             "The D corps loves the backing."),
+        ],
+    },
+    {
+        "id": "faithful",
+        # DEV-B4: reworded premise-safe -- the earlier "restless with the
+        # team excellent" was ungrammatical.
+        # DEV-B5: reworded premise-safe -- no home/away state in the
+        # prematch ctx and poor form can mean quiet or booing fans, so the
+        # ask no longer asserts the fans will be loud.
+        "ask": "What's your message to the fans before puck drop against {opp}, with the club {form_word}?",
+        "answers": [
+            ("Stick with us -- we'll give you a show", "passionate", 1, 0, 2,
+             "The faithful roar their approval."),
+            ("Judge us at the final horn", "calm", 0, 1, 1,
+             "Measured. Most fans accept the deal."),
+            ("They pay to see effort, and they'll get it", "honest", 1, 0, 1,
+             "A promise made. The room knows the standard now."),
+        ],
+    },
+    {
+        "id": "rivalry",
+        # DEV-B4: reworded premise-safe -- no rivalry state in the
+        # prematch ctx, so not every opponent gets a rivalry edge.
+        "ask": "Games against {opp} can carry an edge. With them {opp_word}, how do you keep the emotions in check?",
+        "answers": [
+            ("Channel it, don't fight it", "calm", 1, 1, 0,
+             "Sports psychology 101. The room buys in."),
+            ("Emotion is fuel", "passionate", 1, -1, 2,
+             "The barn will be shaking. The board holds its breath."),
+            ("It's just two points", "honest", 0, 1, -1,
+             "Cold water. Some fans wanted fire."),
+        ],
+    },
+    {
+        "id": "overtime",
+        # DEV-B4: reworded premise-safe -- no assertion of frequent OT
+        # nights (not tracked in the prematch ctx); answers were already
+        # plans, which fit the new ask unchanged.
+        "ask": "Overtime's always a possibility in a tight one. With the form {form_word}, what's the plan if it goes past sixty against {opp}?",
+        "answers": [
+            ("We finish it in regulation", "confident", 1, 0, 1,
+             "Intent stated. The room likes the ambition."),
+            ("We'll take the point and run", "calm", 0, 1, -1,
+             "Pragmatic. The fans wanted more swagger."),
+            ("Our 3-on-3 needs work, we know", "honest", 0, 1, 0,
+             "Accountability. The skills coaches get to work."),
+        ],
+    },
+    {
+        "id": "rumors",
+        # DEV-B4: reworded premise-safe -- there is deliberately no
+        # recent-trade log to gate on (see _situational_postmatch), so the
+        # ask no longer asserts chatter is swirling.
+        "ask": "The rumor mill never sleeps. With {opp} {opp_word} tonight, how do you keep outside noise out of the room?",
+        "answers": [
+            ("The room is locked in", "confident", 1, 0, 1,
+             "The players appreciate the public trust."),
+            ("It's part of the business", "calm", 0, 1, 0,
+             "Veteran answer. Nobody blinks."),
+            ("I don't discuss rumors", "defensive", -1, 0, -1,
+             "Terse. The rumor mill spins faster."),
+        ],
+    },
+    {
+        "id": "homeice",
+        # DEV-B4: reworded premise-safe -- no home/away state in the
+        # prematch ctx, so the ask no longer assumes home ice. Answers
+        # were already crowd-general and fit unchanged.
+        "ask": "How much can the crowd swing a night like this against {opp}?",
+        "answers": [
+            ("They're our seventh skater", "passionate", 1, 0, 2,
+             "The fans will bring the noise now."),
+            ("We have to give them something to cheer", "honest", 1, 0, 1,
+             "A fair deal, and the room knows it."),
+            ("It matters, but we win it on the ice", "calm", 0, 1, 0,
+             "Grounded. The board nods."),
+        ],
+    },
+    {
+        "id": "scoring",
+        # DEV-B4: gated on real state -- form_word comes from
+        # _career_form_word() (excellent/decent/poor/mixed), so this
+        # "goals are hard to come by" premise only enters the pool when
+        # the form is genuinely poor.
+        # DEV-B5: fixed grammar -- the old "while {form_word}" rendered
+        # "while poor"; the form word now reads as a proper clause.
+        "when": lambda ctx: (ctx or {}).get("form_word") == "poor",
+        "ask": "Goals have been hard to come by while the form's been {form_word}. What's the fix against a {opp_word}-danger {opp} team?",
+        "answers": [
+            ("Get pucks to the net, crash the crease", "passionate", 1, 0, 1,
+             "Simple hockey. The forwards nod."),
+            ("Trust the process -- the chances are there", "calm", 0, 1, 0,
+             "Patience. The analytics staff agrees."),
+            ("We need our finishers to finish", "honest", 0, 0, 0,
+             "A gentle prod at the top six."),
+        ],
+    },
+    {
+        "id": "veterans",
+        # DEV-B4: reworded premise-safe -- no assertion that the veterans
+        # have carried the load (not in the prematch ctx).
+        "ask": "Veterans set the standard. With the club {form_word}, do the young guys need to step up against {opp}?",
+        "answers": [
+            ("Everyone pulls the rope", "demanding", 1, 0, 0,
+             "The kids heard that loud and clear."),
+            ("The vets set the tone, kids follow", "calm", 1, 1, 0,
+             "Hierarchy respected. The room is settled."),
+            ("Our depth is a strength", "confident", 1, 0, 1,
+             "The bottom six skates a little taller."),
+        ],
+    },
 ]
 
 POSTMATCH_QUESTIONS_WIN = [
@@ -1123,7 +1352,9 @@ POSTMATCH_QUESTIONS_WIN = [
     },
     {
         "id": "star",
-        "ask": "{star} was superb today. Is he your most important player?",
+        # DEV-B4: reworded premise-safe -- pre-existing HEAD original;
+        # the unguarded win bank can't assert any player was superb.
+        "ask": "How did you rate {star}'s game in the {score} win over {opp}?",
         "answers": [
             ("He's world class, no doubt", "confident", 2, 0, 2,
              "{star} is thrilled. Teammates slightly less so."),
@@ -1131,6 +1362,116 @@ POSTMATCH_QUESTIONS_WIN = [
              "Diplomatic. The squad appreciates it."),
             ("Let's not get carried away", "defensive", -1, 0, -1,
              "{star} looked stung by that."),
+        ],
+    },
+    {
+        "id": "comeback",
+        "ask": "You found a way in the {score} win over {opp}. What was the difference?",
+        "answers": [
+            # DEV-B4: reaction rewritten premise-safe -- the reworded ask
+            # deliberately stopped asserting a comeback.
+            ("The room refused to lose", "passionate", 2, 0, 2,
+             "The dressing room is bouncing. The fans are delirious."),
+            ("We adjusted the forecheck", "calm", 1, 1, 0,
+             "Coaching credit. The board notes the adjustments."),
+            ("Sometimes you just need a bounce", "honest", 0, 0, 0,
+             "A shrug and a smile. Nobody minds."),
+        ],
+    },
+    {
+        "id": "powerplay",
+        "ask": "What was your read on the special teams battle in the {score} win over {opp}?",
+        "answers": [
+            ("Puck movement, pure and simple", "calm", 1, 1, 0,
+             "The video coaches take a quiet bow."),
+            ("Our guys are just better", "confident", 1, -1, 2,
+             "Swagger. The fans love it; the board winces."),
+            ("We've been working on the entries", "honest", 1, 1, 0,
+             "Credit shared. The assistants appreciate it."),
+        ],
+    },
+    {
+        "id": "depth",
+        "ask": "How big a role did roster depth play in the {score} win over {opp}?",
+        "answers": [
+            ("Deep enough to win in spring", "confident", 2, 1, 2,
+             "Now that's a statement. The room believes it."),
+            ("Everyone contributed tonight", "calm", 1, 1, 1,
+             "The fourth line will remember this."),
+            ("Let's see it again Tuesday", "honest", 0, 1, 0,
+             "Standards. The board loves the message."),
+        ],
+    },
+    {
+        "id": "goaltending",
+        # DEV-B4: reworded premise-safe -- the unguarded win bank can't
+        # assert a standout goalie game; ask and answers now assess the
+        # goaltending without presuming it was heroic.
+        "ask": "How did you assess the goaltending in the {score} win over {opp}?",
+        "answers": [
+            ("He was solid when it mattered", "honest", 2, 0, 1,
+             "The goalie hears it. The skaters owe him dinner."),
+            ("He gives us a chance every night", "calm", 1, 1, 1,
+             "Steady praise. The crease is calm."),
+            ("The shots he faced tell the real story", "defensive", 0, 0, -1,
+             "Deflecting the question. The D corps shifts uncomfortably."),
+        ],
+    },
+    {
+        "id": "statement",
+        # DEV-B4: reworded premise-safe -- not every win is a statement;
+        # the question now floats it instead of asserting it.
+        "ask": "The {score} win over {opp} -- is this a message to the rest of the league?",
+        "answers": [
+            ("Let them all take notice", "confident", 2, 0, 2,
+             "Bulletin-board material league-wide. The fans are loud."),
+            ("It's two points, nothing more", "calm", 0, 2, 0,
+             "The board loves the even keel."),
+            ("We're just getting started", "passionate", 2, 0, 2,
+             "The room is bouncing off the walls."),
+        ],
+    },
+    {
+        "id": "topline",
+        # DEV-B4: reworded premise-safe -- the unguarded win bank can't
+        # assert the top line drove the win; the question now asks for a
+        # rating instead.
+        "ask": "How did you rate {star}'s line in the {score} win over {opp}?",
+        "answers": [
+            ("On their night, nobody touches them", "confident", 2, 0, 2,
+             "{star} is beaming. The linemates too."),
+            ("They did their job, shift after shift", "calm", 1, 1, 1,
+             "Praise with perspective. Everyone's happy."),
+            ("Plenty of great lines out there", "respectful", 0, 1, 0,
+             "Classy. No extra motivation for opponents."),
+        ],
+    },
+    {
+        "id": "lockdown",
+        "ask": "What was your read on the defensive side of the game in the {score} win over {opp}?",
+        "answers": [
+            ("Defense wins championships", "confident", 1, 1, 1,
+             "The D corps puffs its chest."),
+            ("It's how we're built", "calm", 1, 1, 0,
+             "Identity embraced. The board approves."),
+            ("We can score too, don't forget", "defensive", 0, 0, 0,
+             "A reminder. The forwards smirk."),
+        ],
+    },
+    {
+        "id": "crowd_win",
+        # DEV-B5: reworded premise-safe -- no home/away or attendance
+        # state in the postmatch ctx, so the ask no longer asserts a loud
+        # building or whose crowd it was; the first answer and the third
+        # answer + reaction were reworded the same way.
+        "ask": "How big a part did the atmosphere play in the {score} win over {opp}?",
+        "answers": [
+            ("The bench fed off it all night", "passionate", 1, 0, 2,
+             "The whole bench is still buzzing."),
+            ("It helps, but the players won it", "honest", 1, 0, 0,
+             "Credit where due. The room nods."),
+            ("Nothing beats a night like that", "confident", 1, 0, 2,
+             "The noise never let up."),
         ],
     },
 ]
@@ -1150,7 +1491,11 @@ POSTMATCH_QUESTIONS_LOSS = [
     },
     {
         "id": "future",
-        "ask": "That's {n} defeats now. Are you worried?",
+        # DEV-B4: reworded premise-safe -- pre-existing HEAD original;
+        # the losing-streak count is not computable in the builder (Team
+        # tracks win_streak only; the caller hardcodes {n} as "a few"),
+        # so the ask no longer asserts a count.
+        "ask": "Where does the response start after the {score} defeat to {opp}?",
         "answers": [
             ("We'll turn it around, I promise", "confident", 1, 0, 1,
              "Fighting talk. The fans needed to hear it."),
@@ -1158,6 +1503,148 @@ POSTMATCH_QUESTIONS_LOSS = [
              "Steady. Nobody panics."),
             ("Ask me after the next game", "defensive", -1, -1, -1,
              "Snappy. The vultures are circling."),
+        ],
+    },
+    {
+        "id": "slowstart",
+        # DEV-B4: reworded premise-safe -- the unguarded loss bank can't
+        # assert a slow start; the question now asks for a first-period
+        # read instead.
+        "ask": "What did you make of the first period in the {score} loss to {opp}?",
+        "answers": [
+            ("That's on me -- preparation starts with the coach", "honest", 1, 2, 1,
+             "The room respects a coach who takes the heat."),
+            ("We can be sharper from puck drop", "demanding", 0, 0, 0,
+             "A challenge. Morning skate will be brisk."),
+            ("The margins didn't go our way early", "defensive", -1, -1, 0,
+             "Excuses. Nobody's buying it."),
+        ],
+    },
+    {
+        "id": "goalie_loss",
+        # DEV-B4: reworded premise-safe -- no assertion about the quality
+        # of the goals; the confidence answers fit the new ask unchanged
+        # in stance.
+        "ask": "The {score} loss to {opp} puts the spotlight on the crease. Do you still have faith in your goalie?",
+        "answers": [
+            ("Complete faith -- he's our guy", "confident", 2, 0, 1,
+             "The goalie exhales. The crease is settled."),
+            ("The group in front of him has to be better", "honest", 1, 1, 0,
+             "The defense takes the message."),
+            ("Everyone's job is under review", "defensive", -2, 0, -1,
+             "Chilling. The whole room feels it."),
+        ],
+    },
+    {
+        "id": "powerplay_loss",
+        "ask": "What was your read on the special teams battle in the {score} loss to {opp}?",
+        "answers": [
+            ("We're looking at everything", "calm", 0, 1, 0,
+             "The assistants start drawing on whiteboards."),
+            ("The chances are there -- stay the course", "confident", 1, 0, 0,
+             "Patience. The top unit appreciates it."),
+            ("Execution, not the system", "demanding", -1, 0, -1,
+             "Blunt. The power-play quarterbacks feel the heat."),
+        ],
+    },
+    {
+        "id": "effort",
+        # DEV-B4: reworded premise-safe -- the unguarded loss bank can't
+        # assert the effort was flat; the question now asks for a compete
+        # read instead.
+        "ask": "What did you make of the compete level in the {score} loss to {opp}?",
+        "answers": [
+            ("The message is fine -- the response wasn't", "demanding", 0, 0, -1,
+             "The room goes quiet. Point made."),
+            ("I'll take responsibility for the energy", "honest", 1, 1, 1,
+             "The players respect the accountability."),
+            ("Every team has nights like this", "calm", 0, 0, 0,
+             "Perspective. The veterans nod."),
+        ],
+    },
+    {
+        "id": "stars_quiet",
+        "ask": "How did you assess your top line's performance in the {score} loss to {opp}?",
+        "answers": [
+            ("They'll answer -- they always do", "confident", 1, 0, 1,
+             "Faith shown. The top line hears it."),
+            ("We need more from everyone, not just them", "calm", 0, 1, 0,
+             "Shared burden. The depth guys nod."),
+            # DEV-B4: reworded premise-safe -- no longer presupposes a bad
+            # top-line game; the coach now offers a reading, which fits the
+            # neutral assessment question.
+            ("The chances were there -- the finish wasn't", "honest", 0, 0, 0,
+             "An honest read. The top line takes note."),
+        ],
+    },
+    {
+        "id": "discipline",
+        # DEV-B4: reworded premise-safe -- penalty counts aren't in the
+        # postmatch ctx, so the ask no longer asserts too many penalties.
+        "ask": "How did you assess the discipline in the {score} loss to {opp}?",
+        "answers": [
+            ("It ends now -- that's a promise", "demanding", 1, 0, 1,
+             "The repeat offenders feel the stare."),
+            ("We play on the edge, sometimes it costs us", "honest", 0, 0, 1,
+             "The fans love the edge. The board less so."),
+            ("The calls didn't go our way", "defensive", -1, -1, 1,
+             "The fans agree. The league office won't."),
+        ],
+    },
+    {
+        "id": "positives",
+        "ask": "Any positives to take from the {score} loss to {opp}?",
+        "answers": [
+            ("The kids didn't look out of place", "calm", 1, 1, 1,
+             "The young guys skate taller tomorrow."),
+            ("We pushed until the final horn", "passionate", 1, 0, 1,
+             "Heart recognized. The room appreciates it."),
+            ("Honestly? Not many", "honest", -1, 0, -1,
+             "Bleak. The mood dips further."),
+        ],
+    },
+    {
+        "id": "bounceback",
+        # DEV-B4: reworded premise-safe -- the real losing-streak count is
+        # not computable in the builder (Team tracks win_streak only; the
+        # only signed streak lives on the career board, which the presser
+        # builder never receives), so the ask no longer asserts a count
+        # the caller hardcodes as "a few".
+        "ask": "The {score} defeat to {opp} stings. Where does the turnaround start?",
+        "answers": [
+            ("In our own zone -- defend first", "calm", 1, 1, 0,
+             "Back to basics. The D corps nods."),
+            ("With me -- I need to be better", "honest", 1, 2, 1,
+             "The room respects the accountability."),
+            ("One shift at a time", "confident", 1, 0, 1,
+             "Cliche, but the room buys in."),
+        ],
+    },
+    {
+        "id": "hook",
+        # DEV-B4: answers rewritten premise-safe -- the neutral ask can't
+        # assume a mid-game pull, so the pull-presuming answers are now
+        # goalie-assessment answers true whether he was pulled or not.
+        "ask": "How did you assess the goaltending in the {score} loss to {opp}?",
+        "answers": [
+            ("He battled -- the scoreboard doesn't tell the story", "calm", 0, 1, 0,
+             "Measured. The goalie appreciates the shield."),
+            ("Some nights the puck finds holes. We move on", "honest", 0, 0, 0,
+             "Candor. The room moves on."),
+            ("He's our guy -- full confidence for the next one", "confident", 1, 0, 1,
+             "Loyalty. The goalie is grateful."),
+        ],
+    },
+    {
+        "id": "identity_loss",
+        "ask": "The {score} loss to {opp} -- is this team losing its identity?",
+        "answers": [
+            ("Our identity is fine -- our execution isn't", "demanding", 1, 0, 0,
+             "Sharp. The room takes note."),
+            ("We're still finding out who we are", "honest", 0, 1, 0,
+             "Patience. The board accepts the project."),
+            ("No -- one loss doesn't define us", "confident", 1, 0, 1,
+             "Perspective. The veterans steady the room."),
         ],
     },
 ]
@@ -1175,6 +1662,78 @@ POSTMATCH_QUESTIONS_DRAW = [
              "Gloomy. The mood dips."),
         ],
     },
+    {
+        "id": "ot_point",
+        "ask": "A {score} result after overtime against {opp}. Happy with the point?",
+        "answers": [
+            ("We'll take the point and move on", "calm", 0, 1, 0,
+             "Pragmatic. Nobody's thrilled, nobody's crushed."),
+            ("We wanted two -- no question", "honest", 1, 0, 1,
+             "Ambition. The fans like the hunger."),
+            ("Overtime is a coin flip", "defensive", 0, 0, -1,
+             "A shrug. The fans wanted more fire."),
+        ],
+    },
+    {
+        "id": "shootout",
+        # DEV-B4: answers + reaction rewritten premise-safe -- OT can end
+        # 3-on-3 or in a shootout (drama_events.py) and the draw bank is
+        # unguarded, so nothing may assume a shootout happened.
+        "ask": "It went past regulation in the {score} draw with {opp}. What did you make of the overtime?",
+        "answers": [
+            ("Overtime can go either way -- we have to be better at it", "honest", 0, 1, 0,
+             "Accountability. The extra-time group puts in extra work."),
+            ("We deserved better than a coin flip", "defensive", 0, 0, 1,
+             "The fans agree loudly."),
+            ("We'll be ready for the next one, however it ends", "confident", 1, 0, 1,
+             "Faith. The skill guys feel backed."),
+        ],
+    },
+    {
+        "id": "late_lead",
+        # DEV-B4: answers rewritten premise-safe -- the neutral ask can't
+        # assume a blown lead, so the answers are now point-dropped
+        # readings true of any draw.
+        "ask": "The {score} draw with {opp} -- how close were you to taking both points?",
+        "answers": [
+            ("We left points on the table tonight", "honest", 1, 1, 0,
+             "The room respects the accountability."),
+            ("Tight games turn on small moments", "defensive", 0, 0, 0,
+             "Hockey happens. The room moves on."),
+            ("We take the point and get back to work", "confident", 1, 0, 1,
+             "Forward-looking. The fans buy in."),
+        ],
+    },
+    {
+        "id": "goalie_draw",
+        # DEV-B4: reworded premise-safe -- the unguarded draw bank can't
+        # assert the goalie kept the team in it; ask and answers now
+        # assess the goaltending without presuming it was heroic.
+        "ask": "How did you assess the goaltending in the {score} draw with {opp}?",
+        "answers": [
+            ("He gave us every chance to win it", "honest", 2, 0, 1,
+             "The goalie hears it. The skaters feel it."),
+            ("Steady all night -- exactly what we need", "calm", 1, 1, 1,
+             "Steady praise for steady play."),
+            ("We all need to be better in front of him", "demanding", 0, 0, 0,
+             "The defense takes the message."),
+        ],
+    },
+    {
+        "id": "playoff_point",
+        # DEV-B5: reworded premise-safe -- the draw bank is unguarded and
+        # no recent-tight-games history is in ctx, so the ask no longer
+        # asserts a pattern ("another"); only this game is known tight.
+        "ask": "Tight one with {opp}, {score}. Are these the points that decide playoff spots?",
+        "answers": [
+            ("Every point matters from here", "calm", 0, 1, 1,
+             "The room understands the math."),
+            ("We'll be playing past April", "confident", 1, 0, 2,
+             "Bold. The fans are dreaming."),
+            ("Too early for that talk", "defensive", 0, 0, -1,
+             "Cautious. The fans wanted ambition."),
+        ],
+    },
 ]
 
 
@@ -1185,14 +1744,44 @@ def _fill(template: str, ctx: dict) -> str:
         return template
 
 
+def _presser_when_ok(q: dict, ctx: dict) -> bool:
+    """Evaluate a question's optional 'when' predicate against ctx.
+
+    Questions without a predicate are always eligible (premise-safe
+    generics). A predicate that errors excludes its question rather
+    than crashing the presser -- a misbehaving guard fails closed."""
+    pred = q.get("when")
+    if pred is None:
+        return True
+    try:
+        return bool(pred(ctx or {}))
+    except Exception:
+        return False
+
+
 def build_prematch_presser(user_team, opponent, ctx: dict) -> List[dict]:
     """Return 2 question dicts: {id, journalist, question, answers[...]}.
 
     Muck 2026-10-02: trimmed from 3 to 2 -- the pre-game presser was
-    too long. Two sharp questions keep the flavor without the drag."""
+    too long. Two sharp questions keep the flavor without the drag.
+
+    DEV-B4: questions may carry an optional 'when' predicate on ctx;
+    gated questions are filtered BEFORE sampling so a question that
+    asserts a premise (e.g. scoring only when form_word == 'poor') can
+    never be asked when the premise is false. If gating shrinks the
+    pool below 2, it is padded back up with the unguarded
+    (premise-safe) generics so the 2-question contract always holds."""
+    if not isinstance(ctx, dict):
+        ctx = {}
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
-                   "Dave Tremblay (TSN)", "Lisa Park (Sportsnet)"]
-    picked = random.sample(PREMATCH_QUESTIONS, min(2, len(PREMATCH_QUESTIONS)))
+                   "Dave Tremblay (TSN)", "Lisa Park (Sportsnet)",
+                   "Emma Walsh (Sportsnet)", "Marc Dubois (TSN)"]
+    pool = [q for q in PREMATCH_QUESTIONS if _presser_when_ok(q, ctx)]
+    if len(pool) < 2:
+        seen = {id(q) for q in pool}
+        pool += [q for q in PREMATCH_QUESTIONS
+                 if q.get("when") is None and id(q) not in seen]
+    picked = random.sample(pool, min(2, len(pool)))
     out = []
     for i, q in enumerate(picked):
         answers = []
@@ -1215,17 +1804,27 @@ def _drama_questions(drama: list) -> List[dict]:
     """Incident-driven press questions, asked before the routine ones --
     the room wants to know where the coach stands on the night's
     flashpoint. Answers move morale, the board, and the fans, exactly
-    like the rest of the presser."""
+    like the rest of the presser. Each drama kind has three phrasings;
+    one is picked at random so repeat incidents don't read identically."""
     out = []
     for d in drama or []:
+        if not isinstance(d, dict):
+            continue
         kind = d.get("kind")
         if kind == "line_brawl":
+            brawl_asks = [
+                ("It turned ugly out there -- the gloves came "
+                 "off all over the ice late. What's your message "
+                 "to the room?"),
+                ("Five fights in the third -- it was a line brawl "
+                 "waiting to happen. Do you condone what we saw out there?"),
+                ("The benches were banging their sticks and the ice was "
+                 "pure chaos late. What's your message to the room after that?"),
+            ]
             out.append({
                 "id": "drama_brawl",
                 "journalist": "Dave Tremblay (TSN)",
-                "question": ("It turned ugly out there -- the gloves came "
-                             "off all over the ice late. What's your message "
-                             "to the room?"),
+                "question": random.choice(brawl_asks),
                 "answers": [
                     {"label": "Back them: 'That's playoff hockey. I love it.'",
                      "tone": "passionate", "morale_effect": 1,
@@ -1249,12 +1848,20 @@ def _drama_questions(drama: list) -> List[dict]:
             hitter = d.get("hitter", "your player")
             victim = d.get("victim", "their player")
             fined = d.get("fined", False)
+            fine_phrase = " and handed down a fine" if fined else ""
+            hit_asks = [
+                (f"The league reviewed {hitter}'s hit on {victim}"
+                 f"{fine_phrase}. Any concern about how your player handled it?"),
+                (f"Everyone's talking about {hitter}'s hit on {victim}"
+                 f"{fine_phrase}. Is that the kind of hockey you want "
+                 f"this team playing?"),
+                (f"Your phone must be ringing off the hook about {hitter}'s "
+                 f"hit on {victim}{fine_phrase}. Your take, coach?"),
+            ]
             out.append({
                 "id": "drama_hit",
                 "journalist": "Sarah Chen (Hockey Night)",
-                "question": (f"The league reviewed {hitter}'s hit on "
-                             f"{victim}{' and handed down a fine' if fined else ''}. "
-                             f"Any concern about how your player handled it?"),
+                "question": random.choice(hit_asks),
                 "answers": [
                     {"label": "Defend him: 'Clean hit. He plays on the edge.'",
                      "tone": "passionate", "morale_effect": 1,
@@ -1276,15 +1883,350 @@ def _drama_questions(drama: list) -> List[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Situational post-match questions
+# ---------------------------------------------------------------------------
+# Built from REAL team state only (read defensively -- a missing attribute
+# skips the question instead of crashing). Each situation below names the
+# game-code source it reads from. Situations with no reliable source
+# (losing streak -- Team tracks win_streak only, fan_losing_streak counts
+# losing *seasons*; playoff race -- standings live on the league object,
+# unreachable from (team, ctx); blockbuster trade -- no recent-trade log
+# exists on team or league) are deliberately NOT implemented.
+
+def _pq_name(p) -> str:
+    fn = str(getattr(p, "first_name", "") or "").strip()
+    ln = str(getattr(p, "last_name", "") or "").strip()
+    nm = f"{fn} {ln}".strip()
+    if nm:
+        return nm
+    nm = str(getattr(p, "name", "") or "").strip()
+    return nm or "your veteran"
+
+
+def _pq_ovr(p) -> int:
+    o = getattr(p, "overall", None)
+    if o is None:
+        f = getattr(p, "overall_rating", None)
+        try:
+            o = f() if callable(f) else f
+        except Exception:
+            o = None
+    try:
+        return int(o or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pq_num(p, *names) -> int:
+    for n in names:
+        try:
+            v = getattr(p, n, None)
+            if v is not None:
+                return int(v)
+        except (TypeError, ValueError):
+            pass
+    try:
+        st = getattr(p, "stats", None)
+    except Exception:
+        st = None
+    for n in names:
+        try:
+            v = getattr(st, n, None) if st is not None else None
+            if v is not None:
+                return int(v)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def _pq_pts(p) -> int:
+    return _pq_num(p, "points", "pts")
+
+
+def _pq_gp(p) -> int:
+    return _pq_num(p, "gp", "games_played")
+
+
+def _pq_svp(p) -> float:
+    for n in ("save_percentage", "save_pct"):
+        try:
+            v = getattr(p, n, None)
+            if v is not None:
+                return float(v)
+        except (TypeError, ValueError):
+            pass
+    try:
+        st = getattr(p, "stats", None)
+        if st is not None:
+            v = getattr(st, "save_percentage", None)
+            if v is not None:
+                return float(v)
+    except (TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _pq_career_goals(p):
+    """Career goal total, mirroring daily_news._milestone_watch: prefers
+    career_stats.goals, falls back to career_goals. None when unknown."""
+    try:
+        cs = getattr(p, "career_stats", None)
+        if cs is not None:
+            g = getattr(cs, "goals", None)
+            if g is not None:
+                return int(g)
+    except (TypeError, ValueError):
+        pass
+    try:
+        g = getattr(p, "career_goals", None)
+        return int(g) if g is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _pq_is_goalie(p) -> bool:
+    pos = getattr(p, "primary_position", None)
+    if pos is None:
+        pos = getattr(p, "position", "")
+    token = str(pos or "").upper().split(".")[-1].strip()
+    return token in ("GOALIE", "G")
+
+
+def _pq_is_injured(p) -> bool:
+    try:
+        return bool(getattr(p, "is_injured", False))
+    except Exception:
+        return False
+
+
+def _pq_fmt_svp(svp: float) -> str:
+    try:
+        return f"{float(svp):.3f}".lstrip("0")
+    except (TypeError, ValueError):
+        return ".000"
+
+
+def _situational_postmatch(team, ctx, rng) -> List[dict]:
+    """Questions driven by real team state, asked after drama and before
+    the routine bank. Returns question dicts in the exact builder shape:
+    {id, journalist, question, answers:[{label, tone, morale_effect,
+    board_effect, fan_effect, reaction}]}. Every situation is wrapped so a
+    missing/odd attribute skips that question -- never raises.
+
+    Live situations and their sources:
+      win streak 5+      -- team.win_streak (game_classes.Team)
+      star injured        -- roster scan: is_injured + overall>=85
+      slumping star       -- roster scan: overall>=80, gp>=15, pts/gp<0.5
+      goalie controversy  -- roster scan: backup (fewer gp) out-saving starter
+      hot backup          -- roster scan, mirrors daily_news._depth_stories
+                             (3<=gp<=12, save%>=.915), skipped when the
+                             controversy question already fired
+      milestone watch     -- roster scan, mirrors daily_news._milestone_watch
+                             (career goals within 8 below 500/400/300/200/100)
+    """
+    out = []
+
+    def _add(qid, journalist, question, answers):
+        built = []
+        for label, tone, me, be, fe, reaction in answers:
+            built.append({
+                "label": label, "tone": tone,
+                "morale_effect": int(me), "board_effect": int(be),
+                "fan_effect": int(fe), "reaction": reaction,
+            })
+        out.append({
+            "id": qid, "journalist": journalist,
+            "question": question, "answers": built,
+        })
+
+    try:
+        roster = list(getattr(team, "roster", None) or [])
+    except Exception:
+        return out
+    if not roster:
+        return out
+    won = bool((ctx or {}).get("won", False))
+
+    # 1. Winning streak -- Team.win_streak counts consecutive wins and is
+    #    snapped by update_record() on any non-win, so streak>=5 after a win
+    #    is a genuine streak.
+    try:
+        ws = int(getattr(team, "win_streak", 0) or 0)
+        if won and ws >= 5:
+            _add("sit_winstreak", "Mike Ross (The Athletic)",
+                 f"That's {ws} straight wins now, coach. Is this the best "
+                 f"hockey this club has played all year?",
+                 [
+                     ("The room believes it can beat anyone", "confident", 2, 0, 2,
+                      "The streak rolls on good vibes."),
+                     ("We're taking it one game at a time", "calm", 1, 1, 1,
+                      "Grounded. The board loves the maturity."),
+                     ("We haven't played our best yet", "honest", 1, 1, 0,
+                      "Standards. The room nods -- there's another level."),
+                 ])
+    except Exception:
+        pass
+
+    # 2. Star injured -- a real absence the press would ask about.
+    try:
+        hurt = [p for p in roster
+                if _pq_is_injured(p) and _pq_ovr(p) >= 85]
+        if hurt:
+            star = rng.choice(hurt) if len(hurt) > 1 else hurt[0]
+            nm = _pq_name(star)
+            _add("sit_star_injured", "Sarah Chen (Hockey Night)",
+                 f"Losing {nm} hurts -- he's one of your best. "
+                 f"How do you fill that hole?",
+                 [
+                     ("Next man up -- that's the culture", "confident", 1, 1, 1,
+                      "The room rallies. The replacement skates taller."),
+                     ("You don't replace a player like that", "honest", 0, 0, 0,
+                      "Candor. The fans share the worry."),
+                     ("Our depth is about to be tested", "calm", 0, 1, 0,
+                      "Measured. The board notes the depth question."),
+                 ])
+    except Exception:
+        pass
+
+    # 3. Slumping star -- real production dip on a top player.
+    try:
+        slumpers = []
+        for p in roster:
+            if _pq_is_goalie(p) or _pq_is_injured(p):
+                continue
+            if _pq_ovr(p) < 80:
+                continue
+            gp = _pq_gp(p)
+            if gp < 15:
+                continue
+            pts = _pq_pts(p)
+            if gp > 0 and pts / gp < 0.5:
+                slumpers.append((pts / gp, p))
+        if slumpers:
+            slumpers.sort(key=lambda t: t[0])
+            _, p = slumpers[0]
+            nm, pts, gp = _pq_name(p), _pq_pts(p), _pq_gp(p)
+            _add("sit_slump", "Dave Tremblay (TSN)",
+                 f"{nm} has {pts} points in {gp} games. What's going on with him?",
+                 [
+                     ("He's working through it -- I believe in him", "confident", 1, 0, 1,
+                      f"{nm} hears the public backing."),
+                     ("He needs to be better, simple as that", "demanding", -1, 0, 0,
+                      f"Blunt. {nm} didn't love hearing it secondhand."),
+                     ("The chances are there -- they'll fall", "calm", 0, 1, 0,
+                      "Patience. The video staff keeps working."),
+                 ])
+    except Exception:
+        pass
+
+    # 4. Goalie controversy -- the backup (fewer games) is out-saving the
+    #    starter. Starter = most games played; both need a real sample.
+    controversy_fired = False
+    try:
+        goalies = [(p, _pq_gp(p), _pq_svp(p)) for p in roster
+                   if _pq_is_goalie(p)]
+        goalies = [t for t in goalies if t[1] >= 3 and t[2] > 0]
+        if len(goalies) >= 2:
+            goalies.sort(key=lambda t: t[1], reverse=True)
+            sp, sgp, ssvp = goalies[0]
+            cands = [t for t in goalies[1:] if t[2] > ssvp]
+            if cands:
+                bp, bgp, bsvp = max(cands, key=lambda t: t[2])
+                bnm, snm = _pq_name(bp), _pq_name(sp)
+                svp_txt = _pq_fmt_svp(bsvp)
+                controversy_fired = True
+                _add("sit_goalie", "Lisa Park (Sportsnet)",
+                     f"{bnm} is stopping everything at {svp_txt} while {snm} "
+                     f"scuffles. Is there a goalie controversy brewing?",
+                     [
+                         ("No controversy -- we trust both", "calm", 1, 1, 0,
+                          "The goalies stay united. The room moves on."),
+                         ("The crease is earned, not given", "demanding", 0, 0, 1,
+                          f"{snm} hears the challenge. {bnm} hears the door open."),
+                         (f"{snm} is our guy, full stop", "confident", 1, 0, -1,
+                          f"{snm} is relieved. Some fans think {bnm} deserves better."),
+                     ])
+    except Exception:
+        pass
+
+    # 5. Hot backup -- mirrors daily_news._depth_stories (3<=gp<=12,
+    #    save%>=.915). Skipped when the controversy question already fired
+    #    so one presser never carries two crease questions.
+    try:
+        if not controversy_fired:
+            goalies = [(p, _pq_gp(p), _pq_svp(p)) for p in roster
+                       if _pq_is_goalie(p)]
+            if goalies:
+                max_gp = max(t[1] for t in goalies)
+                hot = [t for t in goalies
+                       if 3 <= t[1] <= 12 and t[2] >= 0.915 and t[1] < max_gp]
+                if hot:
+                    hot.sort(key=lambda t: t[2], reverse=True)
+                    bp, bgp, bsvp = hot[0]
+                    bnm = _pq_name(bp)
+                    svp_txt = _pq_fmt_svp(bsvp)
+                    _add("sit_backup_goalie", "Emma Walsh (Sportsnet)",
+                         f"{bnm} is running {svp_txt} in limited action. "
+                         f"Does he deserve more starts?",
+                         [
+                             ("He's earned a longer look", "honest", 1, 0, 1,
+                              f"{bnm} hears the public vote of confidence."),
+                             ("We like our rotation as it is", "calm", 0, 1, 0,
+                              "Steady. The starter appreciates the loyalty."),
+                             ("Wins decide who plays", "demanding", 0, 0, 0,
+                              "Meritocracy. Both goalies stay sharp."),
+                         ])
+    except Exception:
+        pass
+
+    # 6. Milestone watch -- mirrors daily_news._milestone_watch: career
+    #    goals within 8 below 500/400/300/200/100.
+    try:
+        best = None
+        for p in roster:
+            cg = _pq_career_goals(p)
+            if cg is None:
+                continue
+            for mark in (500, 400, 300, 200, 100):
+                if mark - 8 <= cg < mark:
+                    away = mark - cg
+                    if best is None or away < best[0]:
+                        best = (away, p, cg, mark)
+                    break
+        if best is not None:
+            away, p, cg, mark = best
+            nm = _pq_name(p)
+            _add("sit_milestone", "Marc Dubois (TSN)",
+                 f"{nm} sits at {cg} career goals -- {away} away from {mark}. "
+                 f"Is the room aware of how close he is?",
+                 [
+                     ("The room knows -- we'll get him there", "confident", 2, 0, 2,
+                      f"The fans are already counting down. {nm} is touched."),
+                     ("We're focused on wins, not milestones", "calm", 0, 1, 0,
+                      "Team-first. The board approves."),
+                     ("He'd trade it for two points", "honest", 1, 0, 0,
+                      f"{nm} nods along. Milestones come when they come."),
+                 ])
+    except Exception:
+        pass
+
+    return out
+
+
 def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
                             score: str, star_name: str, ctx: dict) -> List[dict]:
+    if not isinstance(ctx, dict):
+        ctx = {}
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
-                   "Dave Tremblay (TSN)"]
+                   "Dave Tremblay (TSN)", "Lisa Park (Sportsnet)",
+                   "Emma Walsh (Sportsnet)", "Marc Dubois (TSN)"]
     bank = POSTMATCH_QUESTIONS_DRAW if drew else (
         POSTMATCH_QUESTIONS_WIN if won else POSTMATCH_QUESTIONS_LOSS)
     full_ctx = dict(ctx)
     full_ctx.update({"score": score, "star": star_name,
-                     "opp": getattr(opponent, "team_name", "them")})
+                     "opp": getattr(opponent, "team_name", "them"),
+                     "won": won, "drew": drew})
     out = []
     for i, q in enumerate(bank):
         answers = []
@@ -1300,8 +2242,11 @@ def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
             "question": _fill(q["ask"], full_ctx),
             "answers": answers,
         })
-    # The night's flashpoints get asked about first.
-    return _drama_questions(full_ctx.get("drama")) + out
+    # The night's flashpoints get asked about first, then the
+    # situational questions, then the routine bank.
+    return (_drama_questions(full_ctx.get("drama"))
+            + _situational_postmatch(user_team, full_ctx, random)
+            + out)
 
 
 # ---------------------------------------------------------------------------

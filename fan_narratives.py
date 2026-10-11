@@ -14,6 +14,7 @@ Design principles:
 
 from __future__ import annotations
 
+import random
 from typing import Any, Dict, List, Optional
 
 try:
@@ -78,6 +79,188 @@ def _coach_name(team: Any) -> str:
     return "the coach"
 
 
+def _safe_name(v: Any) -> str:
+    """Sanitize a name for use as a .format() substitution value.
+
+    Call-site only: strips "{" / "}" so hostile data can never render as
+    leftover template braces in headlines/bodies, and replaces newlines
+    with spaces so names can't break single-line output. Never applied
+    where names are computed or persisted (news_log etc. keep the
+    original values) -- only wrapped around the values at the .format()
+    call sites below.
+    """
+    try:
+        _s = str(v)
+    except Exception:
+        return ""
+    return (
+        _s.replace("{", "")
+        .replace("}", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fan narrative text variants (DEV-D: narrative text only).
+#
+# Each tier gets a list of (headline, body) pairs chosen via random.choice.
+# RULES (hard):
+#   - Headlines and bodies may use ONLY the {tname} and {cname} slots.
+#     These are the only slots generate_fan_narrative computes; adding a
+#     slot is a KeyError and a FAIL.
+#   - The returned dict shape is exactly
+#     {kind, tier, headline, body, weight, audience} with the per-tier
+#     kind/weight values unchanged.
+#   - Never invent stats, streaks, or events. The tier itself is the only
+#     fact the text may lean on.
+# ---------------------------------------------------------------------------
+
+_FAN_FURIOUS_VARIANTS: List[tuple] = [
+    (f"{{tname}} fans demand change: 'Fire {{cname}}' chants ring out",
+     f"The fanbase has reached a breaking point. Boos cascade down "
+     f"with every mistake, and social media is ablaze with calls for "
+     f"{{cname}}'s job. The building feels toxic."),
+    (f"Booed off the ice: {{tname}} faithful have seen enough",
+     f"The jeers are loud and relentless. {{tname}} fans are "
+     f"directing their fury at the bench, and {{cname}} is hearing "
+     f"every word of it."),
+    (f"'Fire {{cname}}' chants echo through {{tname}}",
+     f"It's open revolt in the stands. {{tname}} supporters are done "
+     f"waiting for change and they're not being quiet about it anymore."),
+    (f"Mutiny in {{tname}}: the fanbase turns on {{cname}}",
+     f"Once-loyal supporters are calling for heads. The {{tname}} "
+     f"building feels hostile, and the message to the front office "
+     f"could not be clearer."),
+    (f"{{tname}} fans at the breaking point",
+     f"Every mistake draws a chorus of boos. {{tname}} fans have run "
+     f"out of patience, and the anger in the building is impossible "
+     f"to ignore."),
+    (f"Enough is enough in {{tname}}: fans want {{cname}} gone",
+     f"The faithful are fuming. In "
+     f"{{tname}}, the conversation has moved past frustration to "
+     f"outright demands for a coaching change."),
+    (f"Toxic atmosphere as {{tname}} fans vent their fury",
+     f"The building feels hostile. {{tname}} supporters are letting "
+     f"the team hear it, and the loudest boos are reserved "
+     f"for the bench."),
+    (f"The hot seat is scorching: {{tname}} fans turn on {{cname}}",
+     f"There's no more defending it in {{tname}}. The fanbase has "
+     f"decided {{cname}} is the problem, and the chants are only "
+     f"getting louder."),
+    (f"Uprising in the stands: {{tname}} faithful demand answers",
+     f"It's not just the mood -- it's the direction. {{tname}} fans "
+     f"want to know what the plan is, and they want {{cname}} to "
+     f"explain it or leave."),
+    (f"{{tname}} building turns on its own team",
+     f"When the loudest noise in the barn is aimed at the home bench, "
+     f"you know it's bad. {{tname}} fans have turned their anger "
+     f"inward, and nobody behind the bench is safe from it."),
+]
+
+_FAN_ANGRY_VARIANTS: List[tuple] = [
+    (f"Restless in {{tname}}: fans growing impatient",
+     f"Grumbling in the stands is getting louder. {{tname}} supporters "
+     f"are questioning the direction, and patience is wearing thin."),
+    (f"Grumbling in {{tname}}: patience wearing thin",
+     f"The grumbles in the stands are getting harder to ignore. "
+     f"{{tname}} fans still show up, but the faith is fading."),
+    (f"{{tname}} fans starting to question the direction",
+     f"The anger is real now -- and it's spreading. {{tname}} supporters are "
+     f"asking what the plan is, and nobody seems to have an answer."),
+    (f"Discontent brewing among {{tname}} faithful",
+     f"The building is quieter than it should be. {{tname}} fans are "
+     f"still in their seats, but the belief is leaking out of them."),
+    (f"Restlessness sets in for {{tname}}",
+     f"The energy in the building is fading. {{tname}} fans are "
+     f"running out of reasons to keep the faith."),
+    (f"{{tname}} fans want more -- and they're saying so",
+     f"The murmur is turning into a message. {{tname}} supporters "
+     f"love this team, but love is starting to look a lot like "
+     f"frustration."),
+    (f"Frustration mounting in {{tname}}",
+     f"You can feel it in the building: the groans, the nervous "
+     f"energy, the shorter leash. {{tname}} fans are losing their "
+     f"patience."),
+    (f"The {{tname}} faithful are angry -- and getting louder",
+     f"What started as grumbling is becoming a chorus. {{tname}} "
+     f"fans want answers, and they want them soon."),
+    (f"Questions piling up in {{tname}}",
+     f"The fanbase isn't furious yet, but the questions are stacking "
+     f"up. {{tname}} supporters want to know where this is headed."),
+    (f"{{tname}} fans running out of patience",
+     f"The goodwill is gone. {{tname}} fans are still showing up, "
+     f"but the leash is getting shorter by the night."),
+]
+
+_FAN_ECSTATIC_VARIANTS: List[tuple] = [
+    (f"{{tname}} fever: Cup parade routes being discussed",
+     f"The building is electric every night. {{tname}} fans are "
+     f"dreaming big, and the buzz around this team is palpable. "
+     f"The noise is relentless."),
+    (f"Cup dreams in {{tname}}: the bandwagon is full",
+     f"The building is shaking every night. {{tname}} fans are "
+     f"talking June hockey, and nobody is telling them to calm down."),
+    (f"Electric in {{tname}}: the barn is rocking",
+     f"Visiting teams are dreading the trip in. {{tname}} fans have "
+     f"turned the building into the loudest room in hockey."),
+    (f"{{tname}} fever grips the city",
+     f"Jerseys everywhere, watch parties packed, the building "
+     f"rocking. {{tname}} has the whole town believing."),
+    (f"Standing room only: {{tname}} is the hottest ticket in town",
+     f"Tickets are gold dust. {{tname}} fans are packing the building "
+     f"every night and making it count."),
+    (f"Parade talk in {{tname}}",
+     f"It's the biggest dream in hockey and nobody's hiding it. "
+     f"{{tname}} fans are dreaming big, and the buzz is everywhere."),
+    (f"The loudest building in hockey belongs to {{tname}}",
+     f"Visiting benches can't hear themselves think. {{tname}} fans "
+     f"are bringing playoff-level noise to every single night."),
+    (f"{{tname}} fans believing -- and why not?",
+     f"The energy is real and it's earned. {{tname}} supporters are "
+     f"riding this wave all the way."),
+    (f"{{tname}} fever hits new heights",
+     f"The pregame roar is deafening. {{tname}} fans have made the "
+     f"building a fortress, and they know it."),
+    (f"Dream season brewing in {{tname}}",
+     f"The whole city is buzzing. {{tname}} fans can feel something "
+     f"special happening, and they're savoring every minute of it."),
+]
+
+_FAN_HAPPY_VARIANTS: List[tuple] = [
+    (f"{{tname}} fans riding high",
+     f"Good vibes in {{tname}}. The fanbase is behind this team, "
+     f"and the building has real energy."),
+    (f"Good vibes in {{tname}}",
+     f"The building has a buzz to it. {{tname}} fans are enjoying "
+     f"the ride and showing up loud."),
+    (f"{{tname}} faithful firmly behind this team",
+     f"No grumbling in the stands these days. {{tname}} supporters "
+     f"like what they see and they're letting the team know it."),
+    (f"Smiles in the stands: {{tname}} fans feeling good",
+     f"The mood around {{tname}} is light. Fans are coming to the "
+     f"rink happy and leaving happier."),
+    (f"The barn is happy in {{tname}}",
+     f"There's a real warmth in the building. {{tname}} fans are "
+     f"proud of this group and it shows."),
+    (f"{{tname}} fans enjoying the ride",
+     f"No doom, no gloom. {{tname}} supporters are having fun "
+     f"watching this team play."),
+    (f"Belief building among {{tname}} faithful",
+     f"The optimism feels earned. {{tname}} fans "
+     f"genuinely believe in this team, and the energy is growing."),
+    (f"{{tname}}: a fanbase in a good place",
+     f"The building feels right. {{tname}} fans are engaged, "
+     f"optimistic, and making noise for all the right reasons."),
+    (f"Warm nights in {{tname}}",
+     f"The rink has a glow to it. {{tname}} fans are behind the "
+     f"bench, behind the team, and loving it."),
+    (f"{{tname}} fans have their team's back",
+     f"Through thick and thin, the faithful show up. Right now in "
+     f"{{tname}}, it's the good kind of showing up."),
+]
+
+
 def generate_fan_narrative(team: Any, current_date: Any = None) -> Optional[Dict[str, Any]]:
     """Generate a fan-driven narrative based on current sentiment.
 
@@ -91,44 +274,42 @@ def generate_fan_narrative(team: Any, current_date: Any = None) -> Optional[Dict
         cname = _coach_name(team)
 
         if tier == TIER_FURIOUS:
+            _headline, _body = random.choice(_FAN_FURIOUS_VARIANTS)
             return {
                 "kind": "fan_unrest",
                 "tier": tier,
-                "headline": f"{tname} fans demand change: 'Fire {cname}' chants ring out",
-                "body": (f"The fanbase has reached a breaking point. Boos cascade down "
-                        f"with every mistake, and social media is ablaze with calls for "
-                        f"{cname}'s job. The building feels toxic."),
+                "headline": _headline.format(tname=_safe_name(tname), cname=_safe_name(cname)),
+                "body": _body.format(tname=_safe_name(tname), cname=_safe_name(cname)),
                 "weight": 75,
                 "audience": "fans",
             }
         elif tier == TIER_ANGRY:
+            _headline, _body = random.choice(_FAN_ANGRY_VARIANTS)
             return {
                 "kind": "fan_unrest",
                 "tier": tier,
-                "headline": f"Restless in {tname}: fans growing impatient",
-                "body": (f"Grumbling in the stands is getting louder. {tname} supporters "
-                        f"are questioning the direction, and patience is wearing thin."),
+                "headline": _headline.format(tname=_safe_name(tname), cname=_safe_name(cname)),
+                "body": _body.format(tname=_safe_name(tname), cname=_safe_name(cname)),
                 "weight": 50,
                 "audience": "fans",
             }
         elif tier == TIER_ECSTATIC:
+            _headline, _body = random.choice(_FAN_ECSTATIC_VARIANTS)
             return {
                 "kind": "fan_buzz",
                 "tier": tier,
-                "headline": f"{tname} fever: Cup parade routes being discussed",
-                "body": (f"The building is electric every night. {tname} fans are dreaming "
-                        f"big, and the buzz around this team is palpable. Sellout crowds "
-                        f"are the norm."),
+                "headline": _headline.format(tname=_safe_name(tname), cname=_safe_name(cname)),
+                "body": _body.format(tname=_safe_name(tname), cname=_safe_name(cname)),
                 "weight": 70,
                 "audience": "fans",
             }
         elif tier == TIER_HAPPY:
+            _headline, _body = random.choice(_FAN_HAPPY_VARIANTS)
             return {
                 "kind": "fan_buzz",
                 "tier": tier,
-                "headline": f"{tname} fans riding high",
-                "body": (f"Good vibes in {tname}. The fanbase is behind this team, "
-                        f"and the building has real energy."),
+                "headline": _headline.format(tname=_safe_name(tname), cname=_safe_name(cname)),
+                "body": _body.format(tname=_safe_name(tname), cname=_safe_name(cname)),
                 "weight": 40,
                 "audience": "fans",
             }
@@ -451,6 +632,112 @@ def _gm_name(team: Any) -> str:
     return "the GM"
 
 
+# ---------------------------------------------------------------------------
+# Board narrative text variants (DEV-D: narrative text only).
+#
+# Three branches (seat-warming / escalation / relief), each with a list of
+# (headline, body) pairs chosen via random.choice.
+# RULES (hard):
+#   - Headlines and bodies may use ONLY the {tname} and {gm} slots. These
+#     are the only slots generate_board_narrative computes.
+#   - The returned dict shape is exactly
+#     {kind, headline, body, weight, audience, hot} with the per-branch
+#     kind/weight/hot values unchanged.
+#   - Never invent stats, streaks, or events. The pressure state is the
+#     only fact the text may lean on.
+# ---------------------------------------------------------------------------
+
+_BOARD_WARMING_VARIANTS: List[tuple] = [
+    (f"Ownership losing patience in {{tname}}",
+     f"Whispers out of the {{tname}} boardroom suggest ownership "
+     f"is losing patience. {{gm}} is feeling the heat as the "
+     f"fanbase turns -- if results don't turn, the seat gets "
+     f"genuinely hot."),
+    (f"Seat warming: {{gm}} feeling the heat in {{tname}}",
+     f"The {{tname}} boardroom is asking harder questions. {{gm}} "
+     f"isn't in immediate danger, but the margin for error is gone."),
+    (f"Whispers from the {{tname}} boardroom",
+     f"Ownership is watching closely. {{gm}} still has the job, but "
+     f"the patience that came with it is running out."),
+    (f"{{tname}} ownership's patience wearing thin",
+     f"The message from upstairs is getting harder to read as "
+     f"supportive. {{gm}} needs results before the whispers turn "
+     f"into meetings."),
+    (f"Pressure mounting on {{gm}} in {{tname}}",
+     f"It's not a hot seat yet -- but the {{tname}} front office "
+     f"can feel it warming. Ownership expects better, and soon."),
+    (f"{{tname}} brass growing restless",
+     f"The boardroom mood has shifted. {{gm}} is under no illusions: "
+     f"the honeymoon with ownership is over."),
+    (f"The {{tname}} hot seat: not yet, but close",
+     f"{{gm}} keeps the job today. But ownership's tone has changed "
+     f"in {{tname}}, and everyone around the league can hear it."),
+    (f"Ownership watching closely in {{tname}}",
+     f"Every move is under a microscope now. {{gm}} has the full "
+     f"attention of the {{tname}} boardroom -- and not the good kind."),
+]
+
+_BOARD_ESCALATION_VARIANTS: List[tuple] = [
+    (f"Hot seat watch: {{gm}} under fire in {{tname}}",
+     f"The {{tname}} boardroom is no longer whispering. Ownership "
+     f"is openly questioning the direction, and {{gm}}'s job "
+     f"security is the talk of the league's insider circuit."),
+    (f"{{gm}} on the brink in {{tname}}",
+     f"The {{tname}} boardroom has stopped pretending. Ownership is "
+     f"openly discussing the future, and {{gm}}'s name is at the "
+     f"center of it."),
+    (f"No more whispers: {{tname}} ownership openly questioning {{gm}}",
+     f"The patience is gone. The {{tname}} board wants answers, and "
+     f"{{gm}} is running out of them."),
+    (f"Hot seat scorching for {{gm}} in {{tname}}",
+     f"Around the league, it's treated as a matter of when, not if. "
+     f"The {{tname}} boardroom is bracing for a change at the top."),
+    (f"{{tname}} boardroom in crisis mode",
+     f"The pressure is mounting and the speculation is getting "
+     f"louder. {{gm}}'s grip on the {{tname}} job is slipping by "
+     f"the day."),
+    (f"Countdown on in {{tname}}: {{gm}} under siege",
+     f"Ownership has made its frustration public. {{gm}} is fighting "
+     f"for the job now, and everyone in the building knows it."),
+    (f"Ownership turns up the heat on {{gm}}",
+     f"The {{tname}} board is done waiting. Public comments, private "
+     f"ultimatums -- {{gm}} is officially on the clock."),
+    (f"{{tname}}: the seat is officially hot",
+     f"There's no spinning it anymore. Ownership in {{tname}} has "
+     f"lost faith in the direction, and {{gm}} is the one answering "
+     f"for it."),
+]
+
+_BOARD_RELIEF_VARIANTS: List[tuple] = [
+    (f"{{tname}} ownership backs {{gm}}",
+     f"{{tname}} ownership has publicly backed {{gm}}. The pressure on "
+     f"the front office has lifted, and the board is aligned behind "
+     f"the plan. {{gm}} has the {{tname}} front office's full "
+     f"support."),
+    (f"Storm passes in {{tname}}: {{gm}} safe",
+     f"The boardroom has calmed. {{gm}} earned some breathing room, "
+     f"and ownership is letting the hockey do the talking."),
+    (f"Vote of confidence -- the real kind -- for {{gm}}",
+     f"This time it wasn't the dreaded kind. {{tname}} ownership "
+     f"genuinely backed {{gm}}, and the hot seat talk has gone quiet."),
+    (f"{{tname}} boardroom breathes easier",
+     f"The crisis meetings are over. Ownership is pleased, {{gm}} "
+     f"is secure, and the {{tname}} front office can get back to work."),
+    (f"Heat off: {{gm}} earns ownership's trust back",
+     f"Whatever was said behind closed doors worked. {{gm}} has the "
+     f"{{tname}} boardroom's confidence again -- the seat is cool."),
+    (f"{{tname}} ownership all in on {{gm}}",
+     f"No hedging, no qualifiers. The {{tname}} board is publicly "
+     f"behind {{gm}}, and the rumor mill has moved on."),
+    (f"Calm returns to the {{tname}} boardroom",
+     f"The storm has passed. {{gm}} weathered it, ownership has "
+     f"moved on, and the focus is back on hockey."),
+    (f"{{gm}} off the hot seat in {{tname}}",
+     f"The pressure valve released. {{tname}} ownership is satisfied "
+     f"and {{gm}} can plan beyond tomorrow."),
+]
+
+
 def generate_board_narrative(team: Any,
                              current_date: Any = None) -> Optional[Dict[str, Any]]:
     """Generate a boardroom narrative from current board pressure.
@@ -467,37 +754,33 @@ def generate_board_narrative(team: Any,
 
         if pressure >= 0.70 and not was_hot:
             # The seat is warming -- first time crossing the line.
+            _headline, _body = random.choice(_BOARD_WARMING_VARIANTS)
             return {
                 "kind": "board_pressure",
-                "headline": f"Ownership losing patience in {tname}",
-                "body": (f"Whispers out of the {tname} boardroom suggest ownership "
-                        f"is losing patience. {gm} is feeling the heat as the "
-                        f"fanbase turns -- another bad stretch could make the "
-                        f"seat genuinely hot."),
+                "headline": _headline.format(tname=_safe_name(tname), gm=_safe_name(gm)),
+                "body": _body.format(tname=_safe_name(tname), gm=_safe_name(gm)),
                 "weight": 60,
                 "audience": "board",
                 "hot": True,
             }
         elif pressure >= 0.85 and was_hot:
             # Escalation: it got worse.
+            _headline, _body = random.choice(_BOARD_ESCALATION_VARIANTS)
             return {
                 "kind": "board_pressure",
-                "headline": f"Hot seat watch: {gm} under fire in {tname}",
-                "body": (f"The {tname} boardroom is no longer whispering. Ownership "
-                        f"is openly questioning the direction, and {gm}'s job "
-                        f"security is the talk of the league's insider circuit."),
+                "headline": _headline.format(tname=_safe_name(tname), gm=_safe_name(gm)),
+                "body": _body.format(tname=_safe_name(tname), gm=_safe_name(gm)),
                 "weight": 80,
                 "audience": "board",
                 "hot": True,
             }
         elif pressure < 0.35 and was_hot:
             # Relief: the storm passed.
+            _headline, _body = random.choice(_BOARD_RELIEF_VARIANTS)
             return {
                 "kind": "board_relief",
-                "headline": f"{tname} ownership backs {gm} -- for now",
-                "body": (f"After a calming stretch, {tname} ownership has publicly "
-                        f"backed {gm}. The dreaded vote of confidence -- which "
-                        f"everyone knows means the opposite -- was notably absent."),
+                "headline": _headline.format(tname=_safe_name(tname), gm=_safe_name(gm)),
+                "body": _body.format(tname=_safe_name(tname), gm=_safe_name(gm)),
                 "weight": 40,
                 "audience": "board",
                 "hot": False,
