@@ -8,8 +8,7 @@ regular-season game, per the CBA; Mar 8 fallback)
 import tkinter as tk
 from tkinter import ttk
 import time
-from datetime import datetime, timedelta
-import random
+from datetime import datetime
 
 # Import the trade deadline manager for backend logic
 from trade_deadline_manager import get_deadline_manager
@@ -675,41 +674,32 @@ class TradeDeadlineCenter(_DeadlineScreenBase):
         recent_activity = self.deadline_manager.trade_activity_log[-15:]  # Last 15 trades
         
         if not recent_activity:
-            # Show sample trades if no real activity
-            sample_trades = [
-                {
-                    'timestamp': datetime.now() - timedelta(minutes=5),
-                    'description': 'TOR acquires rental forward from ARI for 2nd round pick',
-                    'impact': 'medium',
-                    'teams_involved': ['TOR', 'ARI'],
-                    'type': 'rental'
-                },
-                {
-                    'timestamp': datetime.now() - timedelta(minutes=12),
-                    'description': 'BOS trades veteran defenseman to VGK for prospect + pick',
-                    'impact': 'high', 
-                    'teams_involved': ['BOS', 'VGK'],
-                    'type': 'futures'
-                },
-                {
-                    'timestamp': datetime.now() - timedelta(minutes=18),
-                    'description': 'NYR adds depth forward from MTL',
-                    'impact': 'low',
-                    'teams_involved': ['NYR', 'MTL'], 
-                    'type': 'depth'
-                }
-            ]
-            
-            # Use generated activity from deadline manager
-            generated_activity = self.deadline_manager.generate_trade_activity()
-            if generated_activity:
-                recent_activity = generated_activity
-            else:
-                recent_activity = sample_trades
-        
+            # No logged trades: ask the deadline manager for real deadline-day
+            # activity (actual completed trades, else explicitly ESTIMATE-labeled
+            # projections grounded in real league state -- never fabricated
+            # deals and never hardcoded NHL teams).
+            recent_activity = self.deadline_manager.generate_trade_activity()
+
+        if not recent_activity:
+            # Honest empty state: off deadline day / post-deadline there is
+            # simply no trade activity to show. Never render fake trades.
+            self._show_no_trades_message()
+            return
+
         # Display each trade
         for i, trade in enumerate(recent_activity):
             self._create_trade_item(self.trades_scrollable_frame, trade, i)
+
+    def _show_no_trades_message(self):
+        """Render an honest empty state when no trade activity exists"""
+        tk.Label(
+            self.trades_scrollable_frame,
+            text="No trade activity yet.\nNo trades have been completed in this league.",
+            bg=self.NEUTRAL_GRAY,
+            fg=self.TEXT_WHITE,
+            font=('Segoe UI', 9),
+            justify='center'
+        ).pack(fill='x', padx=5, pady=10)
             
     def _create_trade_item(self, parent, trade_data, index):
         """Create a single trade item display"""
@@ -2583,22 +2573,17 @@ class DeadlineMarketBrowser(_DeadlineScreenBase):
             self.after(next_check, self._generate_auto_trades)
         
     def _add_breaking_trade(self, trade_description=None):
-        """Add a breaking trade notification"""
-        if trade_description:
-            # Use provided trade description from deadline manager
-            trade = f"🚨 BREAKING: {trade_description}"
-        else:
-            # Fallback to sample trades for testing
-            sample_breaking_trades = [
-                "Lightning trade veteran forward to Rangers!",
-                "Bruins acquire defenseman from Senators!",
-                "Maple Leafs land rental forward from Arizona!",
-                "Avalanche add goaltender from Red Wings!",
-                "Panthers trade expiring contract to Vegas!"
-            ]
-            trade_text = random.choice(sample_breaking_trades)
-            trade = f"🚨 BREAKING: {trade_text}"
-        
+        """Add a breaking trade notification.
+
+        The description always comes from the deadline manager (real
+        completed trades or explicitly ESTIMATE-labeled projections).
+        With no description there is nothing truthful to report, so we
+        do nothing -- fabricated "breaking" trades are never posted.
+        """
+        if not trade_description:
+            return
+        trade = f"🚨 BREAKING: {trade_description}"
+
         # Update ticker
         current_text = self.ticker_label.cget('text')
         new_text = f"{current_text} --- {trade}"
