@@ -267,7 +267,7 @@ def reset_to_defaults():
     Returns (ok, failures) -- failures is a list of (tab, key, error).
     """
     defaults = _defaults()
-    _loader_fn, path = _loader()
+    _, path = _loader()  # verification reads back through _read_settings()
     try:
         with open(path, "r") as f:
             settings = json.load(f)
