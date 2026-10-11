@@ -57,7 +57,20 @@ def _tname(t):
 
 
 def _ovr(p):
-    return _safe(lambda: float(p.overall), 0.0) or 0.0
+    """Overall rating, defensive about where it lives.
+
+    F-1 root cause: the real Player class has no ``p.overall`` attribute --
+    overall is the ``overall_rating()`` METHOD (game_classes.py). Try the
+    plain attribute first (duck-typed player-likes/mocks may carry one),
+    then the method, else 0.0. Non-finite results are normalized to 0.0
+    here; the _ovr_ok gate downstream still rejects out-of-range values.
+    """
+    v = _safe(lambda: float(p.overall), None)
+    if v is None:
+        v = _safe(lambda: float(p.overall_rating()), None)
+    if v is None or not math.isfinite(v):
+        return 0.0
+    return v
 
 
 def _ovr_ok(v):
@@ -72,7 +85,22 @@ def _ovr_ok(v):
 
 
 def _pot(p):
-    return _safe(lambda: p.potential, "") or ""
+    """Letter potential grade (the A-F ladder), not the numeric potential.
+
+    F-1 root cause: ``p.potential`` exists but is a NUMERIC int, while every
+    consumer does ``str(_pot(p)).upper()`` and compares against letter
+    grades ("A", "B", "ELITE", "HIGH") -- so a numeric read could never
+    match and the draft-riser / prospect-watch buckets were dead. Read the
+    scouted letter grade ``potential_grade`` first, then the hidden
+    ``true_potential_grade`` (mirrors ai_extension_planning._potential_grade),
+    getattr-safe for old saves; else "".
+    """
+    for attr in ("potential_grade", "true_potential_grade"):
+        g = _safe(lambda: str(getattr(p, attr, "")), "") or ""
+        g = g.strip().upper()
+        if g:
+            return g
+    return ""
 
 
 def _pos(p):
@@ -82,8 +110,39 @@ def _pos(p):
     return _safe(lambda: pp.value, str(pp)) or ""
 
 
+def _contract_years_left(p):
+    """Years remaining on the player's deal.
+
+    F-1 root cause: the real Contract class uses ``years_remaining``
+    (game_classes.py); ``contract_years_left`` never existed on Player or
+    Contract, so the holdout bucket could never fire. Duck-typed fallbacks
+    kept for player-likes that carry the years directly.
+    """
+    c = _safe(lambda: p.contract, None)
+    if c is not None:
+        for attr in ("years_remaining", "contract_years_left"):
+            yrs = _safe(lambda: int(getattr(c, attr, None)), None)
+            if yrs is not None:
+                return yrs
+    return _safe(lambda: int(p.contract_years_left), 99)
+
+
 def _stats(p):
-    return _safe(lambda: p.season_stats, None)
+    """Season stat source.
+
+    F-1 root cause: the real Player class has no p.season_stats. The live
+    season ledger is p.stats (PlayerStats) -- written by the sim's per-game
+    flush (simulation.py / game_manager.py / main.py, dozens of write
+    sites, with _update_goalie_stats() keeping save_percentage live) and
+    read the same way by the game's own code (potential evaluator,
+    validators, game_manager). Direct player attrs (p.goals, ...) are the
+    fallback for duck-typed player-likes that carry stats directly, and
+    for objects with no stats store at all (consumers are _safe-wrapped).
+    """
+    st = _safe(lambda: p.stats, None)
+    if st is not None:
+        return st
+    return p
 
 
 def _g(p):
@@ -402,7 +461,7 @@ def _controversies(app, game_date, rng):
                     "The message from {coach} is clear, even if the reason isn't: {name} sits again for {team}.",
                     "{team} paid for a {ovr} OVR contributor and is getting {gp} games from {name} -- the math doesn't work.",
                     "SCRATCH WATCH: {name} keeps sitting -- {gp} games in {team} is a long stretch to go unnoticed.",
-                    "The {team} line is patience with {name} -- {gp} games into the season, fans aren't buying it.",
+                    "The {team} brass are preaching patience with {name} -- {gp} games into the season, fans aren't buying it.",
                     "You don't healthy-scratch {ovr} OVR talent without a reason -- but {coach} isn't sharing his in {team}.",
                     "SCRATCH WATCH: {name} keeps sitting -- that's the {team} story at {gp} games.",
                     "If {name} isn't in {coach}'s plans, {team} owes it to a {ovr} OVR asset to find him a new home.",
@@ -459,7 +518,7 @@ def _controversies(app, game_date, rng):
     if len(stories) < 2:
         for p, t in players:
             try:
-                yrs = _safe(lambda: int(p.contract_years_left), 99)
+                yrs = _contract_years_left(p)
                 ovr = _ovr(p)
                 if _ovr_ok(ovr) and yrs is not None and yrs <= 1 and ovr >= 82:
                     key = f"player:{_safe(lambda: p.id, id(p))}"
