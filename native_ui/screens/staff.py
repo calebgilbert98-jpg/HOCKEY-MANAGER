@@ -1595,7 +1595,11 @@ class StaffScreen(BaseScreen):
             from datetime import date
             remaining = [str(i)
                          for i in (sess.get("remaining_staff_ids") or [])]
-            total = int(sess.get("total") or len(remaining) or 0)
+            try:
+                total = int(sess.get("total") or len(remaining) or 0)
+            except (TypeError, ValueError):
+                # Corrupt/hand-edited save: fall back to the live list.
+                total = len(remaining)
             names = dict(sess.get("staff_names") or {})
             first = [str(names.get(sid, sid)) for sid in remaining[:3]]
             detail = (f"{len(remaining)} of {total} negotiations remaining"
@@ -1647,8 +1651,12 @@ class StaffScreen(BaseScreen):
         if getattr(self, "_resume_asked", False):
             return
         self._resume_asked = True
-        remaining = [str(i)
-                     for i in (sess.get("remaining_staff_ids") or [])]
+        try:
+            remaining = [str(i)
+                         for i in (sess.get("remaining_staff_ids") or [])]
+        except (TypeError, ValueError):
+            # Corrupt/hand-edited save: treat as no remaining staff.
+            remaining = []
         try:
             total = int(sess.get("total") or len(remaining) or 0)
         except (TypeError, ValueError):
