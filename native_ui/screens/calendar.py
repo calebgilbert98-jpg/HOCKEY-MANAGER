@@ -601,13 +601,19 @@ class CalendarScreen(BaseScreen):
                     ed = _iso(g[0])
                     edata = g[2] if isinstance(g[2], dict) else {}
                     etype = edata.get("type", "")
+                    # Mainline parity: the stamped entry_draft/free_agency
+                    # events get the DRAFT/FA badges (mainline's
+                    # _style_for_day maps these event types directly).
+                    # Stamped titles are kept verbatim.
+                    etitle = str(edata.get("title", "") or etype)
                     kind, label = {
                         "all_star_skills":
                             ("allstar", "All-Star Skills Competition"),
                         "all_star_game": ("allstar", "All-Star Game"),
                         "trade_deadline": ("deadline", "Trade Deadline"),
-                    }.get(etype, ("important",
-                                  str(edata.get("title", "") or etype)))
+                        "entry_draft": ("draft", etitle),
+                        "free_agency": ("freeagency", etitle),
+                    }.get(etype, ("important", etitle))
                     if ed and label:
                         self._add_event(events, ed, kind, label)
                     continue
@@ -652,22 +658,10 @@ class CalendarScreen(BaseScreen):
                                 "deadline", "Trade Deadline")
         except Exception:
             pass
-        # entry draft (late June)
-        try:
-            session = safe_call(
-                lambda: getattr(league, "entry_draft_session", None),
-                context="calendar/load_data/draft_session")
-            dyear = safe_call(lambda: int(getattr(session, "year", 0) or 0),
-                              0, context="calendar/load_data/draft_year")
-            if not dyear:
-                dyear = safe_call(
-                    lambda: int(getattr(league, "season_year", 0) or 0),
-                    0, context="calendar/load_data/season_year_fallback") + 1
-            if dyear:
-                self._add_event(events, f"{dyear}-06-28",
-                                "draft", f"{dyear} Entry Draft")
-        except Exception:
-            pass
+        # Entry draft: the marker comes from the engine-stamped NHL_EVENT
+        # (type "entry_draft", Jun 27 — the same date mainline badges
+        # DRAFT). No derived marker is added: the stamp is the single
+        # source of truth, so June always shows exactly one draft marker.
         # season bounds from the regular-season schedule
         try:
             dates = sorted(gd for gd, gs in games.items()
@@ -802,9 +796,10 @@ class CalendarScreen(BaseScreen):
 
         A date that already has events keeps them (mainline skips those
         days). Mainline's fixed "Draft Day" (Jun 27) is intentionally not
-        ported: native derives the real draft date from the league's
-        entry_draft_session, and a second marker a day apart would
-        conflict with it.
+        ported: the engine stamps the real NHL_EVENT (type
+        "entry_draft", Jun 27) on the schedule, and the NHL_EVENT mapping
+        in _load_data turns that stamp into the single DRAFT marker —
+        exactly one draft marker, same date and badge as mainline.
         """
         season_year = self._season_year()
         important = [
