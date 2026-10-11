@@ -8,9 +8,17 @@ no HTTP.
 Native differences from the tkinter original (all deliberate):
   - The engine's ``_automation_loop`` uses tkinter ``after()``, which does
     not exist under Qt. The loop is driven here by a ``QTimer`` that calls
-    the engine's ``should_auto_advance()`` / ``simulate_day()`` /
-    milestone APIs directly. ``AutomatedSeasonFlow.start_automation()`` is
-    never called (it would crash on ``game_manager.after``).
+    the engine's ``should_auto_advance()`` / milestone APIs directly.
+    ``AutomatedSeasonFlow.start_automation()`` is never called (it would
+    crash on ``game_manager.after``).
+  - OBS-2 root-cause fix: ``simulate_day()`` NEVER runs on the Qt UI
+    thread here. The automation loop and the quick-advance actions run the
+    sim on a worker thread and marshal completion back to the UI thread
+    (mirroring ``run_threaded`` from ``native_ui.dialogs.sim_progress``,
+    the same pattern ``MainWindow.on_continue`` uses). The automation
+    loop shows the non-modal ``DaySimLoadingOverlay`` so the app stays
+    usable between days; quick advances use the cancelable
+    ``run_threaded`` progress dialog with per-day progress.
   - The engine's ``_show_milestone_notification`` imports tkinter's
     messagebox. Critical milestones are surfaced here with a native
     ``QDialog`` instead.
@@ -37,7 +45,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 
+import threading
+
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 # The engine module is stdlib-only at import time (datetime/enum/dataclass),
 # so this top-level import is bundling-safe. Its tkinter usage is confined
@@ -58,13 +69,6 @@ except Exception as e:  # pragma: no cover - defensive
     format_days_until_milestone = None
     _ENGINE_OK = False
     _ENGINE_ERR = str(e)
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
 
 
 # Phase -> native screen name for the milestone dialog's "open" button.
@@ -95,7 +99,9 @@ class MilestoneDialog(QDialog):
         super().__init__(parent)
         self._milestone = milestone
         self._main_window = main_window
-        phase_value = _safe(lambda: milestone.phase.value, "")
+        phase_value = safe_call(
+            lambda: milestone.phase.value, "",
+            context="season_flow:milestone:phase")
         self.setWindowTitle(f"Milestone: {milestone.name}")
         self.setMinimumWidth(460)
 
@@ -112,8 +118,9 @@ class MilestoneDialog(QDialog):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        date_lbl = QLabel(_safe(
-            lambda: milestone.date.strftime("%B %d, %Y"), ""))
+        date_lbl = QLabel(safe_call(
+            lambda: milestone.date.strftime("%B %d, %Y"), "",
+            context="season_flow:milestone:date"))
         date_lbl.setAlignment(Qt.AlignCenter)
         date_lbl.setStyleSheet("color: #9aa4b8; font-size: 13px;")
         layout.addWidget(date_lbl)
@@ -131,7 +138,8 @@ class MilestoneDialog(QDialog):
         btns = QDialogButtonBox(QDialogButtonBox.Ok)
         btns.button(QDialogButtonBox.Ok).setText("Continue")
         btns.accepted.connect(self.accept)
-        if _safe(lambda: milestone.is_critical, False):
+        if safe_call(lambda: milestone.is_critical, False,
+                       context="season_flow:milestone:critical"):
             target = _PHASE_SCREENS.get(phase_value)
             if target:
                 open_btn = QPushButton("Open Related Screen")
@@ -235,6 +243,13 @@ class SeasonFlowScreen(BaseScreen):
     _MIN_DELAY_MS = 100
 
     def _build_body(self):
+        # Worker-thread state (OBS-2): the day sim never runs on the UI
+        # thread, so these guards live for the whole screen lifetime.
+        self._sim_in_progress = False
+        self._auto_overlay = None
+        self._quick_btns = []
+        self._running = False
+
         if not _ENGINE_OK:
             err = QLabel(
                 "Season automation is unavailable: "
@@ -244,7 +259,9 @@ class SeasonFlowScreen(BaseScreen):
             self._layout.addStretch()
             self._automation = None
             return
-        if self.game is None or _safe(lambda: self.game.league) is None:
+        if self.game is None or safe_call(
+                lambda: self.game.league, None,
+                context="season_flow:build:league") is None:
             msg = QLabel("Start or load a career to use automated season flow.")
             msg.setStyleSheet("color: #9aa4b8; font-size: 14px;")
             msg.setAlignment(Qt.AlignCenter)
@@ -320,13 +337,14 @@ class SeasonFlowScreen(BaseScreen):
         ):
             btn = QPushButton(label)
             btn.clicked.connect(handler)
+            self._quick_btns.append(btn)
             quick_row.addWidget(btn)
         self._layout.addWidget(quick_box)
 
-        # ---- automation timer (drives the loop; see module docstring) ----
+        # ---- automation timer (schedules days; the sim itself runs on a
+        # worker thread -- see _automation_tick) ----
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._automation_tick)
-        self._running = False
 
         self._layout.addStretch()
         self.refresh()
@@ -357,7 +375,8 @@ class SeasonFlowScreen(BaseScreen):
         try:
             phase = self._automation.update_season_phase()
             self._phase_lbl.setText(
-                _safe(lambda: phase.value, "Unknown"))
+                safe_call(lambda: phase.value, "Unknown",
+                          context="season_flow:refresh:phase"))
             nxt = self._automation.get_next_milestone()
             if nxt and format_days_until_milestone:
                 days_txt = format_days_until_milestone(
@@ -365,10 +384,17 @@ class SeasonFlowScreen(BaseScreen):
                 self._milestone_lbl.setText(f"{nxt.name} \u2014 {days_txt}")
             else:
                 self._milestone_lbl.setText("No upcoming milestones")
-            running = self._running
-            self._start_btn.setEnabled(not running)
-            self._stop_btn.setEnabled(running)
-            self._mode_combo.setEnabled(not running)
+            # OBS-2: while a worker sim is in flight (automation day or
+            # quick advance), all sim-triggering controls stay disabled so
+            # the user cannot stack overlapping workers.
+            busy = bool(self._running) or bool(
+                getattr(self, "_sim_in_progress", False))
+            self._start_btn.setEnabled(not busy)
+            self._stop_btn.setEnabled(bool(self._running))
+            self._mode_combo.setEnabled(not busy)
+            self._settings_btn.setEnabled(not busy)
+            for btn in getattr(self, "_quick_btns", []):
+                btn.setEnabled(not busy)
         except Exception as e:
             print(f"[season_flow] refresh failed: {e}")
 
@@ -397,8 +423,9 @@ class SeasonFlowScreen(BaseScreen):
             f"{self._speed_slider.value() / 10.0:.1f}x")
 
     def _tick_delay_ms(self):
-        speed = _safe(
-            lambda: self._automation.settings.days_per_second, 1.0) or 1.0
+        speed = safe_call(
+            lambda: self._automation.settings.days_per_second, 1.0,
+            context="season_flow:tick:speed") or 1.0
         return max(self._MIN_DELAY_MS, int(1000 / speed))
 
     def _start_automation(self):
@@ -419,6 +446,7 @@ class SeasonFlowScreen(BaseScreen):
             self._automation.automation_active = False
         except Exception:
             pass
+        self._hide_auto_overlay()
         self.refresh()
 
     def _open_settings(self):
@@ -433,17 +461,31 @@ class SeasonFlowScreen(BaseScreen):
     # automation tick (native replacement for the engine's tkinter loop)
     # ------------------------------------------------------------------
     def _automation_tick(self):
-        """One automation step, driven by QTimer."""
+        """Schedule one automation step.
+
+        OBS-2: the QTimer only schedules. ``simulate_day()`` runs on a
+        daemon worker thread (see ``_start_day_worker``); per-day
+        UI-thread logic (milestones, refresh) runs in
+        ``_on_day_sim_done``, which the worker marshals back to the UI
+        thread via ``QTimer.singleShot(0, ...)``. The UI stays responsive
+        the whole time.
+        """
         auto = self._automation
         if not self._running or auto is None:
             return
+        if self._sim_in_progress:
+            # Previous day's worker still running -- skip this tick; the
+            # next tick will pick up where it left off.
+            return
         try:
-            if not _safe(auto.should_auto_advance, False):
+            if not safe_call(auto.should_auto_advance, False,
+                             context="season_flow:auto:should_advance"):
                 return
             # Native improvement: never sim past blockers the user must
             # resolve -- stop and surface them instead.
-            _label, blockers = _safe(
-                lambda: self.game.get_continue_state(), (None, []))
+            _label, blockers = safe_call(
+                lambda: self.game.get_continue_state(), (None, []),
+                context="season_flow:auto:continue_state")
             if blockers:
                 self._stop_automation()
                 try:
@@ -451,30 +493,121 @@ class SeasonFlowScreen(BaseScreen):
                 except Exception as e:
                     print(f"[season_flow] show_blockers failed: {e}")
                 return
-            _bulk = getattr(self.game, "_bulk_simming", None)
-            try:
-                if _bulk is not None:
-                    self.game._bulk_simming = True
-                self.game.simulate_day()
-            finally:
-                if _bulk is not None:
-                    try:
-                        self.game._bulk_simming = False
-                    except Exception:
-                        pass
-            _safe(auto.update_season_phase)
-            self._check_milestone_triggers()
-            self.refresh()
-            # Keep the hub/dashboard behind us fresh.
-            try:
-                hub = getattr(self.main_window, "hub", None)
-                if hub is not None and hasattr(hub, "refresh"):
-                    hub.refresh(self.game)
-            except Exception:
-                pass
+            self._start_day_worker()
         except Exception as e:
             print(f"[season_flow] automation tick failed: {e}")
             self._stop_automation()
+
+    def _start_day_worker(self):
+        """Run one day of sim on a worker thread.
+
+        Completion (or failure) is marshaled back to the UI thread via
+        ``QTimer.singleShot(0, ...)`` -- ``QTimer.singleShot`` is
+        thread-safe, so this is a valid cross-thread wake-up. The worker
+        touches only sim objects (the game), never widgets.
+        """
+        game = self.game
+        self._sim_in_progress = True
+        self._show_auto_overlay()
+        self.refresh()
+
+        def _worker():
+            error = None
+            try:
+                _bulk = getattr(game, "_bulk_simming", None)
+                try:
+                    if _bulk is not None:
+                        game._bulk_simming = True
+                    game.simulate_day()
+                finally:
+                    if _bulk is not None:
+                        try:
+                            game._bulk_simming = False
+                        except Exception:
+                            pass
+            except Exception as e:  # noqa: BLE001 -- reported on UI thread
+                error = e
+            # Marshal completion to the UI thread.
+            QTimer.singleShot(0, lambda: self._on_day_sim_done(error))
+
+        threading.Thread(target=_worker, daemon=True,
+                         name="season-flow-day").start()
+
+    def _on_day_sim_done(self, error):
+        """Day worker finished. Runs ON the UI thread.
+
+        On error: stop automation, report, leave state consistent -- the
+        failed day is the only one affected; no further days are simmed.
+        """
+        self._sim_in_progress = False
+        if error is not None:
+            print(f"[season_flow] automation day sim failed: {error}")
+            self._stop_automation()
+            QMessageBox.critical(
+                self, "Simulation Error",
+                "The day simulation failed and automation was stopped:\n"
+                f"{error}\n\n"
+                "No further days were simulated.")
+            return
+        if not self._running:
+            # Stopped while the worker was in flight (e.g. user hit Stop
+            # mid-day). The day completed atomically; just clean up.
+            self._hide_auto_overlay()
+            self.refresh()
+            return
+        safe_call(self._automation.update_season_phase,
+                  context="season_flow:auto:update_phase")
+        self._check_milestone_triggers()
+        if self._running:
+            # A critical milestone may have stopped automation above.
+            self._update_auto_overlay()
+        self.refresh()
+        # Keep the hub/dashboard behind us fresh.
+        try:
+            hub = getattr(self.main_window, "hub", None)
+            if hub is not None and hasattr(hub, "refresh"):
+                hub.refresh(self.game)
+        except Exception:
+            pass
+
+    # -- non-modal progress indicator for the automation loop --
+    def _show_auto_overlay(self):
+        """Show the day-sim toast (non-modal; app stays usable)."""
+        if self._auto_overlay is not None:
+            return
+        try:
+            from native_ui.dialogs.sim_progress import DaySimLoadingOverlay
+        except Exception as e:
+            print(f"[season_flow] overlay import failed: {e}")
+            return
+        try:
+            parent = self.main_window if self.main_window is not None else self
+            self._auto_overlay = DaySimLoadingOverlay(parent)
+            self._auto_overlay.set_auto_mode(True)
+            self._update_auto_overlay()
+        except Exception as e:
+            print(f"[season_flow] overlay show failed: {e}")
+            self._auto_overlay = None
+
+    def _update_auto_overlay(self):
+        if self._auto_overlay is None:
+            return
+        try:
+            date_txt = safe_call(
+                lambda: self.game.current_date.strftime("%b %d, %Y"), "",
+                context="season_flow:auto:overlay_date")
+            self._auto_overlay.set_status(
+                f"Auto-advancing\u2026 {date_txt}".strip())
+        except Exception:
+            pass
+
+    def _hide_auto_overlay(self):
+        overlay, self._auto_overlay = self._auto_overlay, None
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
 
     def _check_milestone_triggers(self):
         """Native milestone trigger check.
@@ -502,7 +635,9 @@ class SeasonFlowScreen(BaseScreen):
                     self.game.add_news(f"Milestone: {m.name} -- {m.description}")
                 except Exception:
                     pass
-                if _safe(lambda: m.is_critical, False) and self._running:
+                if safe_call(lambda: m.is_critical, False,
+                               context="season_flow:milestone:critical") \
+                        and self._running:
                     self._stop_automation()
                     try:
                         MilestoneDialog(self, m, self.main_window).exec()
@@ -515,37 +650,94 @@ class SeasonFlowScreen(BaseScreen):
     # quick actions
     # ------------------------------------------------------------------
     def _advance_days(self, days):
+        """Advance N days off the UI thread via run_threaded.
+
+        Mirrors ``MainWindow.on_continue``: the sim runs on a worker
+        thread with a cancelable progress dialog (per-day progress);
+        ``_on_done`` runs on the UI thread and does all widget updates.
+        A busy guard rejects overlapping runs (double-click safe).
+        """
         if not self._automation:
+            return
+        if self._sim_in_progress or self._running:
+            QMessageBox.information(
+                self, "Busy",
+                "A simulation is already running. "
+                "Wait for it to finish before advancing again.")
             return
         try:
             _label, blockers = self.game.get_continue_state()
             if blockers:
                 self.main_window.show_blockers(blockers)
                 return
-            _bulk = getattr(self.game, "_bulk_simming", None)
             try:
-                if _bulk is not None:
-                    self.game._bulk_simming = True
-                for _ in range(days):
-                    self.game.simulate_day()
-            finally:
-                if _bulk is not None:
+                from native_ui.dialogs.sim_progress import (
+                    run_threaded, create_fallback_save)
+            except Exception as e:
+                print(f"[season_flow] sim progress import failed: {e}")
+                QMessageBox.critical(
+                    self, "Error",
+                    "Could not start the background sim. Try again.")
+                return
+
+            create_fallback_save(self.game, "season_flow_advance")
+            self._sim_in_progress = True
+            self.refresh()
+            game = self.game
+
+            def _worker(cancel_event, progress):
+                # Runs OFF the UI thread. Must not touch widgets.
+                done = 0
+                _bulk = getattr(game, "_bulk_simming", None)
+                try:
+                    if _bulk is not None:
+                        game._bulk_simming = True
+                    for i in range(days):
+                        if cancel_event.is_set():
+                            break
+                        game.simulate_day()
+                        done += 1
+                        progress((i + 1) / days,
+                                 f"Day {i + 1} of {days}\u2026")
+                finally:
+                    if _bulk is not None:
+                        try:
+                            game._bulk_simming = False
+                        except Exception:
+                            pass
+                return done
+
+            def _on_done(cancelled, error):
+                # Runs ON the UI thread.
+                self._sim_in_progress = False
+                if error is not None:
+                    print(f"[season_flow] advance days failed: {error}")
+                    QMessageBox.critical(
+                        self, "Error",
+                        f"Failed to advance: {error}\n\n"
+                        "No further days were simulated.")
+                else:
                     try:
-                        self.game._bulk_simming = False
+                        hub = getattr(self.main_window, "hub", None)
+                        if hub is not None and hasattr(hub, "refresh"):
+                            hub.refresh(self.game)
                     except Exception:
                         pass
-            self.refresh()
-            try:
-                hub = getattr(self.main_window, "hub", None)
-                if hub is not None and hasattr(hub, "refresh"):
-                    hub.refresh(self.game)
-            except Exception:
-                pass
-            QMessageBox.information(
-                self, "Advanced",
-                f"Advanced {days} day{'s' if days != 1 else ''}.")
+                    if not cancelled:
+                        QMessageBox.information(
+                            self, "Advanced",
+                            f"Advanced {days} day"
+                            f"{'s' if days != 1 else ''}.")
+                self.refresh()
+
+            run_threaded(self, f"Advancing {days} day"
+                               f"{'s' if days != 1 else ''}\u2026",
+                         _worker, on_done=_on_done,
+                         status="Starting\u2026")
         except Exception as e:
             print(f"[season_flow] advance days failed: {e}")
+            self._sim_in_progress = False
+            self.refresh()
             QMessageBox.critical(self, "Error", f"Failed to advance: {e}")
 
     def _advance_to_next_game(self):
