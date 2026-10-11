@@ -948,19 +948,24 @@ class _MarketAnalyticsDialog(QDialog):
     (supply/demand guidance), buyers & sellers, position needs, trade
     predictions, salary cap analysis.
 
-    DISPLAY HONESTY NOTE: every figure, prediction, cap number, and team
-    need shown here is a SIMULATED scouting estimate — not official data
-    for the teams in the user's league. The dialog therefore carries a
-    visible disclaimer plus per-section estimate labels. Do NOT remove
-    them without replacing the backing data with real league state.
+    DISPLAY HONESTY NOTE: this dialog's backing data is now REAL league
+    state — buyers/sellers from live standings, position needs from
+    roster gap analysis, cap figures from central cap accounting,
+    trends from the real trade log (TradeDeadlineManager fixed to
+    derive get_market_intelligence() from live state). The earlier
+    "simulated estimates" wording was softened accordingly. Two honest
+    qualifiers remain: trade predictions are speculative projections
+    (every entry labeled ESTIMATE), and deadline cap space is a
+    prorated projection.
     """
 
     # Visible disclaimer text — must stay attached to any numbers section.
     DISCLAIMER_TEXT = (
-        "Scouting estimates — all figures, likelihoods, predictions, cap "
-        "numbers, and team needs shown here are simulated estimates for "
-        "league-wide context. They are NOT official league data, and team "
-        "abbreviations may not match the teams in your league."
+        "Live league data — figures, standings, cap numbers, and team "
+        "needs are drawn from your league's current state. Trade "
+        "predictions are speculative projections (each labeled "
+        "ESTIMATE), not reported deals; deadline cap space is a "
+        "prorated projection."
     )
 
     def __init__(self, parent, game):
@@ -1001,11 +1006,19 @@ class _MarketAnalyticsDialog(QDialog):
         return page
 
     @staticmethod
+    def _live_note(extra=""):
+        """Per-section label for numbers backed by real league state."""
+        text = ("Live league data — drawn from your league's current "
+                "state." + (f" {extra}" if extra else ""))
+        return f"<br><i style='color:#9ca3af'>{text}</i>"
+
+    @staticmethod
     def _estimate_note():
-        """Small per-section label so no numbers section reads as official
-        league data."""
-        return ("<br><i style='color:#9ca3af'>Estimates — simulated "
-                "figures, not official league data.</i>")
+        """Per-section label for the one genuinely speculative section
+        (trade predictions)."""
+        return ("<br><i style='color:#9ca3af'>Projections — speculative "
+                "estimates from live league state, not reported "
+                "deals.</i>")
 
     def _overview_tab(self, temp, intel):
         overall = temp.get("overall", "warm") if temp else "warm"
@@ -1019,7 +1032,8 @@ class _MarketAnalyticsDialog(QDialog):
         lines = [
             f"<h3>Market Temperature: "
             f"<span style='color:{color}'>{str(overall).upper()}</span></h3>",
-            self._estimate_note(),
+            self._live_note("Market temperature reflects deadline "
+                            "urgency."),
         ]
         for plabel, ptemp in (("Forwards", temp.get("forwards")),
                               ("Defensemen", temp.get("defensemen")),
@@ -1044,8 +1058,9 @@ class _MarketAnalyticsDialog(QDialog):
     def _buyers_sellers_tab(self, intel):
         buyers = (intel.get("buyer_teams", []) or [])[:6] if intel else []
         sellers = (intel.get("seller_teams", []) or [])[:6] if intel else []
-        lines = ["<h3 style='color:#10b981'>ACTIVE BUYERS (league-wide estimates)</h3>",
-                 self._estimate_note()]
+        lines = ["<h3 style='color:#10b981'>ACTIVE BUYERS</h3>",
+                 self._live_note("Buyers/sellers classified from current "
+                                 "standings by points.")]
         if buyers:
             for b in buyers:
                 lines.append(
@@ -1055,8 +1070,8 @@ class _MarketAnalyticsDialog(QDialog):
                     f"{b.get('assets', '')}")
         else:
             lines.append("No active buyers identified.")
-        lines.append("<br><h3 style='color:#e5484d'>ACTIVE SELLERS (league-wide estimates)</h3>")
-        lines.append(self._estimate_note())
+        lines.append("<br><h3 style='color:#e5484d'>ACTIVE SELLERS</h3>")
+        lines.append(self._live_note())
         if sellers:
             for s in sellers:
                 lines.append(
@@ -1069,8 +1084,9 @@ class _MarketAnalyticsDialog(QDialog):
 
     def _position_tab(self, intel):
         needs = (intel.get("position_needs", {}) or {}) if intel else {}
-        lines = ["<h3>POSITION NEEDS ANALYSIS (league-wide estimates)</h3>",
-                 self._estimate_note()]
+        lines = ["<h3>POSITION NEEDS ANALYSIS</h3>",
+                 self._live_note("Roster gap analysis vs a standard NHL "
+                                 "complement.")]
         for pname, key in (("Forwards", "forwards"),
                            ("Defensemen", "defensemen"),
                            ("Goalies", "goalies"),
@@ -1101,8 +1117,9 @@ class _MarketAnalyticsDialog(QDialog):
 
     def _cap_tab(self, intel):
         cap = (intel.get("salary_cap_space", {}) or {}) if intel else {}
-        lines = ["<h3>SALARY CAP ANALYSIS (illustrative estimates)</h3>",
-                 self._estimate_note()]
+        lines = ["<h3>SALARY CAP ANALYSIS</h3>",
+                 self._live_note("Cap space from central cap accounting; "
+                                 "deadline space is a prorated projection.")]
         if cap:
             for team, data in cap.items():
                 space = safe_call(lambda: int(data.get("cap_space", 0) or 0),
