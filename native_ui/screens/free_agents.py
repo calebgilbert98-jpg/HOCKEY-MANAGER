@@ -38,8 +38,9 @@ from PySide6.QtGui import QIntValidator
 
 from .base import BaseScreen
 from .contract_negotiation import offer_outcome_text
+from native_ui.safe import safe_call
 from .contracts import (
-    _safe, _fmt_money, _pid, _player_name, _pos_str, _live_cap,
+    _fmt_money, _pid, _player_name, _pos_str, _live_cap,
     _resolve_gm, _user_team, _user_league, _salary_bounds, _cap_state,
     _clause_info, _offer_extras, submit_offer, NegotiationDialog,
 )
@@ -57,8 +58,8 @@ def _fa_type(p):
         if getattr(p, "rfa", None):
             return "RFA"
         age = int(getattr(p, "age", 0) or 0)
-        pro = _safe(lambda: int(getattr(p, "years_pro", 0)
-                                or getattr(p, "seasons_played", 0) or 0), 0)
+        pro = safe_call(lambda: int(getattr(p, "years_pro", 0)
+                                or getattr(p, "seasons_played", 0) or 0), 0, context="free_agents/fa_type_years_pro")
         if age >= 27 or pro >= 7:
             return "UFA"
         return "RFA"
@@ -70,7 +71,7 @@ def _fa_pos_label(p):
     """Best-effort position label (web _web_position parity). Never raises."""
     try:
         from game_classes import position_label
-        label = _safe(lambda: position_label(p))
+        label = safe_call(lambda: position_label(p), context="free_agents/fa_pos_label")
         if label and label != "?":
             return label
     except Exception:
@@ -83,12 +84,12 @@ def _fa_pool(game):
     # database_manager (players with team_name == "Free Agent"), while
     # league.free_agents is a legacy list that stays empty on fresh careers.
     gm = _resolve_gm(game)
-    pool = _safe(lambda: list(getattr(gm, "free_agents", None) or []), None)
+    pool = safe_call(lambda: list(getattr(gm, "free_agents", None) or []), None, context="free_agents/fa_pool_gm")
     if pool:
         return pool
     league = _user_league(game)
-    return _safe(lambda: list(getattr(league, "free_agents", None) or []),
-                 []) or []
+    return safe_call(lambda: list(getattr(league, "free_agents", None) or []),
+                 [], context="free_agents/fa_pool_league") or []
 
 
 def _find_fa(game, pid):
@@ -109,19 +110,19 @@ def _fa_ask(game, p):
         from game_classes import to_100_scale
         from salary_cap_system import (base_ask_dollars, fa_market_scarcity)
         league = _user_league(game)
-        cap_sys = _safe(lambda: getattr(league, "salary_cap_system", None))
+        cap_sys = safe_call(lambda: getattr(league, "salary_cap_system", None), context="free_agents/fa_ask_cap_system")
         cap = _live_cap(game)
         ovr100 = int(to_100_scale(p.overall_rating()))
         pos = getattr(p, "primary_position", "")
         pos_name = pos.value if hasattr(pos, "value") else str(pos)
         age = int(getattr(p, "age", 27) or 27)
-        contract = _safe(lambda: getattr(p, "contract", None))
-        on_elc = bool(_safe(lambda: getattr(contract, "entry_level", False),
-                            False))
+        contract = safe_call(lambda: getattr(p, "contract", None), context="free_agents/fa_ask_contract")
+        on_elc = bool(safe_call(lambda: getattr(contract, "entry_level", False),
+                            False, context="free_agents/fa_ask_entry_level"))
         base_pct = base_ask_dollars(ovr100, age, on_elc, pos_name) / cap
-        sc = _safe(lambda: fa_market_scarcity(league, pos_name), {}) or {}
-        scarcity = float(_safe(lambda: sc.get("multiplier", 1.0), 1.0))
-        season = _safe(lambda: int(getattr(league, "season_year", 0) or 0), 0)
+        sc = safe_call(lambda: fa_market_scarcity(league, pos_name), {}, context="free_agents/fa_ask_scarcity") or {}
+        scarcity = float(safe_call(lambda: sc.get("multiplier", 1.0), 1.0, context="free_agents/fa_ask_scarcity_mult"))
+        season = safe_call(lambda: int(getattr(league, "season_year", 0) or 0), 0, context="free_agents/fa_ask_season")
         if cap_sys is not None:
             asking = cap_sys.demand_for(base_pct, ovr100, pos_name, age,
                                         season, scarcity=scarcity)
@@ -130,7 +131,7 @@ def _fa_ask(game, p):
         # Floor at the season-aware league minimum (not a hardcoded $750k).
         try:
             from salary_cap_system import league_minimum_salary as _lms2
-            _ask_floor2 = int(_safe(lambda: _lms2(season), 750_000) or 750_000)
+            _ask_floor2 = int(safe_call(lambda: _lms2(season), 750_000, context="free_agents/fa_ask_league_minimum") or 750_000)
         except Exception:
             _ask_floor2 = 750_000
         asking = max(int(asking), _ask_floor2)
@@ -143,7 +144,7 @@ def _fa_ask(game, p):
             pass
         return asking
     except Exception:
-        return _safe(lambda: int(getattr(p, "salary", 0) or 0), 0)
+        return safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0, context="free_agents/fa_ask_fallback_salary")
 
 
 def _player_ovr(p):
@@ -171,7 +172,7 @@ def _fa_row(game, p):
         "position": _fa_pos_label(p),
         "pos_short": _pos_str(p),
         "fa_type": _fa_type(p),
-        "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+        "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="free_agents/fa_row_age"),
         "overall": _player_ovr(p),
         "ask": ask,
     }
@@ -203,7 +204,7 @@ def _fa_window(game):
     Returns (ok, reason)."""
     try:
         import transaction_windows as _tw
-        d = _safe(lambda: getattr(game, "current_date", None))
+        d = safe_call(lambda: getattr(game, "current_date", None), context="free_agents/fa_window_date")
         ok, why = _tw.check_window("sign_ufa", d)
         return bool(ok), (why or "")
     except Exception:
@@ -222,7 +223,7 @@ def _fa_eligibility(p):
 
 
 def _suggested_years(p, years_max):
-    age = _safe(lambda: int(getattr(p, "age", 27) or 27), 27)
+    age = safe_call(lambda: int(getattr(p, "age", 27) or 27), 27, context="free_agents/suggested_years_age")
     return max(1, min(int(years_max), 3 if age >= 33 else 5))
 
 
@@ -266,11 +267,11 @@ def _fa_demands(game, p, years=0, aav=0):
 def _fa_analysis(game, p):
     """Market analysis for one player: value, comparables, projection."""
     try:
-        mv = int(_safe(lambda: game.calculate_player_value(p), 0) or 0)
+        mv = int(safe_call(lambda: game.calculate_player_value(p), 0, context="free_agents/analysis_market_value") or 0)
     except Exception:
         mv = 0
     ovr = _player_ovr(p)
-    age = _safe(lambda: int(getattr(p, "age", 28) or 28), 28)
+    age = safe_call(lambda: int(getattr(p, "age", 28) or 28), 28, context="free_agents/analysis_age")
     ask = _fa_ask(game, p)
     if not mv:
         mv = int(max(750_000, (ovr - 60) * 450_000
@@ -295,7 +296,7 @@ def _fa_analysis(game, p):
                 continue
             comps.append({
                 "name": _player_name(q), "overall": _player_ovr(q),
-                "age": _safe(lambda: int(getattr(q, "age", 0) or 0), 0),
+                "age": safe_call(lambda: int(getattr(q, "age", 0) or 0), 0, context="free_agents/analysis_comp_age"),
                 "ask": _fa_ask(game, q),
             })
             if len(comps) >= 5:
@@ -381,7 +382,7 @@ def _market_data(game):
 def _frenzy_active(game):
     try:
         from event_day_hubs import is_free_agency_day
-        d = _safe(lambda: getattr(game, "current_date", None))
+        d = safe_call(lambda: getattr(game, "current_date", None), context="free_agents/frenzy_date")
         return bool(is_free_agency_day(d))
     except Exception:
         return False
@@ -401,20 +402,20 @@ def _frenzy_data(game):
         except Exception:
             _tt = None
         top = sorted(pool,
-                     key=lambda p: _safe(lambda: float(p.overall_rating()),
-                                         0.0) or 0.0,
+                     key=lambda p: safe_call(lambda: float(p.overall_rating()),
+                                         0.0, context="free_agents/frenzy_sort_rating") or 0.0,
                      reverse=True)[:8]
         cards = []
         for i, p in enumerate(top, 1):
             try:
-                ovr = _safe(lambda: float(p.overall_rating()), 0.0) or 0.0
+                ovr = safe_call(lambda: float(p.overall_rating()), 0.0, context="free_agents/frenzy_card_rating") or 0.0
                 cards.append({
                     "rank": i,
                     "id": _pid(p),
                     "name": _player_name(p),
                     "position": _fa_pos_label(p),
-                    "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
-                    "tier": _safe(lambda: _tt(ovr), "") if _tt else "",
+                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="free_agents/frenzy_card_age"),
+                    "tier": safe_call(lambda: _tt(ovr), "", context="free_agents/frenzy_talent_tier") if _tt else "",
                     "season_line": _frenzy_season_line(p),
                     "ask": _fa_ask(game, p),
                     "fa_type": _fa_type(p),
@@ -423,8 +424,8 @@ def _frenzy_data(game):
                 continue
         deals = []
         for item in reversed(list(
-                _safe(lambda: getattr(game, "news_log", None) or [],
-                      []) or [])):
+                safe_call(lambda: getattr(game, "news_log", None) or [],
+                      [], context="free_agents/frenzy_news_log") or [])):
             story = item.get("story", "") if isinstance(item, dict) \
                 else str(item or "")
             low = story.lower()
@@ -439,7 +440,7 @@ def _frenzy_data(game):
             cap = _live_cap(game)
             team = _user_team(game)
             from salary_cap_system import total_cap_charge
-            charge = int(_safe(lambda: total_cap_charge(team), 0) or 0)
+            charge = int(safe_call(lambda: total_cap_charge(team), 0, context="free_agents/frenzy_cap_charge") or 0)
         except Exception:
             pass
         return {"cards": cards, "deals": deals or ["No signings yet today."],
@@ -457,8 +458,8 @@ def _frenzy_season_line(p):
         gp = 0
     if gp <= 0:
         return "No games played this season"
-    pos = _safe(lambda: getattr(getattr(p, "primary_position", ""),
-                                "value", ""), "")
+    pos = safe_call(lambda: getattr(getattr(p, "primary_position", ""),
+                                "value", ""), "", context="free_agents/season_line_pos")
     if pos.upper() in ("G", "GOALIE", "GOALTENDER"):
         w = getattr(p, "wins", 0) or 0
         sv = getattr(p, "save_percentage", 0) or 0
@@ -481,9 +482,9 @@ _STAFF_DEPTS = ("Management", "Coaching", "Development", "Scouting",
 
 def _staff_pool(game):
     league = _user_league(game)
-    pool = _safe(lambda: list(getattr(league, "free_agent_staff", None)
+    pool = safe_call(lambda: list(getattr(league, "free_agent_staff", None)
                               or getattr(league, "staff_free_agents", None)
-                              or []), []) or []
+                              or []), [], context="free_agents/staff_pool") or []
     return pool
 
 
@@ -503,23 +504,23 @@ def _staff_overall(s):
 
 
 def _staff_row(s):
-    name = _safe(lambda: getattr(s, "full_name", None)
-                 or getattr(s, "name", "?"), "?")
-    role = _safe(lambda: str(getattr(getattr(s, "role", ""), "value",
-                                     getattr(s, "role", "")) or ""), "")
-    dept = _safe(lambda: str(getattr(s, "department", "") or ""), "")
+    name = safe_call(lambda: getattr(s, "full_name", None)
+                 or getattr(s, "name", "?"), "?", context="free_agents/staff_row_name")
+    role = safe_call(lambda: str(getattr(getattr(s, "role", ""), "value",
+                                     getattr(s, "role", "")) or ""), "", context="free_agents/staff_row_role")
+    dept = safe_call(lambda: str(getattr(s, "department", "") or ""), "", context="free_agents/staff_row_dept")
     return {
         "staff": s,
-        "id": _safe(lambda: str(getattr(s, "id", "")), ""),
+        "id": safe_call(lambda: str(getattr(s, "id", "")), "", context="free_agents/staff_row_id"),
         "name": name,
         "role": role,
         "department": dept,
-        "age": _safe(lambda: int(getattr(s, "age", 0) or 0), 0),
-        "salary": _safe(lambda: int(getattr(s, "salary", 0) or 0), 0),
+        "age": safe_call(lambda: int(getattr(s, "age", 0) or 0), 0, context="free_agents/staff_row_age"),
+        "salary": safe_call(lambda: int(getattr(s, "salary", 0) or 0), 0, context="free_agents/staff_row_salary"),
         "overall": _staff_overall(s),
-        "experience": _safe(lambda: int(getattr(s, "experience", 0)
+        "experience": safe_call(lambda: int(getattr(s, "experience", 0)
                                         or getattr(s, "years_experience", 0)
-                                        or 0), 0),
+                                        or 0), 0, context="free_agents/staff_row_experience"),
     }
 
 
@@ -533,14 +534,14 @@ def _staff_offer_chance(game, s, salary):
         ask = staff_market_ask(s)
         salary_mult = salary / max(1, ask)
         try:
-            rating = to_100_scale(_safe(
+            rating = to_100_scale(safe_call(
                 lambda: (getattr(s, "overall_rating", 60)()
                          if callable(getattr(s, "overall_rating", None))
                          else getattr(s, "overall_rating", 60)) or 60,
-                60))
+                60, context="free_agents/offer_chance_rating"))
         except Exception:
             rating = 60
-        prestige = _safe(lambda: getattr(team, "prestige", 50), 50)
+        prestige = safe_call(lambda: getattr(team, "prestige", 50), 50, context="free_agents/offer_chance_prestige")
         base = (0.45 + (salary_mult - 1.0) * 1.4
                 + (prestige - 50) / 400 - (rating - 60) / 600)
         try:
@@ -593,7 +594,7 @@ def _hire_staff(game, sid, salary, years, assignment="nhl"):
             return result
         target = None
         for s in _staff_pool(game):
-            if _safe(lambda: str(getattr(s, "id", "")), "") == str(sid):
+            if safe_call(lambda: str(getattr(s, "id", "")), "", context="free_agents/hire_staff_match_id") == str(sid):
                 target = s
                 break
         if target is None:
@@ -858,8 +859,8 @@ class OfferDialog(QDialog):
     def _terms(self):
         years = self._years_slider.value()
         aav = int(round(self._aav_spin.value() * 1_000_000))
-        sb = _safe(lambda: int(
-            "".join(c for c in self._sb_edit.text() if c.isdigit()) or 0), 0)
+        sb = safe_call(lambda: int(
+            "".join(c for c in self._sb_edit.text() if c.isdigit()) or 0), 0, context="free_agents/offer_signing_bonus")
         return {"years": years, "aav": aav, "sb": sb}
 
     def _clause_kind(self):
@@ -1251,16 +1252,16 @@ class HireDialog(QDialog):
         self._debounce.start()
 
     def _salary(self):
-        return _safe(lambda: int(
+        return safe_call(lambda: int(
             "".join(c for c in self._salary_edit.text() if c.isdigit())
-            or 0), 0)
+            or 0), 0, context="free_agents/hire_salary")
 
     def _refresh_preview(self):
         game = self._game
         s = self._staff_row["staff"]
         ask = _staff_market_ask(s)
         team = _user_team(game)
-        budget = _safe(lambda: team.staff_budget_remaining(), None) \
+        budget = safe_call(lambda: team.staff_budget_remaining(), None, context="free_agents/hire_budget") \
             if team is not None else None
         conflict = _staff_conflict(game, s)
         role = self._staff_row.get("role", "")
