@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QDialog, QMessageBox, QGroupBox,
     QComboBox, QTextEdit,
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QIntValidator
 
 from .base import BaseScreen
@@ -163,12 +163,21 @@ class DraftPickDialog(QDialog):
 class MultiplayerScreen(BaseScreen):
     title = "Multiplayer"
 
+    # Worker-thread -> UI-thread marshal for the _ui_notify overlay.
+    # The hook closure emits this on whatever thread fires the notify;
+    # it is connected with Qt.QueuedConnection, so the slot runs on the
+    # UI thread -- widget touches in _on_mp_notify must NEVER run
+    # off-thread.
+    _mp_notify_signal = Signal(object)
+
     def __init__(self, game, main_window, parent=None):
         self._host = None
         self._client = None
         self._role = None
         self._welcome = None
         self._orig_notify = None
+        self._mp_hook_fn = None
+        self._mp_hook_active = False
         super().__init__(game, main_window, parent)
 
     def _build_body(self):
@@ -242,28 +251,102 @@ class MultiplayerScreen(BaseScreen):
         self._pump_timer = QTimer(self)
         self._pump_timer.timeout.connect(self._pump_mp_events)
         self._pump_timer.start(250)
-        self._install_notify_hook()
+        # Worker-thread -> UI-thread marshal for the notify overlay: the
+        # signal is emitted on whatever thread fires the notify;
+        # Qt.QueuedConnection delivers it to the UI thread, where the
+        # slot runs _on_mp_notify (the only place allowed to touch
+        # widgets). The hook itself is session-scoped: installed by
+        # _on_host/_on_join/_promote_to_host and restored by
+        # _teardown_session.
+        self._mp_notify_signal.connect(
+            self._on_mp_notify_queued, Qt.QueuedConnection)
+
+    def _is_ui_thread(self):
+        """True when called on the Qt UI thread."""
+        try:
+            from PySide6.QtCore import QThread
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            ui_thread = app.thread() if app is not None else None
+            if ui_thread is None:
+                return True
+            return QThread.currentThread() == ui_thread
+        except Exception:
+            return True
 
     def _install_notify_hook(self):
+        """Install the MP notify overlay for the current session.
+
+        Hook-stack discipline (LIFO): whatever ``game._ui_notify``
+        currently is (MainWindow's thread-marshalling dispatcher, a
+        season_flow worker-thread guard, or the GameManager base hook)
+        is saved in ``self._orig_notify`` and restored by
+        ``_teardown_session`` -- but only while our hook is still the
+        top of the stack. If a guard installed over us, teardown leaves
+        the stack alone so the guard is never clobbered; the hook stays
+        chained but deactivated until the guard pops it.
+        """
         game = self._game()
-        if game is None or self._orig_notify is not None:
+        if game is None:
+            return
+        if self._mp_hook_fn is not None:
+            # Already in the chain (e.g. under a season_flow guard that
+            # installed over us); just reactivate overlay handling.
+            self._mp_hook_active = True
             return
         try:
-            self._orig_notify = game._ui_notify
+            orig = game._ui_notify
 
             def _mp_notify(kind, *args, **kwargs):
+                active = self._mp_hook_active
+                if active:
+                    try:
+                        if self._is_ui_thread():
+                            self._on_mp_notify(kind, *args, **kwargs)
+                        else:
+                            # Worker thread: NEVER touch widgets here.
+                            # Queue to the UI thread; fire-and-forget so
+                            # a worker never deadlocks waiting on UI.
+                            try:
+                                self._mp_notify_signal.emit(
+                                    (kind, args, kwargs))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    if kind == "error":
+                        # MP owns the error dialog: it was shown exactly
+                        # once above (on the UI thread, queued if the
+                        # notify came from a worker). Forwarding would
+                        # double-dialog via the downstream dispatcher.
+                        return None
                 try:
-                    self._on_mp_notify(kind, *args, **kwargs)
-                except Exception:
-                    pass
-                try:
-                    return self._orig_notify(kind, *args, **kwargs)
+                    return orig(kind, *args, **kwargs)
                 except Exception:
                     return None
 
+            self._orig_notify = orig
+            self._mp_hook_fn = _mp_notify
+            self._mp_hook_active = True
             game._ui_notify = _mp_notify
         except Exception:
             self._orig_notify = None
+            self._mp_hook_fn = None
+            self._mp_hook_active = False
+
+    @Slot(object)
+    def _on_mp_notify_queued(self, payload):
+        """UI-thread slot: run a worker-thread notify's widget work."""
+        try:
+            kind, args, kwargs = payload
+        except Exception:
+            return
+        if not self._mp_hook_active:
+            return
+        try:
+            self._on_mp_notify(kind, *args, **kwargs)
+        except Exception:
+            pass
 
     def _game(self):
         return getattr(self, "game", None) or getattr(
@@ -324,6 +407,7 @@ class MultiplayerScreen(BaseScreen):
         except Exception as e:
             QMessageBox.warning(self, "Host", f"Failed to host: {e}")
             return
+        self._install_notify_hook()
         try:
             reservations, names = {}, {}
             for t in game.league.teams:
@@ -373,6 +457,7 @@ class MultiplayerScreen(BaseScreen):
         except Exception as e:
             QMessageBox.warning(self, "Join", f"Failed to join: {e}")
             return
+        self._install_notify_hook()
         self._client = client
         self._role = "client"
         self._welcome = welcome or {}
@@ -477,6 +562,21 @@ class MultiplayerScreen(BaseScreen):
 
     def _teardown_session(self):
         game = self._game()
+        # LIFO hook restore: only rebind when our hook is still the top
+        # of the stack. If a season_flow worker guard installed over us,
+        # leave the stack untouched (restoring now would clobber the
+        # guard); the hook stays chained but deactivated, and the guard
+        # pops back onto it when it restores.
+        hook = self._mp_hook_fn
+        if hook is not None and game is not None:
+            try:
+                if game._ui_notify is hook:
+                    game._ui_notify = self._orig_notify
+                    self._orig_notify = None
+                    self._mp_hook_fn = None
+            except Exception:
+                pass
+        self._mp_hook_active = False
         if self._host is not None:
             try:
                 self._host.stop()
@@ -561,6 +661,8 @@ class MultiplayerScreen(BaseScreen):
             pass
 
     def _on_mp_notify(self, kind, *args, **kwargs):
+        """Handle an MP notify. UI thread ONLY -- the hook closure and
+        _on_mp_notify_queued marshal worker-thread notifies here."""
         if kind == "info":
             msg = str(args[0]) if args else ""
             if msg:
@@ -730,6 +832,7 @@ class MultiplayerScreen(BaseScreen):
         except Exception as e:
             QMessageBox.warning(self, "Host", f"Failed to host: {e}")
             return
+        self._install_notify_hook()
         self._host = host
         self._role = "host"
         game.mp_host = host
