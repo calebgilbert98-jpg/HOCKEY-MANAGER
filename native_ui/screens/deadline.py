@@ -22,18 +22,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _fmt_money(v):
     try:
@@ -48,19 +42,22 @@ def _fmt_money(v):
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None),
+                     context="deadline/_resolve_gm") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="deadline/_user_team/gm")
+            or safe_call(lambda: getattr(game, "user_team", None),
+                         context="deadline/_user_team/game"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="deadline/_user_league/gm")
+            or safe_call(lambda: getattr(game, "league", None),
+                         context="deadline/_user_league/league"))
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +81,8 @@ def _deadline_date(league):
 
 
 def _today(game):
-    d = _safe(lambda: getattr(_resolve_gm(game), "current_date", None))
+    d = safe_call(lambda: getattr(_resolve_gm(game), "current_date", None),
+                  context="deadline/_today")
     try:
         return d.date() if isinstance(d, datetime) else d
     except Exception:
@@ -113,13 +111,17 @@ def _team_record(t):
 def _compute_stance(game, league, gm):
     """Buyer/seller/tweener verdict + positional needs + cap space.
     Mirrors TradeDeadlineCenter._compute_stance on real data."""
-    user = _safe(lambda: gm.user_team) or _safe(lambda: game.user_team)
+    user = (safe_call(lambda: gm.user_team, context="deadline/stance/user_team")
+            or safe_call(lambda: game.user_team,
+                         context="deadline/stance/game_user_team"))
     if user is None or league is None:
         return None
-    teams = [t for t in (_safe(lambda: list(league.teams), []) or [])
+    teams = [t for t in (safe_call(lambda: list(league.teams), [],
+                                   context="deadline/stance/teams") or [])
              if hasattr(t, "wins") and hasattr(t, "team_name")]
     ordered = sorted(teams, key=_team_points, reverse=True)
-    uname = _safe(lambda: user.team_name, "")
+    uname = safe_call(lambda: user.team_name, "",
+                      context="deadline/stance/team_name")
     rank = None
     for i, t in enumerate(ordered):
         if t is user or getattr(t, "team_name", None) == uname:
@@ -185,7 +187,8 @@ def _market(game, league, gm):
     """Buyers/sellers from real standings thirds + impact players from
     the real trade market (media_rumors.get_impact_players) + recent
     deadline deals from trade history."""
-    teams = [t for t in (_safe(lambda: list(league.teams), []) or [])
+    teams = [t for t in (safe_call(lambda: list(league.teams), [],
+                                   context="deadline/market/teams") or [])
              if hasattr(t, "wins") and hasattr(t, "team_name")]
     ordered = sorted(teams, key=_team_points, reverse=True)
     n = len(ordered)
@@ -224,11 +227,15 @@ def _market(game, league, gm):
 
     recent_deals = []
     try:
-        hist = _safe(lambda: list(getattr(gm, "trade_history", None)
-                                   or []), []) or []
+        hist = (safe_call(lambda: list(getattr(gm, "trade_history", None)
+                                       or []), [],
+                          context="deadline/market/trade_history")
+                or [])
         for ct in reversed(hist[-8:]):
-            s = _safe(lambda: str(getattr(ct, "summary", "") or ""), "")
-            d = _safe(lambda: str(getattr(ct, "date", "") or ""), "")
+            s = safe_call(lambda: str(getattr(ct, "summary", "") or ""), "",
+                          context="deadline/market/deal_summary")
+            d = safe_call(lambda: str(getattr(ct, "date", "") or ""), "",
+                          context="deadline/market/deal_date")
             if s:
                 recent_deals.append({"summary": s, "date": d})
     except Exception:
@@ -511,8 +518,9 @@ class DeadlineScreen(BaseScreen):
             bits.append(f"Cap space: {_fmt_money(cap)}")
         self._needs_lbl.setText("<br>".join(bits))
 
-        declared = (_safe(lambda: getattr(
-            _user_league(self.game), "_web_deadline_stance", ""), "")
+        declared = (safe_call(lambda: getattr(
+            _user_league(self.game), "_web_deadline_stance", ""), "",
+            context="deadline/stance/declared")
                     or "")
         self._declared = str(declared).strip().lower()
         for val, b in self._stance_btns.items():
