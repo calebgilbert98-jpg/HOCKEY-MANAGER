@@ -2993,6 +2993,8 @@ class MainWindow(QMainWindow):
         Hub tiles cover the daily screens; this menu makes the full
         feature set (draft central, waivers, offer sheets, systems...)
         discoverable without turning the hub into a maze of tiles.
+        Pure refactor -- each top-level menu is built by its own helper
+        below. Behavior is identical.
         """
         mb = self.menuBar()
         mb.setObjectName("nav-menubar")
@@ -3006,8 +3008,16 @@ class MainWindow(QMainWindow):
             "QMenu::item { padding: 6px 26px 6px 14px; }"
             "QMenu::item:selected { background: rgba(59,130,246,0.30); }"
         )
-        mi = self._menu_nav_item
+        self._setup_menu_nav_club(mb)
+        self._setup_menu_nav_league(mb)
+        self._setup_menu_nav_transactions(mb)
+        self._setup_menu_nav_front_office(mb)
+        self._setup_menu_nav_systems(mb)
+        self._setup_menu_nav_game(mb)
 
+    def _setup_menu_nav_club(self, mb):
+        """Club menu: roster, lines, team, staff, and player tooling."""
+        mi = self._menu_nav_item
         club = mb.addMenu("&Club")
         mi(club, "Roster", lambda _c=False: self.show_screen("roster"))
         mi(club, "Lines", lambda _c=False: self.show_screen("lines"))
@@ -3031,6 +3041,9 @@ class MainWindow(QMainWindow):
         mi(club, "Jersey Numbers",
            lambda _c=False: self.show_screen("jersey_numbers"))
 
+    def _setup_menu_nav_league(self, mb):
+        """League menu: standings, schedule, playoffs, history, media."""
+        mi = self._menu_nav_item
         league = mb.addMenu("&League")
         mi(league, "Standings", lambda _c=False: self.show_screen("standings"))
         mi(league, "Team Stats", lambda _c=False: self.show_screen("stats"))
@@ -3050,6 +3063,9 @@ class MainWindow(QMainWindow):
         mi(league, "Shot Chart Viewer",
            lambda _c=False: self.show_screen("shot_chart_viewer"))
 
+    def _setup_menu_nav_transactions(self, mb):
+        """Transactions menu: trades, waivers, free agents, draft."""
+        mi = self._menu_nav_item
         trans = mb.addMenu("&Transactions")
         mi(trans, "Trade Center", lambda _c=False: self.show_screen("trades"))
         mi(trans, "Trade Block",
@@ -3078,6 +3094,9 @@ class MainWindow(QMainWindow):
         mi(trans, "Fantasy Draft",
            lambda _c=False: self.show_screen("fantasy_draft"))
 
+    def _setup_menu_nav_front_office(self, mb):
+        """Front Office menu: GM hub, analytics, finances, inbox."""
+        mi = self._menu_nav_item
         office = mb.addMenu("Front &Office")
         mi(office, "GM Options Hub",
            lambda _c=False: self.show_screen("gm_options"))
@@ -3098,6 +3117,9 @@ class MainWindow(QMainWindow):
         mi(office, "Compare Players",
            lambda _c=False: self.show_screen("compare"))
 
+    def _setup_menu_nav_systems(self, mb):
+        """Systems menu: the six tactical system screens."""
+        mi = self._menu_nav_item
         systems = mb.addMenu("S&ystems")
         mi(systems, "Clutch Systems",
            lambda _c=False: self.show_screen("systems_clutch"))
@@ -3112,6 +3134,9 @@ class MainWindow(QMainWindow):
         mi(systems, "Condition Systems",
            lambda _c=False: self.show_screen("systems_condition"))
 
+    def _setup_menu_nav_game(self, mb):
+        """Game menu: watch/replay, profiles, settings, save, setup."""
+        mi = self._menu_nav_item
         game = mb.addMenu("&Game")
         mi(game, "Watch Live", lambda _c=False: self.show_screen("watch"))
         mi(game, "Replay Center", lambda _c=False: self.show_screen("replay"))
@@ -3130,7 +3155,6 @@ class MainWindow(QMainWindow):
         sc = QAction("Keyboard Shortcuts", self)
         sc.triggered.connect(lambda _c=False: self.show_shortcuts_dialog())
         game.addAction(sc)
-
     def _setup_keyboard_shortcuts(self):
         """Wire up app-wide keyboard shortcuts via QShortcut."""
         if getattr(self, "_shortcuts_bound", False):
