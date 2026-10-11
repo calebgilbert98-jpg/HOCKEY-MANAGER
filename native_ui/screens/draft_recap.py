@@ -24,20 +24,16 @@ from PySide6.QtCore import Qt
 
 from .base import BaseScreen
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None),
+                     context="draft_recap/get_game_manager") or game
 
 
 def _league(game):
-    return _safe(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league, context="draft_recap/load_league")
 
 
 def _draft_label(key):
@@ -220,8 +216,9 @@ class DraftRecapScreen(BaseScreen):
         except Exception:
             pass
         gm = _gm(self.game)
-        return str(_safe(lambda: getattr(
-            getattr(gm, "user_team", None), "team_name", ""), "") or "")
+        return str(safe_call(lambda: getattr(
+            getattr(gm, "user_team", None), "team_name", ""), "",
+            context="draft_recap/get_user_team_name") or "")
 
     def _render(self):
         self._clear_content()
