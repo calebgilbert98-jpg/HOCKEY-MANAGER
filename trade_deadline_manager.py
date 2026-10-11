@@ -723,164 +723,540 @@ class TradeDeadlineManager:
             'deadline_trends': self._analyze_deadline_trends()
         }
     
-    def _identify_buyer_teams(self) -> List[Dict[str, Any]]:
-        """Identify teams likely to be buyers at the deadline"""
-        buyer_teams = []
-        
-        # Mock analysis based on team strategies
-        potential_buyers = ['TOR', 'BOS', 'NYR', 'TBL', 'FLA', 'COL', 'EDM', 'VGK', 'DAL', 'CAR']
-        
-        for team in potential_buyers:
-            if self.team_strategies.get(team, 'neutral') == 'buyer':
-                buyer_info = {
-                    'team': team,
-                    'likelihood': random.choice(['High', 'Medium', 'Low']),
-                    'cap_space': f"${random.randint(2, 15)}M",
-                    'primary_need': random.choice(['Forward', 'Defenseman', 'Goalie', 'Depth']),
-                    'urgency': random.choice(['Critical', 'High', 'Medium']),
-                    'assets': random.choice(['Rich in picks', 'Top prospects', 'Salary flexibility']),
-                    'recent_activity': random.choice(['Very Active', 'Moderate', 'Quiet'])
-                }
-                buyer_teams.append(buyer_info)
-        
-        return buyer_teams
-    
-    def _identify_seller_teams(self) -> List[Dict[str, Any]]:
-        """Identify teams likely to be sellers at the deadline"""
-        seller_teams = []
-        
-        # Mock analysis
-        potential_sellers = ['ARI', 'CHI', 'ANA', 'SJS', 'MTL', 'OTT', 'CBJ', 'BUF', 'DET', 'SEA']
-        
-        for team in potential_sellers:
-            if self.team_strategies.get(team, 'neutral') == 'seller':
-                seller_info = {
-                    'team': team,
-                    'likelihood': random.choice(['High', 'Medium', 'Low']),
-                    'notable_assets': random.choice([
-                        'Veteran forward (rental)',
-                        'Top-4 defenseman',
-                        'Backup goaltender',
-                        'Expiring contracts'
-                    ]),
-                    'asking_price': random.choice(['High', 'Reasonable', 'Flexible']),
-                    'timeline': random.choice(['Immediate', 'Before deadline', 'Best offer']),
-                    'rebuild_focus': random.choice(['Picks', 'Prospects', 'Youth'])
-                }
-                seller_teams.append(seller_info)
-        
-        return seller_teams
-    
-    def _analyze_position_needs(self) -> Dict[str, List[str]]:
-        """Analyze position needs across the league"""
+    # ------------------------------------------------------------------
+    # Market intelligence helpers — REV-F3 root-cause fix (Oct 11 2026).
+    # Every figure below is derived from LIVE league state:
+    #   - buyer/seller classification from real standings (points),
+    #     never hardcoded team abbreviations;
+    #   - cap figures from the real central cap accounting
+    #     (Team.cap_space), never random.randint;
+    #   - positional needs from real roster gap analysis;
+    #   - timing patterns from the real trade activity log.
+    # Trade predictions are grounded in real buyer-need / seller-asset
+    # matchups and are explicitly labeled ESTIMATE — they are
+    # speculation, not reported deals.
+    # Return shapes are unchanged so native_ui/screens/deadline.py's
+    # _MarketAnalyticsDialog keeps working.
+    # ------------------------------------------------------------------
+
+    def _intel_teams(self) -> List[Any]:
+        """League team objects for intelligence. [] when unavailable."""
+        try:
+            league = getattr(self.game_manager, "league", None)
+            teams = getattr(league, "teams", None) or []
+            return [t for t in teams if t is not None]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _intel_team_name(team) -> str:
+        try:
+            return str(getattr(team, "team_name", "") or "") or "Unknown"
+        except Exception:
+            return "Unknown"
+
+    def _intel_points(self, team) -> int:
+        """Live standings first (canonical sim state), team attr fallback."""
+        try:
+            league = getattr(self.game_manager, "league", None)
+            entry = (getattr(league, "standings", None) or {}).get(
+                self._intel_team_name(team))
+            if isinstance(entry, dict):
+                for key in ("Points", "points", "PTS", "pts"):
+                    val = entry.get(key)
+                    if isinstance(val, (int, float)):
+                        return int(val)
+        except Exception:
+            pass
+        try:
+            return int(getattr(team, "points", 0) or 0)
+        except Exception:
+            return 0
+
+    def _intel_wins(self, team) -> int:
+        try:
+            league = getattr(self.game_manager, "league", None)
+            entry = (getattr(league, "standings", None) or {}).get(
+                self._intel_team_name(team))
+            if isinstance(entry, dict):
+                for key in ("W", "w", "Wins", "wins"):
+                    val = entry.get(key)
+                    if isinstance(val, (int, float)):
+                        return int(val)
+        except Exception:
+            pass
+        try:
+            return int(getattr(team, "wins", 0) or 0)
+        except Exception:
+            return 0
+
+    def _intel_games_played(self, team) -> int:
+        try:
+            return int(getattr(team, "games_played", 0) or 0)
+        except Exception:
+            return 0
+
+    def _intel_cap_space(self, team) -> int:
+        """Real cap space via the central cap accounting (Team.cap_space)."""
+        try:
+            return int(getattr(team, "cap_space", 0) or 0)
+        except Exception:
+            return 0
+
+    def _standings_order(self) -> List[Any]:
+        """Teams sorted best-first by real points, wins as tiebreak."""
+        teams = self._intel_teams()
+        try:
+            return sorted(
+                teams,
+                key=lambda t: (self._intel_points(t), self._intel_wins(t)),
+                reverse=True)
+        except Exception:
+            return teams
+
+    @staticmethod
+    def _roster_counts(team) -> Dict[str, int]:
+        """NHL-roster head counts by position group. Never raises."""
+        counts = {"C": 0, "W": 0, "F": 0, "D": 0, "G": 0}
+        try:
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    pos = getattr(getattr(p, "primary_position", None),
+                                  "value", "")
+                    pos = str(pos or "").upper()
+                except Exception:
+                    continue
+                if pos == "C":
+                    counts["C"] += 1
+                    counts["F"] += 1
+                elif pos in ("LW", "RW"):
+                    counts["W"] += 1
+                    counts["F"] += 1
+                elif pos in ("LD", "RD", "D"):
+                    counts["D"] += 1
+                elif pos == "G":
+                    counts["G"] += 1
+        except Exception:
+            pass
+        return counts
+
+    def _team_needs(self, team) -> Dict[str, int]:
+        """Positional shortfalls vs a standard NHL complement (12F/6D/2G)."""
+        counts = self._roster_counts(team)
         return {
-            'forwards': ['TOR', 'NYR', 'COL', 'EDM', 'VGK', 'DAL'],
-            'defensemen': ['BOS', 'TBL', 'FLA', 'CAR', 'WPG', 'MIN'],
-            'goalies': ['TOR', 'EDM', 'COL', 'NJD', 'WSH'],
-            'depth': ['NYR', 'BOS', 'FLA', 'VGK', 'SEA'],
-            'rental_forwards': ['TBL', 'CAR', 'DAL', 'VGK', 'MIN'],
-            'veteran_presence': ['COL', 'EDM', 'TOR', 'BOS', 'NYR']
-        }
-    
-    def _get_salary_cap_analysis(self) -> Dict[str, Dict]:
-        """Analyze salary cap situations across teams"""
-        cap_analysis = {}
-        
-        # Mock salary cap data for key teams
-        teams = ['TOR', 'BOS', 'NYR', 'TBL', 'FLA', 'COL', 'EDM', 'VGK', 'DAL', 'CAR']
-        
-        for team in teams:
-            cap_analysis[team] = {
-                'current_cap_hit': random.randint(96000000, 104000000),
-                'cap_space': random.randint(500000, 15000000),
-                'deadline_space': random.randint(2000000, 25000000),  # With LTIR/retention
-                'flexibility': random.choice(['High', 'Medium', 'Low', 'None']),
-                'retention_slots': random.randint(0, 3),
-                'ltir_available': random.choice([True, False])
-            }
-        
-        return cap_analysis
-    
-    def _generate_trade_predictions(self) -> List[Dict[str, Any]]:
-        """Generate trade predictions based on market analysis"""
-        predictions = []
-        
-        # High-likelihood trades
-        high_likelihood = [
-            {
-                'likelihood': 85,
-                'description': "Veteran forward rental to playoff contender",
-                'teams_involved': ['TOR', 'ARI'],
-                'assets': "2nd round pick + prospect",
-                'reasoning': "TOR needs scoring depth, ARI has rental forwards"
-            },
-            {
-                'likelihood': 78,
-                'description': "Top-4 defenseman to Cup contender",
-                'teams_involved': ['BOS', 'CHI'],
-                'assets': "1st round pick + young player",
-                'reasoning': "BOS needs defensive help, CHI rebuilding"
-            }
-        ]
-        
-        # Medium-likelihood trades
-        medium_likelihood = [
-            {
-                'likelihood': 65,
-                'description': "Goaltender depth move",
-                'teams_involved': ['EDM', 'ANA'],
-                'assets': "3rd round pick",
-                'reasoning': "EDM goalie uncertainty, ANA has depth"
-            },
-            {
-                'likelihood': 58,
-                'description': "Salary dump with sweetener",
-                'teams_involved': ['VGK', 'OTT'],
-                'assets': "Player + 2nd round pick",
-                'reasoning': "VGK cap issues, OTT has space"
-            }
-        ]
-        
-        # Surprise possibilities
-        surprise_trades = [
-            {
-                'likelihood': 25,
-                'description': "Blockbuster multi-player deal",
-                'teams_involved': ['NYR', 'CAR'],
-                'assets': "Multiple players and picks",
-                'reasoning': "Both teams addressing major needs"
-            }
-        ]
-        
-        predictions.extend(high_likelihood)
-        predictions.extend(medium_likelihood)
-        predictions.extend(surprise_trades)
-        
-        return predictions
-    
-    def _analyze_deadline_trends(self) -> Dict[str, Any]:
-        """Analyze current deadline trends and patterns"""
-        return {
-            'most_active_position': 'Forwards',
-            'average_trade_size': 2.3,
-            'rental_vs_futures': {
-                'rental': 65,
-                'futures': 35
-            },
-            'price_trends': {
-                'rentals': 'Increasing',
-                'defensemen': 'Premium pricing',
-                'goalies': 'Stable',
-                'picks': 'High demand'
-            },
-            'timing_patterns': {
-                'early_movers': ['ARI', 'SJS', 'CHI'],
-                'deadline_day_active': ['TOR', 'BOS', 'NYR'],
-                'last_minute': ['TBL', 'VGK', 'COL']
-            },
-            'market_sentiment': 'Aggressive buying by contenders'
+            "Forward": max(0, 12 - counts["F"]),
+            "Defense": max(0, 6 - counts["D"]),
+            "Goalie": max(0, 2 - counts["G"]),
         }
 
+    def _team_primary_need(self, team) -> str:
+        needs = self._team_needs(team)
+        if not any(needs.values()):
+            return "Depth"
+        # Tie-break favors the scarcest real-world commodity first.
+        best = max(needs.values())
+        for key in ("Forward", "Defense", "Goalie"):
+            if needs[key] == best:
+                return key
+        return "Depth"
+
+    @staticmethod
+    def _fmt_cap_m(dollars) -> str:
+        """'$4.3M' style cap figure for UI display."""
+        try:
+            dollars = int(dollars or 0)
+        except Exception:
+            dollars = 0
+        sign = "-" if dollars < 0 else ""
+        return f"{sign}${abs(dollars) / 1_000_000:.1f}M"
+
+    def _team_trade_counts(self) -> Dict[str, int]:
+        """Real deadline-season trade counts per team from the activity log."""
+        counts: Dict[str, int] = {}
+        try:
+            for entry in (self.trade_activity_log or []):
+                for name in (entry.get("teams_involved", None) or []):
+                    if name:
+                        name = str(name)
+                        counts[name] = counts.get(name, 0) + 1
+        except Exception:
+            pass
+        return counts
+
+    def _rental_assets(self, team, need_group=None) -> List[Dict[str, Any]]:
+        """Expiring-contract players (years_remaining == 0), best-first.
+
+        need_group: 'Forward' | 'Defense' | 'Goalie' | None (any group).
+        These are the real rental chips a seller can offer.
+        """
+        want = {"Forward": "F", "Defense": "D", "Goalie": "G"}.get(need_group)
+        assets: List[Dict[str, Any]] = []
+        try:
+            roster = getattr(team, "roster", None) or []
+        except Exception:
+            roster = []
+        for p in roster:
+            try:
+                contract = getattr(p, "contract", None)
+                years = int(getattr(contract, "years_remaining", 1) or 0)
+                if years != 0:
+                    continue
+                pos = str(getattr(getattr(p, "primary_position", None),
+                                  "value", "") or "").upper()
+                group = ("F" if pos in ("C", "LW", "RW")
+                         else "D" if pos in ("LD", "RD", "D")
+                         else "G" if pos == "G" else "?")
+                if want and group != want:
+                    continue
+                full_name = getattr(p, "full_name", None)
+                if callable(full_name):
+                    name = str(full_name())
+                else:
+                    name = (str(getattr(p, "first_name", "") or "") + " " +
+                            str(getattr(p, "last_name", "") or "")).strip() or "?"
+                ovr = int(getattr(p, "overall_rating", 0) or 0)
+                assets.append({"name": name, "pos": pos or "?",
+                               "ovr": ovr, "group": group})
+            except Exception:
+                continue
+        assets.sort(key=lambda a: -a["ovr"])
+        return assets
+
+    def _seller_notable_assets(self, team) -> str:
+        rentals = self._rental_assets(team)
+        if rentals:
+            top = rentals[0]
+            return (f"Rental: {top['name']} ({top['pos']}, {top['ovr']} OVR)"
+                    " — expiring contract")
+        try:
+            n_prospects = len(getattr(team, "prospects", None) or [])
+        except Exception:
+            n_prospects = 0
+        if n_prospects:
+            return "Prospect/pick inventory"
+        return "Expiring contracts"
+
+    def _rebuild_focus(self, team) -> str:
+        try:
+            n_prospects = len(getattr(team, "prospects", None) or [])
+        except Exception:
+            n_prospects = 0
+        if n_prospects < 6:
+            return "Prospects"
+        if self._intel_cap_space(team) < 2_000_000:
+            return "Picks"
+        return "Youth"
+
+    def _buyer_assets(self, team, space: int) -> str:
+        try:
+            n_prospects = len(getattr(team, "prospects", None) or [])
+        except Exception:
+            n_prospects = 0
+        if space >= 8_000_000:
+            return "Salary flexibility"
+        if n_prospects >= 8:
+            return "Rich in picks"
+        return "Top prospects"
+
+    def _intel_retention_used(self, team) -> int:
+        """Active retained-salary transactions (NHL max is 3 per club)."""
+        try:
+            ledger = getattr(team, "retained_salary", None) or []
+            used = 0
+            for e in ledger:
+                seasons = (e.get("seasons_remaining", 0)
+                           if isinstance(e, dict) else 0)
+                if int(seasons or 0) > 0:
+                    used += 1
+            return used
+        except Exception:
+            return 0
+
+    def _intel_ltir(self, team) -> bool:
+        """True when any roster player carries an LTIR designation."""
+        try:
+            for p in (getattr(team, "roster", None) or []):
+                if str(getattr(p, "ir_status", "None") or "None") == "LTIR":
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _buyer_seller_split(self) -> Tuple[List[Any], List[Any]]:
+        """Top third of the real standings = buyers; bottom third = sellers.
+
+        Sellers are ordered worst-first so the most desperate club leads.
+        """
+        order = self._standings_order()
+        if not order:
+            return [], []
+        n = max(2, len(order) // 3)
+        buyers = order[:n]
+        sellers = list(reversed(order[-n:]))
+        return buyers, sellers
+
+    def _identify_buyer_teams(self) -> List[Dict[str, Any]]:
+        """Buyers = top third of the real standings by points."""
+        buyers, _ = self._buyer_seller_split()
+        if not buyers:
+            return []
+        n = len(buyers)
+        hot = max(2, n // 3)
+        trade_counts = self._team_trade_counts()
+        out = []
+        for rank, team in enumerate(buyers, start=1):
+            name = self._intel_team_name(team)
+            space = self._intel_cap_space(team)
+            recent = trade_counts.get(name, 0)
+            out.append({
+                'team': name,
+                'likelihood': ('High' if rank <= hot
+                               else 'Medium' if rank <= max(hot + 1, 2 * n // 3)
+                               else 'Low'),
+                'cap_space': self._fmt_cap_m(space),
+                'primary_need': self._team_primary_need(team),
+                'urgency': 'High' if rank <= hot else 'Medium',
+                'assets': self._buyer_assets(team, space),
+                'recent_activity': ('Very Active' if recent >= 2
+                                    else 'Moderate' if recent == 1
+                                    else 'Quiet'),
+            })
+        return out
+
+    def _identify_seller_teams(self) -> List[Dict[str, Any]]:
+        """Sellers = bottom third of the real standings by points."""
+        _, sellers = self._buyer_seller_split()
+        if not sellers:
+            return []
+        n = len(sellers)
+        desperate = max(2, n // 3)
+        out = []
+        for idx, team in enumerate(sellers):
+            out.append({
+                'team': self._intel_team_name(team),
+                'likelihood': ('High' if idx < desperate
+                               else 'Medium' if idx < max(desperate + 1,
+                                                          2 * n // 3)
+                               else 'Low'),
+                'notable_assets': self._seller_notable_assets(team),
+                'asking_price': 'Flexible' if idx < desperate else 'Reasonable',
+                'timeline': ('Immediate' if idx < max(1, n // 4)
+                             else 'Before deadline'),
+                'rebuild_focus': self._rebuild_focus(team),
+            })
+        return out
+
+    def _analyze_position_needs(self) -> Dict[str, List[str]]:
+        """Positional needs from real roster gap analysis (league-wide)."""
+        needs = {"forwards": [], "defensemen": [], "goalies": [],
+                 "depth": [], "rental_forwards": [],
+                 "veteran_presence": []}
+        scored = []
+        rental_f = []
+        for team in self._intel_teams():
+            name = self._intel_team_name(team)
+            gaps = self._team_needs(team)
+            scored.append((name, gaps))
+            f_rentals = self._rental_assets(team, "Forward")
+            if f_rentals:
+                rental_f.append((name, len(f_rentals)))
+        for key, gkey in (("forwards", "Forward"), ("defensemen", "Defense"),
+                          ("goalies", "Goalie")):
+            ranked = sorted((s for s in scored if s[1][gkey] > 0),
+                            key=lambda s: -s[1][gkey])
+            needs[key] = [name for name, _ in ranked[:6]]
+        # Depth: playoff-race clubs with no glaring positional hole still
+        # shop for depth pieces.
+        buyers = {b["team"] for b in self._identify_buyer_teams()}
+        needs["depth"] = [name for name, gaps in scored
+                          if name in buyers and not any(gaps.values())][:6]
+        # Rental forwards: clubs holding the most expiring forward assets.
+        rental_f.sort(key=lambda s: -s[1])
+        needs["rental_forwards"] = [name for name, _ in rental_f[:6]]
+        # Veteran presence: contenders with a young room (<3 skaters 32+).
+        young_rooms = []
+        for team in self._intel_teams():
+            name = self._intel_team_name(team)
+            if name not in buyers:
+                continue
+            vets = 0
+            try:
+                for p in (getattr(team, "roster", None) or []):
+                    try:
+                        if int(getattr(p, "age", 0) or 0) >= 32:
+                            vets += 1
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            if vets < 3:
+                young_rooms.append((name, vets))
+        young_rooms.sort(key=lambda s: s[1])
+        needs["veteran_presence"] = [name for name, _ in young_rooms[:4]]
+        return needs
+
+    def _get_salary_cap_analysis(self) -> Dict[str, Dict]:
+        """Real cap accounting for every league team.
+
+        cap_space comes from Team.cap_space (the central cap system:
+        waiver shed, retention, burial, dead cap). deadline_space is the
+        standard accrued-space estimate: cap room prorated over the
+        games remaining on an 82-game schedule.
+        """
+        analysis = {}
+        for team in self._intel_teams():
+            name = self._intel_team_name(team)
+            try:
+                hit = int(getattr(team, "payroll", 0) or 0)
+            except Exception:
+                hit = 0
+            space = self._intel_cap_space(team)
+            gp = self._intel_games_played(team)
+            remaining = max(1, 82 - gp)
+            dspace = int(space * 82 / remaining) if space > 0 else space
+            analysis[name] = {
+                'current_cap_hit': hit,
+                'cap_space': space,
+                'deadline_space': dspace,
+                'flexibility': ('High' if space >= 10_000_000
+                                else 'Medium' if space >= 4_000_000
+                                else 'Low' if space > 0 else 'None'),
+                'retention_slots': self._intel_retention_used(team),
+                'ltir_available': self._intel_ltir(team),
+            }
+        return analysis
+
+    def _generate_trade_predictions(self) -> List[Dict[str, Any]]:
+        """Predictions grounded in real buyer-need / seller-asset matchups.
+
+        Each pairs a top buyer's biggest positional shortfall with a
+        seller's actual expiring-contract asset at that position. Every
+        entry is explicitly marked ESTIMATE — this is speculation from
+        live state, not reported trade talks.
+        """
+        buyers, sellers = self._buyer_seller_split()
+        if len(buyers) < 1 or len(sellers) < 1:
+            return []
+        predictions = []
+        used = set()
+        for bi, bteam in enumerate(buyers[:5]):
+            bname = self._intel_team_name(bteam)
+            gaps = self._team_needs(bteam)
+            need = (max(gaps, key=gaps.get) if any(gaps.values())
+                    else "Depth")
+            for srank, steam in enumerate(sellers[:5]):
+                sname = self._intel_team_name(steam)
+                if (bname, sname) in used:
+                    continue
+                assets = self._rental_assets(steam, need if need != "Depth"
+                                             else None)
+                if not assets and need != "Depth":
+                    assets = self._rental_assets(steam)
+                if not assets:
+                    continue
+                used.add((bname, sname))
+                top = assets[0]
+                need_strength = gaps.get(need, 0) if need != "Depth" else 1
+                like = min(85, 45 + need_strength * 4
+                           + max(0, 4 - bi) * 3 + max(0, 3 - srank) * 2)
+                predictions.append({
+                    'likelihood': int(like),
+                    'description': (
+                        f"ESTIMATE — {bname} target {need.lower()} rental "
+                        f"from {sname}"),
+                    'teams_involved': [bname, sname],
+                    'assets': (f"{top['name']} ({top['pos']}, {top['ovr']} OVR)"
+                               f"; {sname} asking price: "
+                               f"{'flexible' if srank < 2 else 'reasonable'}"),
+                    'reasoning': (
+                        f"Estimate from live standings: {bname} ranks "
+                        f"#{bi + 1} by points with a {need.lower()} "
+                        f"shortfall of {need_strength if need != 'Depth' else 'none — depth add'}; "
+                        f"{sname} sits in the bottom third and holds "
+                        f"expiring asset {top['name']}."),
+                })
+                break  # one prediction per buyer
+        return predictions
+
+    def _analyze_deadline_trends(self) -> Dict[str, Any]:
+        """Deadline trends derived from live league state and the real
+        trade activity log (no fabricated team lists, no random figures)."""
+        needs = self._analyze_position_needs()
+        buyers = self._identify_buyer_teams()
+        sellers = self._identify_seller_teams()
+        n_b, n_s = len(buyers), len(sellers)
+
+        pos_counts = {k: len(needs[k]) for k in ("forwards", "defensemen",
+                                                 "goalies")}
+        most_key = (max(pos_counts, key=pos_counts.get)
+                    if any(pos_counts.values()) else "forwards")
+        most_label = {"forwards": "Forwards", "defensemen": "Defensemen",
+                      "goalies": "Goalies"}[most_key]
+
+        # Average deal size from trades actually logged this season.
+        avg_size = "--"
+        try:
+            sizes = [int(e.get("players_count", 0) or 0)
+                     for e in (self.trade_activity_log or [])
+                     if int(e.get("players_count", 0) or 0) > 0]
+            if sizes:
+                avg_size = round(sum(sizes) / len(sizes), 1)
+        except Exception:
+            pass
+
+        # Rental share: expiring vet assets vs futures inventory across
+        # the league's sellers.
+        rentals = futures = 0
+        for team in self._intel_teams():
+            try:
+                expiring = len(self._rental_assets(team))
+                prospects = len(getattr(team, "prospects", None) or [])
+            except Exception:
+                expiring, prospects = 0, 0
+            rentals += expiring
+            futures += prospects
+        total_chips = rentals + futures
+        rental_pct = (int(round(100 * rentals / total_chips))
+                      if total_chips else 0)
+
+        # Timing patterns from the real activity log: sellers that already
+        # moved pieces are early movers; buyers already dealing are active.
+        trade_counts = self._team_trade_counts()
+        buyer_names = {b["team"] for b in buyers}
+        seller_names = {s["team"] for s in sellers}
+        early_movers = sorted(
+            (n for n in seller_names if trade_counts.get(n, 0) > 0),
+            key=lambda n: -trade_counts[n])[:4]
+        deadline_active = sorted(
+            (n for n in buyer_names if trade_counts.get(n, 0) > 0),
+            key=lambda n: -trade_counts[n])[:4]
+
+        sentiment = ("Aggressive buying by contenders" if n_b > n_s
+                     else "Seller's market — asking prices soft" if n_s > n_b
+                     else "Balanced market")
+
+        return {
+            'most_active_position': most_label,
+            'average_trade_size': avg_size,
+            'rental_vs_futures': {
+                'rental': rental_pct,
+                'futures': 100 - rental_pct
+            },
+            'price_trends': {
+                'rentals': 'Increasing' if n_b >= n_s else 'Softening',
+                'defensemen': ('Premium pricing'
+                               if len(needs['defensemen']) > 3 else 'Stable'),
+                'goalies': ('Heating up' if len(needs['goalies']) > 2
+                            else 'Stable'),
+                'picks': 'High demand' if n_s > n_b else 'Stable'
+            },
+            'timing_patterns': {
+                'early_movers': early_movers,
+                'deadline_day_active': deadline_active,
+                'last_minute': [],
+            },
+            'market_sentiment': sentiment
+        }
 
 def get_deadline_manager(game_manager=None) -> TradeDeadlineManager:
     """Get singleton instance of trade deadline manager"""
