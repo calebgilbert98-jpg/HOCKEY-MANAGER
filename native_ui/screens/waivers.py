@@ -27,24 +27,20 @@ from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
 
+from native_ui.safe import safe_call
+
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _pid(p):
-    return str(_safe(lambda: getattr(p, "id", id(p)), ""))
+    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context="waivers/get_player_id"))
 
 
 def _player_name(p):
-    return _safe(lambda: getattr(p, "full_name", "?"), "?")
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context="waivers/get_player_name")
 
 
 _POSITION_ABBR = {
@@ -55,7 +51,7 @@ _POSITION_ABBR = {
 
 
 def _pos_str(p):
-    pos = _safe(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="waivers/get_position")
     raw = getattr(pos, "value", pos)
     try:
         s = str(raw or "")
@@ -75,7 +71,7 @@ def _player_ovr(p):
                 return int(v)
     except Exception:
         pass
-    return _safe(lambda: int(getattr(p, "overall", 0) or 0), 0)
+    return safe_call(lambda: int(getattr(p, "overall", 0) or 0), 0, context="waivers/get_overall")
 
 
 def _fmt_money(v):
@@ -101,19 +97,19 @@ def _deadline_str(days):
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="waivers/get_game_manager") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="waivers/load_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="waivers/get_user_team"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="waivers/load_league")
+            or safe_call(lambda: getattr(game, "league", None), context="waivers/get_league"))
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +117,11 @@ def _user_league(game):
 # ---------------------------------------------------------------------------
 
 def _wire(game):
-    wire = _safe(lambda: list(getattr(game, "waiver_list", None) or []),
-                 []) or []
-    wire.sort(key=lambda p: _safe(
-        lambda: int(getattr(p, "waiver_days", 0) or 0), 0))
+    wire = safe_call(lambda: list(getattr(game, "waiver_list", None) or []), [],
+                 context="waivers/load_waiver_list") or []
+    wire.sort(key=lambda p: safe_call(
+        lambda: int(getattr(p, "waiver_days", 0) or 0), 0,
+        context="waivers/get_waiver_days"))
     return wire
 
 
@@ -132,8 +129,8 @@ def _eligible(game):
     """Roster players not already on waivers, with clause + exemption
     reads. Never raises."""
     team = _user_team(game)
-    roster = _safe(lambda: list(getattr(team, "roster", None) or []),
-                   []) or []
+    roster = safe_call(lambda: list(getattr(team, "roster", None) or []), [],
+                   context="waivers/load_roster") or []
     try:
         import waiver_logic as _wl
         eligible_fn = _wl.is_waiver_eligible
@@ -147,7 +144,7 @@ def _eligible(game):
     out = []
     for p in roster:
         try:
-            if _safe(lambda: bool(getattr(p, "on_waivers", False)), False):
+            if safe_call(lambda: bool(getattr(p, "on_waivers", False)), False, context="waivers/get_on_waivers"):
                 continue
             kind = ""
             if clause_fn is not None:
@@ -181,30 +178,30 @@ def _priority(game):
     except Exception:
         return {"order": [], "my_rank": None, "basis": ""}
     gm = _resolve_gm(game)
-    league = _safe(lambda: gm.league)
+    league = safe_call(lambda: gm.league, context="waivers/load_league")
     if league is None:
         return {"order": [], "my_rank": None, "basis": ""}
-    today = _safe(lambda: getattr(gm, "current_date", None))
+    today = safe_call(lambda: getattr(gm, "current_date", None), context="waivers/get_current_date")
     team = _user_team(game)
-    my_name = _safe(lambda: getattr(team, "team_name", ""), "")
+    my_name = safe_call(lambda: getattr(team, "team_name", ""), "", context="waivers/get_team_name")
     rows = []
     try:
         for i, t in enumerate(_wl.waiver_priority_order(league, today) or [],
                               1):
-            tname = _safe(lambda: getattr(t, "team_name", "?"), "?")
+            tname = safe_call(lambda: getattr(t, "team_name", "?"), "?", context="waivers/get_team_name")
             rows.append({"rank": i, "team": tname,
                          "is_user": bool(my_name and tname == my_name)})
     except Exception:
         pass
-    rank = _safe(lambda: _wl.waiver_priority_rank(league, team, today))
-    basis = _safe(lambda: _wl.waiver_priority_basis_label(league, today), "")
+    rank = safe_call(lambda: _wl.waiver_priority_rank(league, team, today), context="waivers/get_priority_rank")
+    basis = safe_call(lambda: _wl.waiver_priority_basis_label(league, today), "", context="waivers/get_priority_basis")
     return {"order": rows, "my_rank": rank, "basis": basis or ""}
 
 
 def _mp_state(game):
     """(host, client) multiplayer objects if an MP session is active."""
-    host = _safe(lambda: getattr(game, "mp_host", None))
-    client = _safe(lambda: getattr(game, "mp_client", None))
+    host = safe_call(lambda: getattr(game, "mp_host", None), context="waivers/get_mp_host")
+    client = safe_call(lambda: getattr(game, "mp_client", None), context="waivers/get_mp_client")
     return host, client
 
 
@@ -213,7 +210,7 @@ def _is_mp_client(game):
     host, client = _mp_state(game)
     return (client is not None
             and host is None
-            and _safe(lambda: client.connected(), False))
+            and safe_call(lambda: client.connected(), False, context="waivers/check_mp_connected"))
 
 
 def _claim_waiver(game, player):
@@ -240,24 +237,25 @@ def _claim_waiver(game, player):
     # MP client: route to host, do not mutate local state.
     if _is_mp_client(game):
         _host, client = _mp_state(game)
-        pid = _safe(lambda: str(getattr(player, "id", "")), "")
-        tname = _safe(lambda: getattr(team, "team_name", ""), "")
+        pid = safe_call(lambda: str(getattr(player, "id", "")), "", context="waivers/get_player_id")
+        tname = safe_call(lambda: getattr(team, "team_name", ""), "", context="waivers/get_team_name")
         try:
             client.send_action("claim_waivers",
                                {"player_id": pid, "team_id": tname})
         except Exception as e:
             return False, (f"Couldn't reach the host ({e}). Nothing "
                            "changed -- try again.")
-        pname = _safe(lambda: getattr(player, "full_name", "him"), "him")
+        pname = safe_call(lambda: getattr(player, "full_name", "him"), "him", context="waivers/get_player_name")
         return True, (f"Waiver claim sent for {pname}. The host will "
                       f"process it at the next waiver run in priority "
                       f"order.")
-    wire = _safe(lambda: list(getattr(game, "waiver_list", None) or []),
-                 []) or []
+    wire = safe_call(lambda: list(getattr(game, "waiver_list", None) or []), [],
+                 context="waivers/load_waiver_list") or []
     if player not in wire:
         return False, "Player is no longer on the wire."
     # Roster space check (matches desktop UI).
-    if len(_safe(lambda: list(getattr(team, "roster", None) or []), [])
+    if len(safe_call(lambda: list(getattr(team, "roster", None) or []), [],
+                    context="waivers/load_roster")
            or []) >= 23:
         return False, ("Your NHL roster is full. Release or reassign a "
                        "player before claiming from waivers.")
@@ -265,17 +263,18 @@ def _claim_waiver(game, player):
     try:
         salary = int(getattr(getattr(player, "contract", None),
                              "salary", 0) or 0)
-        cap = _safe(lambda: getattr(team, "cap_space", 0), 0) or 0
+        cap = safe_call(lambda: getattr(team, "cap_space", 0), 0, context="waivers/get_cap_space") or 0
         if salary > cap:
             return False, (f"You don't have enough cap space to add "
                            f"${salary:,} in salary.")
     except Exception:
         pass
     # Already pending check (matches desktop UI).
-    if _safe(lambda: bool(getattr(player, "user_claim_pending",
-                                  False)), False):
+    if safe_call(lambda: bool(getattr(player, "user_claim_pending",
+                                  False)), False,
+                context="waivers/get_claim_pending"):
         return True, (f"You already have a pending claim on "
-                      f"{_safe(lambda: getattr(player, 'full_name', 'him'), 'him')}. "
+                      f"{safe_call(lambda: getattr(player, 'full_name', 'him'), 'him', context='waivers/get_player_name')}. "
                       f"It will be processed in waiver priority order.")
     # Queue the claim -- do NOT call _execute_waiver_claim directly.
     # That is the transfer primitive for when a claim WINS at
@@ -287,14 +286,14 @@ def _claim_waiver(game, player):
         return False, f"Claim failed: {e}"
     # News entry (matches desktop UI).
     try:
-        tname = _safe(lambda: getattr(team, "team_name", ""), "")
-        pname = _safe(lambda: getattr(player, "full_name", ""), "")
+        tname = safe_call(lambda: getattr(team, "team_name", ""), "", context="waivers/get_team_name")
+        pname = safe_call(lambda: getattr(player, "full_name", ""), "", context="waivers/get_player_name")
         add_news = getattr(gm, "add_news", None)
         if callable(add_news) and tname and pname:
             add_news(f"{tname} submitted a waiver claim for {pname}.")
     except Exception:
         pass
-    pname = _safe(lambda: getattr(player, "full_name", "him"), "him")
+    pname = safe_call(lambda: getattr(player, "full_name", "him"), "him", context="waivers/get_player_name")
     return True, (f"Waiver claim submitted for {pname}. It will be "
                   f"processed at the next waiver run in priority order -- "
                   f"a higher-priority club that also claims him gets him "
@@ -305,15 +304,16 @@ def _place_on_waivers(game, player):
     """Place a roster player on the wire (mirrors the bridge op:
     window gate, NMC block, 2-day wire, news). Returns (ok, message)."""
     gm = _resolve_gm(game)
-    team = (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    team = (safe_call(lambda: gm.user_team, context="waivers/load_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="waivers/get_user_team"))
     if team is None:
         return False, "No user team."
     try:
         import transaction_windows as _tw
         ok, why = _tw.check_window(
-            "waiver_place", _safe(lambda: getattr(game, "current_date",
-                                                  None)))
+            "waiver_place", safe_call(lambda: getattr(game, "current_date",
+                                                  None),
+                                 context="waivers/get_current_date"))
         if not ok:
             return False, str(why or "Waiver placement window closed.")
     except Exception:
@@ -335,7 +335,7 @@ def _place_on_waivers(game, player):
         news = getattr(game, "add_news", None)
         if callable(news):
             news(f"{_player_name(player)} placed on waivers by "
-                 f"{_safe(lambda: getattr(team, 'team_name', 'your team'), 'your team')}.")
+                 f"{safe_call(lambda: getattr(team, 'team_name', 'your team'), 'your team', context='waivers/get_team_name')}.")
     except Exception as e:
         return False, f"Could not place on waivers: {e}"
     return True, ""
@@ -356,7 +356,7 @@ def _demote_exempt(game, player):
             team.roster[:] = roster
         except Exception:
             team.roster = roster
-        ahl = _safe(lambda: list(getattr(team, "ahl_roster", None)), None)
+        ahl = safe_call(lambda: list(getattr(team, "ahl_roster", None)), None, context="waivers/load_ahl_roster")
         if ahl is not None:
             ahl.append(player)
             team.ahl_roster = ahl
@@ -498,17 +498,17 @@ class WaiversScreen(BaseScreen):
             lay.addWidget(ovr)
 
             name = _player_name(p)
-            wteam = _safe(lambda: getattr(p, "waiver_team", ""), "") or ""
+            wteam = safe_call(lambda: getattr(p, "waiver_team", ""), "", context="waivers/get_waiver_team") or ""
             sub = (f"{_pos_str(p)} · Age "
-                   f"{_safe(lambda: int(getattr(p, 'age', 0) or 0), 0)} · "
-                   f"{_fmt_money(_safe(lambda: int(getattr(p, 'salary', 0) or 0), 0))}"
+                   f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context='waivers/get_age')} · "
+                   f"{_fmt_money(safe_call(lambda: int(getattr(p, 'salary', 0) or 0), 0, context='waivers/get_salary'))}"
                    + (f" · from {wteam}" if wteam else ""))
             info = QLabel(f"{name}\n{sub}")
             info.setWordWrap(True)
             lay.addWidget(info, 1)
 
             clock = QLabel("⏱ " + _deadline_str(
-                _safe(lambda: int(getattr(p, "waiver_days", 0) or 0), 0)))
+                safe_call(lambda: int(getattr(p, "waiver_days", 0) or 0), 0, context="waivers/get_waiver_days")))
             lay.addWidget(clock)
 
             btn = QPushButton("Claim")
@@ -539,8 +539,8 @@ class WaiversScreen(BaseScreen):
                 tags += "  [NTC]"
             name = _player_name(p) + tags
             sub = (f"{_pos_str(p)} · Age "
-                   f"{_safe(lambda: int(getattr(p, 'age', 0) or 0), 0)} · "
-                   f"{_fmt_money(_safe(lambda: int(getattr(p, 'salary', 0) or 0), 0))}"
+                   f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context='waivers/get_age')} · "
+                   f"{_fmt_money(safe_call(lambda: int(getattr(p, 'salary', 0) or 0), 0, context='waivers/get_salary'))}"
                    + (" · exempt — demotes freely"
                       if d.get("waiver_exempt") else ""))
             info = QLabel(f"{name}\n{sub}")
