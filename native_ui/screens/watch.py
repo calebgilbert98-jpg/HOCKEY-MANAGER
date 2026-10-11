@@ -557,6 +557,7 @@ def _ensure_live_sim(game):
             home_abbr=_abbr(_team_name(home)),
             away_abbr=_abbr(_team_name(away)),
             id_meta=_build_id_meta(home, away),
+            finish_alert=None,  # OBS-3: never leak a prior game's alert
         )
         thread = threading.Thread(target=_run, daemon=True,
                                   name="puck-watch-sim")
@@ -990,6 +991,7 @@ class WatchScreen(BaseScreen):
         self._momentum_open = False
         self._tension_open = False
         self._last_strip_refresh = 0.0
+        self._matchup_tick = 0.0
         self._fast_forward = False  # sim-to-end: drain the queue instantly
         self._suppress_beats = False
         self._home_name = ""
@@ -1263,6 +1265,7 @@ class WatchScreen(BaseScreen):
             self._finished = False
             self._paused = False
             self._fast_forward = False
+            self._suppress_beats = False
             self._skate = None
             self._text_count = 0
             self._text_feed.clear()
@@ -2003,13 +2006,14 @@ class WatchScreen(BaseScreen):
                     self._shots[side] += 1
                     self._push_momentum(side, 3)
             elif et == "fight":
-                side = _side_of(ev.get("winner_team") or ev.get("team_a"),
-                                hn, an)
+                # Real sim fields: player / opponent / team (instigator's).
+                side = _side_of(ev.get("team"), hn, an)
                 if side:
                     self._push_momentum(side, 2)
-                a = _player_name(ev.get("player_a") or ev.get("hitting_player"))
-                b = _player_name(ev.get("player_b") or ev.get("target_player"))
-                self._tension_add(f"Fight: {a} vs {b}", 6.0)
+                a = _player_name(ev.get("player"))
+                b = _player_name(ev.get("opponent"))
+                versus = f": {a} vs {b}" if b != "Unknown" else f": {a}"
+                self._tension_add(f"Fight{versus}", 6.0)
             elif et == "hit" and ev.get("result") == "turnover_caused":
                 self._tension_add(
                     f"Big hit: {_player_name(ev.get('hitting_player'))} on "
