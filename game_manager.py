@@ -7723,19 +7723,41 @@ NHL League Office""",
                 notable_events = [e for e in notable_events
                                   if isinstance(e, dict)]
 
-            # Snapshot the standings rows, the Team record mirrors, and every
-            # rostered player's season stat sheet. If anything below fails,
-            # the except restores all three in place and re-raises, so the
-            # game is left in a clean re-processable state -- never a partial
-            # write (standings up, stats lost) that re-processing would
-            # double-count.
+            # Snapshot everything the body below can mutate. If anything fails,
+            # the except restores every snapshot in place and re-raises, so
+            # the game is left in a clean re-processable state -- never a
+            # partial write (standings up, stats lost) that re-processing
+            # would double-count.
+            #
+            # Covered: league.standings rows (a body-created phantom row is
+            # deleted, not kept); the Team record mirrors; every rostered
+            # player's season stat sheet; the three-star player attributes
+            # stars.record_game_stars bumps (game_stars, playoff_stars,
+            # game7_stars, career_moments -- these live on the Player, not
+            # the stat sheet); media_system.media_events; news_log + the
+            # news_stories mirror; _record_game_result's game_results append,
+            # date/matchup index entries, and team.recent_results; and
+            # _grudge_marketed membership.
+            # The append-list/set snapshots below are unconditional:
+            # _record_game_result, media, news and grudge grading also run
+            # for preseason games, while standings/records/stat sheets/star
+            # attributes never change there.
+            _ABSENT = object()  # standings-row absent marker (phantom-row fix)
+            _MISSING = object()  # player-attr absent marker (star-attr fix)
             _standings_snap = {}
             _teamrec_snap = {}
             _statline_snap = {}
+            _starattr_snap = {}
             if not preseason:
                 for _st in (home_team, away_team):
-                    _srow = self.league.standings.get(_st.team_name)
-                    if isinstance(_srow, dict):
+                    _srow = self.league.standings.get(_st.team_name, _ABSENT)
+                    if _srow is _ABSENT:
+                        # No row pre-call: if the body creates one via the
+                        # ensure-exists block, the rollback must delete it --
+                        # otherwise the phantom row survives and a re-process
+                        # double-counts the standings.
+                        _standings_snap[_st.team_name] = _ABSENT
+                    elif isinstance(_srow, dict):
                         _standings_snap[_st.team_name] = dict(_srow)
                     _teamrec_snap[_st.team_name] = {
                         a: getattr(_st, a, 0) for a in (
@@ -7746,12 +7768,117 @@ NHL League Office""",
                 for _st in (home_team, away_team):
                     for _pl in getattr(_st, 'roster', []) or []:
                         _pso = getattr(_pl, 'stats', None)
-                        if _pso is None:
-                            continue
+                        if _pso is not None:
+                            try:
+                                _statline_snap[id(_pl)] = (
+                                    _pso, dict(vars(_pso)))
+                            except Exception:
+                                pass
+                        # Three-star counters live on the Player, not the stat
+                        # sheet -- and record_game_stars bumps them even for
+                        # players without a stat object -- so they get their
+                        # own snapshot (dict/list copied, scalars as-is, with
+                        # an absent marker so a body-created attr is deleted
+                        # on rollback rather than left behind).
                         try:
-                            _statline_snap[id(_pl)] = (_pso, dict(vars(_pso)))
+                            _sattrs = {}
+                            for _an in ("game_stars", "playoff_stars",
+                                        "game7_stars", "career_moments"):
+                                _v = getattr(_pl, _an, _MISSING)
+                                if _v is _MISSING:
+                                    _sattrs[_an] = (False, None)
+                                elif isinstance(_v, dict):
+                                    _sattrs[_an] = (True, dict(_v))
+                                elif isinstance(_v, list):
+                                    _sattrs[_an] = (True, list(_v))
+                                else:
+                                    _sattrs[_an] = (True, _v)
+                            _starattr_snap[id(_pl)] = (_pl, _sattrs)
                         except Exception:
                             pass
+            # -- append-list / set snapshots (preseason included; see above) --
+            _media_snap = None
+            try:
+                _ms = getattr(self, 'media_system', None)
+                _me = getattr(_ms, 'media_events', None)
+                if _ms is not None and isinstance(_me, list):
+                    _media_snap = (_me, len(_me))
+            except Exception:
+                _media_snap = None
+            _newslog_snap = None
+            try:
+                _nl = getattr(self, 'news_log', None)
+                if isinstance(_nl, list):
+                    _newslog_snap = (_nl, len(_nl))
+            except Exception:
+                _newslog_snap = None
+            _newsstories_snap = None
+            try:
+                _gm_ns = getattr(self, 'game_manager', None)
+                _nst = getattr(_gm_ns, 'news_stories', None)
+                if isinstance(_nst, list):
+                    # Full copy, not just a length: add_news front-trims the
+                    # mirror at NEWS_LOG_CAP, so a length alone cannot
+                    # restore the evicted head on rollback.
+                    _newsstories_snap = (True, _nst, list(_nst))
+                else:
+                    _newsstories_snap = (False, None, None)
+            except Exception:
+                _newsstories_snap = None
+            _gameresults_snap = None
+            _rbd_snap = None
+            _rbm_snap = None
+            try:
+                _grl = getattr(self, 'game_results', None)
+                if isinstance(_grl, list):
+                    _gameresults_snap = (_grl, len(_grl))
+                _rby_date = getattr(self, '_results_by_date', None)
+                _rby_match = getattr(self, '_results_by_matchup', None)
+                _idx_on = (isinstance(_grl, list)
+                           and isinstance(_rby_date, dict)
+                           and isinstance(_rby_match, dict)
+                           and getattr(self, '_results_index_src', None)
+                           is _grl)
+                if _idx_on:
+                    _rkey = self._result_date_key(game_date)
+                    _blen = None
+                    if _rkey is not None:
+                        _bkt = _rby_date.get(_rkey)
+                        if isinstance(_bkt, list):
+                            _blen = len(_bkt)
+                    # _blen None: no bucket pre-call, the body may create one.
+                    _rbd_snap = (_rkey, _blen)
+                    _mkey = (_rkey, id(home_team), id(away_team))
+                    if _mkey in _rby_match:
+                        _rbm_snap = (_mkey, True, _rby_match[_mkey])
+                    else:
+                        _rbm_snap = (_mkey, False, None)
+            except Exception:
+                _gameresults_snap = None
+                _rbd_snap = None
+                _rbm_snap = None
+            _recent_snap = {}
+            try:
+                for _st in (home_team, away_team):
+                    try:
+                        _rr = getattr(_st, 'recent_results', None)
+                        _recent_snap[getattr(_st, 'team_name', None)] = (
+                            _st, _rr if isinstance(_rr, list) else None,
+                            len(_rr) if isinstance(_rr, list) else 0)
+                    except Exception:
+                        pass
+            except Exception:
+                _recent_snap = {}
+            _grudge_snap = None
+            try:
+                _gmset = getattr(self, '_grudge_marketed', None)
+                if isinstance(_gmset, set):
+                    _gkey = (getattr(home_team, 'team_name', None),
+                             getattr(away_team, 'team_name', None),
+                             str(game_date))
+                    _grudge_snap = (_gmset, _gkey, _gkey in _gmset)
+            except Exception:
+                _grudge_snap = None
 
             try:
                 # Update league standings (safely) -- never for preseason.
@@ -8203,15 +8330,47 @@ NHL League Office""",
                         print(f"Post-game emails error (non-fatal, game kept): {_pge_e}")
 
             except Exception as _psr_e:
-                # Roll back every mutation above, in place (object identity
-                # preserved for live references), then re-raise: the caller
-                # sees the failure and the game can be re-processed cleanly.
+                # Roll back every mutation the body above can make, in place
+                # (object identity preserved for live references), then
+                # re-raise: the caller sees the failure and the game can be
+                # re-processed cleanly with no double-counts or twins.
+                #
+                # Restored: standings rows (a body-created phantom row is
+                # deleted, not kept); Team record mirrors; player stat
+                # sheets; the three-star player attributes (game_stars,
+                # playoff_stars, game7_stars, career_moments); media_events;
+                # news_log + the news_stories mirror; game_results plus the
+                # date/matchup index entries plus team.recent_results; and
+                # _grudge_marketed membership.
+                #
+                # Deliberately NOT covered: player.nhl_games_played is
+                # credited by the caller BEFORE this function runs, so this
+                # backstop cannot unwind it -- a re-raise + retry
+                # double-credits service time (pre-existing; unwinding it
+                # would require moving the credit into this function, i.e. a
+                # call-flow change). clutch_tags grants are idempotent by
+                # design (maybe_grant_clutch_tags never re-grants or
+                # duplicates). Post-game emails go out in the body's last
+                # step, so no later failure can orphan them. In-body
+                # best-effort blocks (stars/media/emails) that fail on their
+                # own never trigger this rollback by design.
                 try:
                     for _tn, _srow in _standings_snap.items():
-                        _live = self.league.standings.get(_tn)
-                        if isinstance(_live, dict):
-                            _live.clear()
-                            _live.update(_srow)
+                        if _srow is _ABSENT:
+                            # Phantom row: the body created it via the
+                            # ensure-exists block; delete it so a re-process
+                            # starts from no row (never double-counts).
+                            try:
+                                if isinstance(
+                                        self.league.standings.get(_tn), dict):
+                                    del self.league.standings[_tn]
+                            except Exception:
+                                pass
+                        elif isinstance(_srow, dict):
+                            _live = self.league.standings.get(_tn)
+                            if isinstance(_live, dict):
+                                _live.clear()
+                                _live.update(_srow)
                     for _tn, _rec in _teamrec_snap.items():
                         _tm = (home_team if
                                getattr(home_team, 'team_name', None) == _tn
@@ -8225,6 +8384,130 @@ NHL League Office""",
                         try:
                             vars(_pso).clear()
                             vars(_pso).update(_sv)
+                        except Exception:
+                            pass
+                    for _pl, _sattrs in _starattr_snap.values():
+                        for _an, (_present, _val) in _sattrs.items():
+                            try:
+                                if not _present:
+                                    # Created by the failed body: remove it.
+                                    try:
+                                        delattr(_pl, _an)
+                                    except Exception:
+                                        pass
+                                else:
+                                    _cur = getattr(_pl, _an, _MISSING)
+                                    if isinstance(_val, dict) and isinstance(
+                                            _cur, dict):
+                                        _cur.clear()
+                                        _cur.update(_val)
+                                    elif isinstance(_val, list) and isinstance(
+                                            _cur, list):
+                                        _cur[:] = _val
+                                    else:
+                                        setattr(_pl, _an, _val)
+                            except Exception:
+                                pass
+                    if _media_snap is not None:
+                        try:
+                            _me, _melen = _media_snap
+                            _ms_live = getattr(self, 'media_system', None)
+                            _me_live = getattr(_ms_live, 'media_events', None)
+                            if not isinstance(_me_live, list):
+                                _me_live = _me
+                            del _me_live[_melen:]
+                        except Exception:
+                            pass
+                    if _newslog_snap is not None:
+                        try:
+                            _nl, _nllen = _newslog_snap
+                            _nl_live = getattr(self, 'news_log', None)
+                            if not isinstance(_nl_live, list):
+                                _nl_live = _nl
+                            del _nl_live[_nllen:]
+                        except Exception:
+                            pass
+                    if _newsstories_snap is not None:
+                        try:
+                            _ns_had, _nst, _ns_copy = _newsstories_snap
+                            _gm_live = getattr(self, 'game_manager', None)
+                            _nst_live = getattr(
+                                _gm_live, 'news_stories', None)
+                            if _ns_had and isinstance(_nst_live, list):
+                                _nst_live[:] = _ns_copy
+                            elif not _ns_had and _gm_live is not None:
+                                # The failed body created the mirror: remove
+                                # it so no phantom list survives.
+                                try:
+                                    if isinstance(getattr(
+                                            _gm_live, 'news_stories', None),
+                                            list):
+                                        delattr(_gm_live, 'news_stories')
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    if _gameresults_snap is not None:
+                        try:
+                            _grl, _grlen = _gameresults_snap
+                            _grl_live = getattr(self, 'game_results', None)
+                            if not isinstance(_grl_live, list):
+                                _grl_live = _grl
+                            del _grl_live[_grlen:]
+                        except Exception:
+                            pass
+                    if _rbd_snap is not None:
+                        try:
+                            _rbk, _rblen = _rbd_snap
+                            _rbd_live = getattr(
+                                self, '_results_by_date', None)
+                            if isinstance(_rbd_live, dict) \
+                                    and _rbk is not None:
+                                if _rblen is None:
+                                    # No bucket pre-call: drop the body-made one.
+                                    _rbd_live.pop(_rbk, None)
+                                else:
+                                    _bkt_live = _rbd_live.get(_rbk)
+                                    if isinstance(_bkt_live, list):
+                                        del _bkt_live[_rblen:]
+                        except Exception:
+                            pass
+                    if _rbm_snap is not None:
+                        try:
+                            _mbk, _mb_had, _mb_old = _rbm_snap
+                            _rbm_live = getattr(
+                                self, '_results_by_matchup', None)
+                            if isinstance(_rbm_live, dict):
+                                if _mb_had:
+                                    _rbm_live[_mbk] = _mb_old
+                                else:
+                                    _rbm_live.pop(_mbk, None)
+                        except Exception:
+                            pass
+                    for _tn, _rrt in _recent_snap.items():
+                        try:
+                            _tm, _rr, _rrlen = _rrt
+                            _rr_live = getattr(_tm, 'recent_results', None)
+                            if _rr is None:
+                                # No list pre-call: drop any list the body made.
+                                if isinstance(_rr_live, list):
+                                    try:
+                                        delattr(_tm, 'recent_results')
+                                    except Exception:
+                                        pass
+                            elif isinstance(_rr_live, list):
+                                del _rr_live[_rrlen:]
+                        except Exception:
+                            pass
+                    if _grudge_snap is not None:
+                        try:
+                            _gs, _gk, _ghad = _grudge_snap
+                            _gs_live = getattr(self, '_grudge_marketed', None)
+                            if _gs_live is _gs and isinstance(_gs_live, set):
+                                if _ghad:
+                                    _gs_live.add(_gk)
+                                else:
+                                    _gs_live.discard(_gk)
                         except Exception:
                             pass
                 except Exception:
