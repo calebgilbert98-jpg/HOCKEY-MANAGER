@@ -41,6 +41,29 @@ jobs:
       - name: Build native with PyInstaller
         run: pyinstaller puck_dynasty_native.spec --noconfirm
 
+      - name: Dump PyInstaller analysis warnings
+        # Diagnostic for the draft/morale bundle mystery: modulegraph logs
+        # WHY it drops a module to warn-*.txt. This step prints any
+        # draft/morale-related warnings into the run log and uploads the
+        # full warning files, so the next failure carries its own evidence.
+        if: always()
+        shell: bash
+        run: |
+          for f in build/*/warn-*.txt; do
+            echo "=== $f ==="
+            grep -i -B2 -A2 "screens.draft\|screens.morale\|[^a-z_]draft[^a-z_]\|morale" "$f" | head -60 || true
+            echo "--- warning counts ---"
+            grep -c -i "not found" "$f" || true
+          done
+
+      - name: Upload PyInstaller warnings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyinstaller-warnings-v${{ steps.version.outputs.APP_VERSION }}
+          path: build/*/warn-*.txt
+          if-no-files-found: warn
+
       - name: Zip the build
         run: |
           cd dist
