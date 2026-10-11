@@ -947,7 +947,21 @@ class _MarketAnalyticsDialog(QDialog):
     get_market_temperature() — market overview + price trends
     (supply/demand guidance), buyers & sellers, position needs, trade
     predictions, salary cap analysis.
+
+    DISPLAY HONESTY NOTE: every figure, prediction, cap number, and team
+    need shown here is a SIMULATED scouting estimate — not official data
+    for the teams in the user's league. The dialog therefore carries a
+    visible disclaimer plus per-section estimate labels. Do NOT remove
+    them without replacing the backing data with real league state.
     """
+
+    # Visible disclaimer text — must stay attached to any numbers section.
+    DISCLAIMER_TEXT = (
+        "Scouting estimates — all figures, likelihoods, predictions, cap "
+        "numbers, and team needs shown here are simulated estimates for "
+        "league-wide context. They are NOT official league data, and team "
+        "abbreviations may not match the teams in your league."
+    )
 
     def __init__(self, parent, game):
         super().__init__(parent)
@@ -956,6 +970,12 @@ class _MarketAnalyticsDialog(QDialog):
         self.setMinimumWidth(720)
         self.setMinimumHeight(520)
         lay = QVBoxLayout(self)
+        disclaimer = QLabel(self.DISCLAIMER_TEXT)
+        disclaimer.setWordWrap(True)
+        disclaimer.setStyleSheet(
+            "font-style: italic; color: #fbbf24; "
+            "background: #3a2f10; padding: 6px; border: 1px solid #b45309;")
+        lay.addWidget(disclaimer)
         tabs = QTabWidget()
         lay.addWidget(tabs)
         intel = _market_intel(game)
@@ -980,6 +1000,13 @@ class _MarketAnalyticsDialog(QDialog):
         lay.addStretch()
         return page
 
+    @staticmethod
+    def _estimate_note():
+        """Small per-section label so no numbers section reads as official
+        league data."""
+        return ("<br><i style='color:#9ca3af'>Estimates — simulated "
+                "figures, not official league data.</i>")
+
     def _overview_tab(self, temp, intel):
         overall = temp.get("overall", "warm") if temp else "warm"
         colors = {"cold": "#60a5fa", "warm": "#fbbf24",
@@ -992,6 +1019,7 @@ class _MarketAnalyticsDialog(QDialog):
         lines = [
             f"<h3>Market Temperature: "
             f"<span style='color:{color}'>{str(overall).upper()}</span></h3>",
+            self._estimate_note(),
         ]
         for plabel, ptemp in (("Forwards", temp.get("forwards")),
                               ("Defensemen", temp.get("defensemen")),
@@ -1016,7 +1044,8 @@ class _MarketAnalyticsDialog(QDialog):
     def _buyers_sellers_tab(self, intel):
         buyers = (intel.get("buyer_teams", []) or [])[:6] if intel else []
         sellers = (intel.get("seller_teams", []) or [])[:6] if intel else []
-        lines = ["<h3 style='color:#10b981'>ACTIVE BUYERS</h3>"]
+        lines = ["<h3 style='color:#10b981'>ACTIVE BUYERS (league-wide estimates)</h3>",
+                 self._estimate_note()]
         if buyers:
             for b in buyers:
                 lines.append(
@@ -1026,7 +1055,8 @@ class _MarketAnalyticsDialog(QDialog):
                     f"{b.get('assets', '')}")
         else:
             lines.append("No active buyers identified.")
-        lines.append("<br><h3 style='color:#e5484d'>ACTIVE SELLERS</h3>")
+        lines.append("<br><h3 style='color:#e5484d'>ACTIVE SELLERS (league-wide estimates)</h3>")
+        lines.append(self._estimate_note())
         if sellers:
             for s in sellers:
                 lines.append(
@@ -1039,7 +1069,8 @@ class _MarketAnalyticsDialog(QDialog):
 
     def _position_tab(self, intel):
         needs = (intel.get("position_needs", {}) or {}) if intel else {}
-        lines = ["<h3>POSITION NEEDS ANALYSIS</h3>"]
+        lines = ["<h3>POSITION NEEDS ANALYSIS (league-wide estimates)</h3>",
+                 self._estimate_note()]
         for pname, key in (("Forwards", "forwards"),
                            ("Defensemen", "defensemen"),
                            ("Goalies", "goalies"),
@@ -1051,7 +1082,8 @@ class _MarketAnalyticsDialog(QDialog):
 
     def _predictions_tab(self, intel):
         preds = (intel.get("trade_predictions", []) or []) if intel else []
-        lines = ["<h3>TRADE PREDICTIONS</h3>"]
+        lines = ["<h3>TRADE PREDICTIONS (illustrative estimates)</h3>",
+                 self._estimate_note()]
         if preds:
             for p in preds:
                 like = p.get("likelihood", 0)
@@ -1069,7 +1101,8 @@ class _MarketAnalyticsDialog(QDialog):
 
     def _cap_tab(self, intel):
         cap = (intel.get("salary_cap_space", {}) or {}) if intel else {}
-        lines = ["<h3>SALARY CAP ANALYSIS</h3>"]
+        lines = ["<h3>SALARY CAP ANALYSIS (illustrative estimates)</h3>",
+                 self._estimate_note()]
         if cap:
             for team, data in cap.items():
                 space = safe_call(lambda: int(data.get("cap_space", 0) or 0),
