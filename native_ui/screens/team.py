@@ -23,16 +23,16 @@ from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="team/resolve_gm") or game
 
 
 def _league(game):
-    return safe_call(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league, context="team/resolve_league")
 
 
 def _user_team(game):
-    return (safe_call(lambda: _gm(game).user_team)
-            or safe_call(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: _gm(game).user_team, context="team/resolve_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="team/resolve_user_team"))
 
 
 def _norm_team_key(s):
@@ -45,7 +45,7 @@ def _norm_team_key(s):
 def _team_abbrs(t):
     out = []
     for attr in ("abbr", "abbreviation", "team_abbr", "short_name"):
-        v = safe_call(lambda: getattr(t, attr, ""), "") or ""
+        v = safe_call(lambda: getattr(t, attr, ""), "", context="team/abbr_attr") or ""
         if v and str(v).strip():
             out.append(str(v).strip())
     return out
@@ -60,7 +60,8 @@ def find_team(game, name):
     """
     league = _league(game)
     teams = safe_call(lambda: list(getattr(league, "teams", []) or []),
-                  []) or []
+                  [],
+                      context="team/find_teams") or []
     user_team = _user_team(game)
     if user_team is not None and all(t is not user_team for t in teams):
         teams = [user_team] + teams
@@ -72,14 +73,16 @@ def find_team(game, name):
     # 1. exact team_name
     for t in teams:
         tn = safe_call(lambda: str(getattr(t, "team_name", "")).strip().lower(),
-                   "")
+                   "",
+                       context="team/find_team_name")
         if tn == want:
             return t
     # 2. normalized team_name
     if want_norm:
         for t in teams:
             if _norm_team_key(safe_call(lambda: getattr(t, "team_name", ""),
-                                    "")) == want_norm:
+                                    "",
+                                        context="team/find_norm_name")) == want_norm:
                 return t
     # 3. abbreviation, exact (case-insensitive)
     if want:
@@ -142,10 +145,11 @@ class TeamScreen(BaseScreen):
         note = ""
         if t is None:
             teams = safe_call(lambda: list(getattr(league, "teams", []) or []),
-                          []) or []
+                          [],
+                              context="team/load_teams") or []
             t = teams[0] if teams else None
         else:
-            tn = safe_call(lambda: getattr(t, "team_name", ""), "")
+            tn = safe_call(lambda: getattr(t, "team_name", ""), "", context="team/load_team_name")
             if str(team_name or "").strip().lower() not in (
                     str(tn).strip().lower(),):
                 # name matched tolerantly or fell back to user team
@@ -165,7 +169,8 @@ class TeamScreen(BaseScreen):
         if t is None:
             league = _league(self.game)
             teams = safe_call(lambda: list(getattr(league, "teams", []) or []),
-                          []) or []
+                          [],
+                              context="team/ensure_teams") or []
             t = teams[0] if teams else None
         self._team = t
         return t
@@ -209,11 +214,12 @@ class TeamScreen(BaseScreen):
         is_user = t is user_team
         league = _league(self.game)
 
-        name = safe_call(lambda: getattr(t, "team_name", "?"), "?")
-        w = safe_call(lambda: int(getattr(t, "wins", 0) or 0), 0)
-        l = safe_call(lambda: int(getattr(t, "losses", 0) or 0), 0)
+        name = safe_call(lambda: getattr(t, "team_name", "?"), "?", context="team/header_name")
+        w = safe_call(lambda: int(getattr(t, "wins", 0) or 0), 0, context="team/header_wins")
+        l = safe_call(lambda: int(getattr(t, "losses", 0) or 0), 0, context="team/header_losses")
         otl = safe_call(lambda: int(getattr(t, "otl", 0)
-                                or getattr(t, "overtime_losses", 0) or 0), 0)
+                                or getattr(t, "overtime_losses", 0) or 0), 0,
+                        context="team/header_otl")
         pts = w * 2 + otl
         gp = w + l + otl
 
@@ -229,8 +235,8 @@ class TeamScreen(BaseScreen):
             "font-size: 22px; font-weight: 800; color: #f2f4f8;")
         hl.addWidget(record)
         meta = []
-        division = safe_call(lambda: getattr(t, "division", ""), "")
-        conference = safe_call(lambda: getattr(t, "conference", ""), "")
+        division = safe_call(lambda: getattr(t, "division", ""), "", context="team/division")
+        conference = safe_call(lambda: getattr(t, "conference", ""), "", context="team/conference")
         div_rank = self._division_rank(t, name)
         if division:
             meta.append(f"Division: {division}"
@@ -311,7 +317,7 @@ class TeamScreen(BaseScreen):
             self._host_layout.addWidget(card)
 
         # ---- roster ----
-        roster = safe_call(lambda: list(getattr(t, "roster", []) or []), []) or []
+        roster = safe_call(lambda: list(getattr(t, "roster", []) or []), [], context="team/roster") or []
         if roster:
             card = QFrame()
             card.setObjectName("tile")
@@ -336,23 +342,25 @@ class TeamScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _division_rank(self, t, name):
         league = _league(self.game)
-        division = safe_call(lambda: getattr(t, "division", ""), "")
+        division = safe_call(lambda: getattr(t, "division", ""), "", context="team/rank_division")
         standings = safe_call(lambda: list(getattr(league, "standings", [])
-                                       or []), []) or []
+                                       or []), [],
+                              context="team/rank_standings") or []
         if not standings or not division:
             return None
         div_teams = []
         for s in standings:
             try:
                 st = s.get("team") if isinstance(s, dict) else s
-                if safe_call(lambda: getattr(st, "division", ""), "") \
+                if safe_call(lambda: getattr(st, "division", ""), "", context="team/rank_entry_division") \
                         == division:
-                    sw = safe_call(lambda: int(getattr(st, "wins", 0) or 0), 0)
+                    sw = safe_call(lambda: int(getattr(st, "wins", 0) or 0), 0, context="team/rank_entry_wins")
                     so = safe_call(lambda: int(
                         getattr(st, "otl", 0)
-                        or getattr(st, "overtime_losses", 0) or 0), 0)
+                        or getattr(st, "overtime_losses", 0) or 0), 0,
+                                   context="team/rank_entry_otl")
                     div_teams.append(
-                        (safe_call(lambda: getattr(st, "team_name", ""), ""),
+                        (safe_call(lambda: getattr(st, "team_name", ""), "", context="team/rank_entry_name"),
                          sw * 2 + so))
             except Exception:
                 continue
@@ -364,7 +372,8 @@ class TeamScreen(BaseScreen):
 
     def _streak(self, t, league, name):
         sched = safe_call(lambda: list(getattr(league, "schedule", []) or []),
-                      []) or []
+                      [],
+                          context="team/streak_schedule") or []
         form = []
         for g in reversed(sched):
             try:
@@ -375,10 +384,12 @@ class TeamScreen(BaseScreen):
                     continue
                 hn = safe_call(lambda: str(
                     getattr(g.get("home_team"), "team_name",
-                            g.get("home_team", ""))), "")
+                            g.get("home_team", ""))), "",
+                               context="team/streak_home_name")
                 an = safe_call(lambda: str(
                     getattr(g.get("away_team"), "team_name",
-                            g.get("away_team", ""))), "")
+                            g.get("away_team", ""))), "",
+                               context="team/streak_away_name")
                 if name not in (hn, an):
                     continue
                 aws = g.get("away_score", 0) or 0
@@ -403,38 +414,40 @@ class TeamScreen(BaseScreen):
         return f"{streak}{n}" if streak else "—"
 
     def _team_leaders(self, t):
-        roster = safe_call(lambda: list(getattr(t, "roster", []) or []), []) or []
+        roster = safe_call(lambda: list(getattr(t, "roster", []) or []), [], context="team/leaders_roster") or []
         skaters = [p for p in roster
                    if safe_call(lambda: str(getattr(p, "primary_position", "")
-                                        ).upper(), "") not in ("G", "GOALIE")]
+                                        ).upper(), "",
+                                context="team/leaders_position_filter") not in ("G", "GOALIE")]
 
         def _pts(p):
-            return safe_call(lambda: int(getattr(p, "points", 0) or 0), 0)
+            return safe_call(lambda: int(getattr(p, "points", 0) or 0), 0, context="team/leaders_points")
 
         def _g(p):
-            return safe_call(lambda: int(getattr(p, "goals", 0) or 0), 0)
+            return safe_call(lambda: int(getattr(p, "goals", 0) or 0), 0, context="team/leaders_goals")
 
         def _a(p):
-            return safe_call(lambda: int(getattr(p, "assists", 0) or 0), 0)
+            return safe_call(lambda: int(getattr(p, "assists", 0) or 0), 0, context="team/leaders_assists")
 
         out = []
         for p in sorted(skaters, key=lambda p: (-_pts(p), -_g(p)))[:5]:
-            pos = safe_call(lambda: str(getattr(p, "primary_position", "")), "")
+            pos = safe_call(lambda: str(getattr(p, "primary_position", "")), "", context="team/leaders_position")
             try:
                 pos = str(p.primary_position.value)
             except Exception:
                 pass
             out.append((
-                safe_call(lambda: getattr(p, "full_name", "?"), "?"),
+                safe_call(lambda: getattr(p, "full_name", "?"), "?", context="team/leaders_name"),
                 pos,
-                str(safe_call(lambda: int(getattr(p, "games_played", 0) or 0), 0)),
+                str(safe_call(lambda: int(getattr(p, "games_played", 0) or 0), 0, context="team/leaders_gp")),
                 str(_g(p)), str(_a(p)),
             ))
         return out
 
     def _recent_form(self, t, league, name):
         sched = safe_call(lambda: list(getattr(league, "schedule", []) or []),
-                      []) or []
+                      [],
+                          context="team/form_schedule") or []
         form = []
         for g in reversed(sched):
             try:
@@ -445,10 +458,12 @@ class TeamScreen(BaseScreen):
                     continue
                 hn = safe_call(lambda: str(
                     getattr(g.get("home_team"), "team_name",
-                            g.get("home_team", ""))), "")
+                            g.get("home_team", ""))), "",
+                               context="team/form_home_name")
                 an = safe_call(lambda: str(
                     getattr(g.get("away_team"), "team_name",
-                            g.get("away_team", ""))), "")
+                            g.get("away_team", ""))), "",
+                               context="team/form_away_name")
                 if name not in (hn, an):
                     continue
                 aws = g.get("away_score", 0) or 0
@@ -473,5 +488,5 @@ class TeamScreen(BaseScreen):
             return _fmt_money(space)
         except Exception:
             pass
-        cs = safe_call(lambda: getattr(t, "cap_space", None))
+        cs = safe_call(lambda: getattr(t, "cap_space", None), context="team/cap_space")
         return _fmt_money(cs) if cs is not None else None
