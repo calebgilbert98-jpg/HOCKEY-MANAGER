@@ -422,7 +422,7 @@ class TradeDeadlineManager:
     
     def get_market_temperature(self) -> Dict[str, str]:
         """Get current market temperature by position"""
-        # Simulate market activity levels
+        # Deadline-urgency heuristic (deterministic; no simulation)
         current_time = self.get_time_until_deadline()
         
         # Market gets hotter closer to deadline
@@ -481,9 +481,14 @@ class TradeDeadlineManager:
 
     @staticmethod
     def _parse_trade_date(value) -> Any:
-        """CompletedTrade.date is a free-form string; parse defensively."""
+        """CompletedTrade.date is a free-form string; parse defensively.
+
+        Returns naive datetimes (tzinfo stripped) so naive and
+        offset-aware values always compare cleanly at sort time.
+        Never raises.
+        """
         if isinstance(value, datetime):
-            return value
+            return value.replace(tzinfo=None)
         if isinstance(value, date):
             return datetime(value.year, value.month, value.day)
         if isinstance(value, str):
@@ -494,7 +499,7 @@ class TradeDeadlineManager:
                 except Exception:
                     continue
             try:
-                return datetime.fromisoformat(text)
+                return datetime.fromisoformat(text).replace(tzinfo=None)
             except Exception:
                 pass
         return None
@@ -835,15 +840,18 @@ class TradeDeadlineManager:
                                   key=lambda kv: (kv[1], kv[0]))
             if top_n >= 1:
                 candidates.append(
-                    f"{top_name} {'is' if top_n == 1 else 'are'} the "
-                    f"deadline's busiest club with {top_n} completed "
-                    f"deal{'s' if top_n != 1 else ''}.")
+                    f"Deadline's busiest club: {top_name} ({top_n} "
+                    f"deal{'s' if top_n != 1 else ''}).")
 
         # 4. Speculative item, honestly labeled (already ESTIMATE).
         preds = self._generate_trade_predictions()
         if preds:
-            candidates.append(
-                f"RUMOR (ESTIMATE): {preds[0].get('description', '')}")
+            desc = preds[0].get('description', '') or ''
+            # The description carries its own "ESTIMATE — " prefix; strip it
+            # here so the item doesn't read "RUMOR (ESTIMATE): ESTIMATE — …".
+            if desc.startswith("ESTIMATE — "):
+                desc = desc[len("ESTIMATE — "):]
+            candidates.append(f"RUMOR (ESTIMATE) — {desc}")
 
         # 5. Quiet day: fall back to the real deadline clock.
         if not candidates:
