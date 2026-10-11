@@ -10,6 +10,7 @@ All state is plain data (dicts/lists/str/int/float) so CareerState can be
 pickled into save files via to_dict()/from_dict().
 """
 
+import math
 import random
 from datetime import date
 from typing import Dict, List, Optional, Tuple
@@ -1060,7 +1061,10 @@ PREMATCH_QUESTIONS = [
     },
     {
         "id": "opponent",
-        "ask": "{opp} are {opp_word} this season. How do you rate them?",
+        # F-3: opp_word is high/medium/low -- the bare "{opp_word}" read
+        # "Edmonton are high this season". Rewritten to the
+        # "{opp_word}-danger" pattern used by specialteams/scoring.
+        "ask": "{opp} are a {opp_word}-danger team this season. How do you rate them?",
         "answers": [
             ("They're a top side, we respect them", "respectful", 0, 1, 1,
              "Classy. No bulletin-board material for the opponent."),
@@ -1072,6 +1076,10 @@ PREMATCH_QUESTIONS = [
     },
     {
         "id": "pressure",
+        # F-5: this used to fire on ANY form -- including "excellent",
+        # asking if your job is under threat after a great run. Same
+        # when-guard treatment as 'scoring': only fires on poor form.
+        "when": lambda ctx: (ctx or {}).get("form_word") == "poor",
         "ask": "There's pressure on you after recent results. Is your job under threat?",
         "answers": [
             ("I have the full backing of the board", "calm", 0, 2, 1,
@@ -1142,7 +1150,9 @@ PREMATCH_QUESTIONS = [
     },
     {
         "id": "matchup",
-        "ask": "They'll try to dictate the matchups. With the team {form_word}, how do you respond against {opp}?",
+        # F-4: form_word is excellent/decent/poor/mixed -- the bare
+        # "With the team {form_word}" rendered "With the team excellent".
+        "ask": "They'll try to dictate the matchups. With the team's form {form_word}, how do you respond against {opp}?",
         "answers": [
             ("We roll four lines regardless", "confident", 1, 0, 1,
              "The depth players love hearing that."),
@@ -1157,7 +1167,7 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- the prematch ctx carries no
         # captain-production state, so the ask no longer asserts he has
         # been quiet.
-        "ask": "What do you need from your leaders against {opp} with the club {form_word}?",
+        "ask": "What do you need from your leaders against {opp} with the club playing {form_word}?",
         "answers": [
             ("They lead in ways you don't always see", "defensive", 1, 0, 0,
              "The captain appreciates the shield."),
@@ -1189,7 +1199,8 @@ PREMATCH_QUESTIONS = [
         # schedule. Keeps the real form_word premise.
         # DEV-B5: dropped the "demanding schedule" assertion (untracked in
         # the prematch ctx); ask is now form-only.
-        "ask": "The form's been {form_word}. How do you manage the energy against {opp}?",
+        # F-4: "The form's been {form_word}" was clumsy phrasing.
+        "ask": "The team's form has been {form_word}. How do you manage the energy against {opp}?",
         "answers": [
             ("Short shifts, smart changes", "calm", 1, 1, 0,
              "Sports science approves. So does the board."),
@@ -1204,7 +1215,7 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- no assertion that a prospect is
         # knocking; the question is now hypothetical, which the answers
         # already were.
-        "ask": "When does a prospect get his chance? With {opp} {opp_word}, could it be tonight?",
+        "ask": "When does a prospect get his chance? With a {opp_word}-danger {opp} in town, could it be tonight?",
         "answers": [
             ("If he's ready, he plays", "confident", 1, 1, 1,
              "The kids in the system are buzzing."),
@@ -1216,7 +1227,7 @@ PREMATCH_QUESTIONS = [
     },
     {
         "id": "blueline",
-        "ask": "Your system asks a lot of the defense. Against a {opp_word} {opp} team, does anything change?",
+        "ask": "Your system asks a lot of the defense. Against a {opp_word}-danger {opp} team, does anything change?",
         "answers": [
             ("The system is the system", "confident", 1, 0, 0,
              "Belief. The defensemen stand taller."),
@@ -1233,7 +1244,7 @@ PREMATCH_QUESTIONS = [
         # DEV-B5: reworded premise-safe -- no home/away state in the
         # prematch ctx and poor form can mean quiet or booing fans, so the
         # ask no longer asserts the fans will be loud.
-        "ask": "What's your message to the fans before puck drop against {opp}, with the club {form_word}?",
+        "ask": "What's your message to the fans before puck drop against {opp}, with the club playing {form_word}?",
         "answers": [
             ("Stick with us -- we'll give you a show", "passionate", 1, 0, 2,
              "The faithful roar their approval."),
@@ -1247,7 +1258,7 @@ PREMATCH_QUESTIONS = [
         "id": "rivalry",
         # DEV-B4: reworded premise-safe -- no rivalry state in the
         # prematch ctx, so not every opponent gets a rivalry edge.
-        "ask": "Games against {opp} can carry an edge. With them {opp_word}, how do you keep the emotions in check?",
+        "ask": "Games against {opp} can carry an edge. With them a {opp_word}-danger side, how do you keep the emotions in check?",
         "answers": [
             ("Channel it, don't fight it", "calm", 1, 1, 0,
              "Sports psychology 101. The room buys in."),
@@ -1262,7 +1273,7 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- no assertion of frequent OT
         # nights (not tracked in the prematch ctx); answers were already
         # plans, which fit the new ask unchanged.
-        "ask": "Overtime's always a possibility in a tight one. With the form {form_word}, what's the plan if it goes past sixty against {opp}?",
+        "ask": "Overtime's always a possibility in a tight one. With the team's form {form_word}, what's the plan if it goes past sixty against {opp}?",
         "answers": [
             ("We finish it in regulation", "confident", 1, 0, 1,
              "Intent stated. The room likes the ambition."),
@@ -1277,7 +1288,7 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- there is deliberately no
         # recent-trade log to gate on (see _situational_postmatch), so the
         # ask no longer asserts chatter is swirling.
-        "ask": "The rumor mill never sleeps. With {opp} {opp_word} tonight, how do you keep outside noise out of the room?",
+        "ask": "The rumor mill never sleeps. With a {opp_word}-danger {opp} tonight, how do you keep outside noise out of the room?",
         "answers": [
             ("The room is locked in", "confident", 1, 0, 1,
              "The players appreciate the public trust."),
@@ -1325,7 +1336,7 @@ PREMATCH_QUESTIONS = [
         "id": "veterans",
         # DEV-B4: reworded premise-safe -- no assertion that the veterans
         # have carried the load (not in the prematch ctx).
-        "ask": "Veterans set the standard. With the club {form_word}, do the young guys need to step up against {opp}?",
+        "ask": "Veterans set the standard. With the club playing {form_word}, do the young guys need to step up against {opp}?",
         "answers": [
             ("Everyone pulls the rope", "demanding", 1, 0, 0,
              "The kids heard that loud and clear."),
@@ -1398,7 +1409,7 @@ POSTMATCH_QUESTIONS_WIN = [
              "Now that's a statement. The room believes it."),
             ("Everyone contributed tonight", "calm", 1, 1, 1,
              "The fourth line will remember this."),
-            ("Let's see it again Tuesday", "honest", 0, 1, 0,
+            ("Let's see it again next game", "honest", 0, 1, 0,
              "Standards. The board loves the message."),
         ],
     },
@@ -1482,7 +1493,7 @@ POSTMATCH_QUESTIONS_LOSS = [
         "ask": "A {score} defeat to {opp}. What went wrong?",
         "answers": [
             ("I take full responsibility", "honest", 1, 2, 1,
-             "The players respect a manager who shields them."),
+             "The players respect a coach who shields them."),
             ("The players didn't show up", "defensive", -2, -1, -1,
              "The dressing room is furious at being thrown under the bus."),
             ("The officials were poor", "defensive", 0, -2, 1,
@@ -1649,41 +1660,57 @@ POSTMATCH_QUESTIONS_LOSS = [
     },
 ]
 
-POSTMATCH_QUESTIONS_DRAW = [
+# F-2: there are NO ties in the sim (STEP 0 verified 2026-10-11 --
+# simulation.py: tied after regulation -> _handle_overtime(); still tied
+# and not a playoff game -> _handle_shootout(); a marathon shootout still
+# tied after 18 rounds is decided by a coin flip that always awards a goal
+# and a winner (simulation.py:8240-8255); winner/loser is always assigned
+# (simulation.py:2394-2395). record_result() tracks only W/OTL/L -- in
+# parity_engine.record_result(home_won: bool), BoardSystem.record_result,
+# and ManagerProfile.record_result alike. So the old
+# POSTMATCH_QUESTIONS_DRAW bank's premise was FALSE 100% of the time:
+# both live callers (game_manager.py:6497, main.py:20392) pass went_ot
+# into the builder's "drew" parameter, so every OT win AND OT loss fired
+# questions asserting a non-existent draw ("A 4-3 draw with Boston").
+#
+# Root-cause fix: the draw bank is gone. `drew` keeps its name (both
+# callers pass positionally) but is now documented as the legacy name for
+# went_ot. OT results get their own banks -- OT_WIN when won, OT_LOSS
+# when not. No question may ever assert a draw again.
+POSTMATCH_QUESTIONS_OT_WIN = [
     {
         "id": "verdict",
-        "ask": "A {score} draw with {opp} after overtime. Fair result?",
+        "ask": "A {score} overtime win over {opp}. Your verdict?",
         "answers": [
-            ("We deserved more", "confident", 1, 0, 1,
+            ("We deserved the two points", "confident", 1, 0, 1,
              "The players feel their effort was recognized."),
-            ("A point is a point", "calm", 0, 1, 0,
+            ("A win is a win", "calm", 0, 1, 0,
              "Pragmatic. The board nods along."),
-            ("Two points dropped", "honest", -1, 0, -1,
+            ("We left it too late", "honest", -1, 0, -1,
              "Gloomy. The mood dips."),
         ],
     },
     {
         "id": "ot_point",
-        "ask": "A {score} result after overtime against {opp}. Happy with the point?",
+        "ask": "It took overtime to beat {opp} {score}. Happy with how you got there?",
         "answers": [
-            ("We'll take the point and move on", "calm", 0, 1, 0,
+            ("We'll take the points and move on", "calm", 0, 1, 0,
              "Pragmatic. Nobody's thrilled, nobody's crushed."),
-            ("We wanted two -- no question", "honest", 1, 0, 1,
+            ("We wanted it done in sixty -- no question", "honest", 1, 0, 1,
              "Ambition. The fans like the hunger."),
-            ("Overtime is a coin flip", "defensive", 0, 0, -1,
+            ("Overtime is a coin flip -- we'll take it", "defensive", 0, 0, -1,
              "A shrug. The fans wanted more fire."),
         ],
     },
     {
         "id": "shootout",
-        # DEV-B4: answers + reaction rewritten premise-safe -- OT can end
-        # 3-on-3 or in a shootout (drama_events.py) and the draw bank is
-        # unguarded, so nothing may assume a shootout happened.
-        "ask": "It went past regulation in the {score} draw with {opp}. What did you make of the overtime?",
+        # DEV-B4 (carried over): OT can end 3-on-3 or in a shootout
+        # (drama_events.py), so nothing may assume a shootout happened.
+        "ask": "It went past regulation in the {score} win over {opp}. What did you make of the overtime?",
         "answers": [
-            ("Overtime can go either way -- we have to be better at it", "honest", 0, 1, 0,
+            ("We stayed patient and it paid off", "honest", 0, 1, 0,
              "Accountability. The extra-time group puts in extra work."),
-            ("We deserved better than a coin flip", "defensive", 0, 0, 1,
+            ("We deserved to win it before the extra frame", "defensive", 0, 0, 1,
              "The fans agree loudly."),
             ("We'll be ready for the next one, however it ends", "confident", 1, 0, 1,
              "Faith. The skill guys feel backed."),
@@ -1691,25 +1718,22 @@ POSTMATCH_QUESTIONS_DRAW = [
     },
     {
         "id": "late_lead",
-        # DEV-B4: answers rewritten premise-safe -- the neutral ask can't
-        # assume a blown lead, so the answers are now point-dropped
-        # readings true of any draw.
-        "ask": "The {score} draw with {opp} -- how close were you to taking both points?",
+        "ask": "The {score} overtime win over {opp} -- how close were you to finishing it in regulation?",
         "answers": [
-            ("We left points on the table tonight", "honest", 1, 1, 0,
+            ("We should have put it away earlier", "honest", 1, 1, 0,
              "The room respects the accountability."),
             ("Tight games turn on small moments", "defensive", 0, 0, 0,
              "Hockey happens. The room moves on."),
-            ("We take the point and get back to work", "confident", 1, 0, 1,
+            ("Two points is two points", "confident", 1, 0, 1,
              "Forward-looking. The fans buy in."),
         ],
     },
     {
-        "id": "goalie_draw",
-        # DEV-B4: reworded premise-safe -- the unguarded draw bank can't
-        # assert the goalie kept the team in it; ask and answers now
-        # assess the goaltending without presuming it was heroic.
-        "ask": "How did you assess the goaltending in the {score} draw with {opp}?",
+        "id": "goalie_ot",
+        # DEV-B4 (carried over): the bank can't assert the goalie kept the
+        # team in it; ask and answers assess the goaltending without
+        # presuming it was heroic.
+        "ask": "How did you assess the goaltending in the {score} overtime win over {opp}?",
         "answers": [
             ("He gave us every chance to win it", "honest", 2, 0, 1,
              "The goalie hears it. The skaters feel it."),
@@ -1721,9 +1745,86 @@ POSTMATCH_QUESTIONS_DRAW = [
     },
     {
         "id": "playoff_point",
-        # DEV-B5: reworded premise-safe -- the draw bank is unguarded and
-        # no recent-tight-games history is in ctx, so the ask no longer
-        # asserts a pattern ("another"); only this game is known tight.
+        "ask": "Tight one with {opp}, {score}. Are these the points that decide playoff spots?",
+        "answers": [
+            ("Every point matters from here", "calm", 0, 1, 1,
+             "The room understands the math."),
+            ("We'll be playing past April", "confident", 1, 0, 2,
+             "Bold. The fans are dreaming."),
+            ("Too early for that talk", "defensive", 0, 0, -1,
+             "Cautious. The fans wanted ambition."),
+        ],
+    },
+]
+
+POSTMATCH_QUESTIONS_OT_LOSS = [
+    {
+        "id": "verdict",
+        "ask": "A {score} overtime defeat to {opp}. Your verdict?",
+        "answers": [
+            ("We deserved more", "confident", 1, 0, 1,
+             "The players feel their effort was recognized."),
+            ("A point is a point", "calm", 0, 1, 0,
+             "Pragmatic. The board nods along."),
+            ("Two points dropped", "honest", -1, 0, -1,
+             "Gloomy. The mood dips."),
+        ],
+    },
+    {
+        "id": "ot_point",
+        "ask": "A point from the {score} overtime loss to {opp}. Good enough?",
+        "answers": [
+            ("We'll take the point and move on", "calm", 0, 1, 0,
+             "Pragmatic. Nobody's thrilled, nobody's crushed."),
+            ("We wanted two -- no question", "honest", 1, 0, 1,
+             "Ambition. The fans like the hunger."),
+            ("Overtime is a coin flip", "defensive", 0, 0, -1,
+             "A shrug. The fans wanted more fire."),
+        ],
+    },
+    {
+        "id": "shootout",
+        # DEV-B4 (carried over): OT can end 3-on-3 or in a shootout
+        # (drama_events.py), so nothing may assume a shootout happened.
+        "ask": "It went past regulation in the {score} loss to {opp}. What did you make of the overtime?",
+        "answers": [
+            ("Overtime can go either way -- we have to be better at it", "honest", 0, 1, 0,
+             "Accountability. The extra-time group puts in extra work."),
+            ("We deserved better than a coin flip", "defensive", 0, 0, 1,
+             "The fans agree loudly."),
+            ("We'll be ready for the next one, however it ends", "confident", 1, 0, 1,
+             "Faith. The skill guys feel backed."),
+        ],
+    },
+    {
+        "id": "late_lead",
+        "ask": "The {score} overtime loss to {opp} -- how close were you to taking both points?",
+        "answers": [
+            ("We left points on the table tonight", "honest", 1, 1, 0,
+             "The room respects the accountability."),
+            ("Tight games turn on small moments", "defensive", 0, 0, 0,
+             "Hockey happens. The room moves on."),
+            ("We take the point and get back to work", "confident", 1, 0, 1,
+             "Forward-looking. The fans buy in."),
+        ],
+    },
+    {
+        "id": "goalie_ot",
+        # DEV-B4 (carried over): the bank can't assert the goalie kept the
+        # team in it; ask and answers assess the goaltending without
+        # presuming it was heroic.
+        "ask": "How did you assess the goaltending in the {score} overtime loss to {opp}?",
+        "answers": [
+            ("He gave us every chance to win it", "honest", 2, 0, 1,
+             "The goalie hears it. The skaters feel it."),
+            ("Steady all night -- exactly what we need", "calm", 1, 1, 1,
+             "Steady praise for steady play."),
+            ("We all need to be better in front of him", "demanding", 0, 0, 0,
+             "The defense takes the message."),
+        ],
+    },
+    {
+        "id": "playoff_point",
         "ask": "Tight one with {opp}, {score}. Are these the points that decide playoff spots?",
         "answers": [
             ("Every point matters from here", "calm", 0, 1, 1,
@@ -1738,10 +1839,24 @@ POSTMATCH_QUESTIONS_DRAW = [
 
 
 def _fill(template: str, ctx: dict) -> str:
+    """Fill {slots} from ctx.
+
+    Fail-SAFE (was fail-open): a missing slot substitutes an empty string
+    instead of returning the raw template -- a literal "{slot}" must never
+    render in-game. Missing slots also can't re-trigger on a second pass
+    because there is nothing left to fill."""
+    if not isinstance(ctx, dict):
+        ctx = {}
     try:
         return template.format(**ctx)
     except KeyError:
-        return template
+        safe = dict(ctx or {})
+
+        class _BlankMissing(dict):
+            def __missing__(self, key):
+                return ""
+
+        return template.format_map(_BlankMissing(safe))
 
 
 def _presser_when_ok(q: dict, ctx: dict) -> bool:
@@ -1948,12 +2063,26 @@ def _pq_gp(p) -> int:
     return _pq_num(p, "gp", "games_played")
 
 
+def _pq_sane_svp(v) -> float:
+    """daily_news-style finiteness gate for save percentages. Mirrors the
+    gate in daily_news._depth_stories: non-finite (inf/nan) or
+    out-of-bounds (>1.0, <0.0) values must never qualify or render --
+    without it, float('inf') formats straight into press text."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(f) or f < 0.0 or f > 1.0:
+        return 0.0
+    return f
+
+
 def _pq_svp(p) -> float:
     for n in ("save_percentage", "save_pct"):
         try:
             v = getattr(p, n, None)
             if v is not None:
-                return float(v)
+                return _pq_sane_svp(v)
         except (TypeError, ValueError):
             pass
     try:
@@ -1961,7 +2090,7 @@ def _pq_svp(p) -> float:
         if st is not None:
             v = getattr(st, "save_percentage", None)
             if v is not None:
-                return float(v)
+                return _pq_sane_svp(v)
     except (TypeError, ValueError):
         pass
     return 0.0
@@ -2216,17 +2345,33 @@ def _situational_postmatch(team, ctx, rng) -> List[dict]:
 
 def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
                             score: str, star_name: str, ctx: dict) -> List[dict]:
+    """Build the post-match presser.
+
+    drew: legacy parameter name -- both live callers pass went_ot
+    (game_manager.py:6497, main.py:20392). Ties are impossible in the sim
+    (STEP 0 verified 2026-10-11: OT -> shootout -> coin flip always
+    produces a winner; record_result tracks only W/OTL/L), so drew==True
+    means "the game went to overtime": OT wins draw from
+    POSTMATCH_QUESTIONS_OT_WIN, OT losses from POSTMATCH_QUESTIONS_OT_LOSS.
+    No bank ever asserts a draw.
+    """
     if not isinstance(ctx, dict):
         ctx = {}
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
                    "Dave Tremblay (TSN)", "Lisa Park (Sportsnet)",
                    "Emma Walsh (Sportsnet)", "Marc Dubois (TSN)"]
-    bank = POSTMATCH_QUESTIONS_DRAW if drew else (
-        POSTMATCH_QUESTIONS_WIN if won else POSTMATCH_QUESTIONS_LOSS)
+    bank = ((POSTMATCH_QUESTIONS_OT_WIN if won else POSTMATCH_QUESTIONS_OT_LOSS)
+            if drew else
+            (POSTMATCH_QUESTIONS_WIN if won else POSTMATCH_QUESTIONS_LOSS))
     full_ctx = dict(ctx)
     full_ctx.update({"score": score, "star": star_name,
                      "opp": getattr(opponent, "team_name", "them"),
                      "won": won, "drew": drew})
+    # F-7: the postmatch path was iterating the bank UNFILTERED -- postmatch
+    # questions now run through the same 'when' guard as prematch. A guard
+    # that errors still excludes its question (fail-closed, see
+    # _presser_when_ok).
+    bank = [q for q in bank if _presser_when_ok(q, full_ctx)]
     out = []
     for i, q in enumerate(bank):
         answers = []
