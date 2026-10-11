@@ -1102,8 +1102,13 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     elif age <= 26:
         base += pot // 2
 
-    # Age curve
-    if age <= 21:
+    # Age curve. The 1.3x youth band runs to age 23 (not 21): commit
+    # 4121d47 ("extend 1.3x youth premium to age 23 (was 21)") applied that
+    # change to the breakdown dialog but missed this engine function, leaving
+    # ages 22-23 in a 1.0 hole below the 24-29 prime band. Bands are now
+    # contiguous: <=23 -> 1.3, 24-29 -> 1.2, 30-32 -> 1.0, 33-34 -> 0.8,
+    # 35+ -> 0.5.
+    if age <= 23:
         base *= 1.3
     elif 24 <= age <= 29:
         base *= 1.2
@@ -1227,7 +1232,8 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
     recomputes the identical math while recording each step so the
     "Analyze Trade Value" dialog can show WHY a player is worth what he
     is (attributes/OVR, age curve, potential, contract efficiency,
-    volatility, goalie premium, RFA-impasse rights, recent performance).
+    volatility, goalie premium, RFA-impasse rights, trade-request discount,
+    recent performance).
     Never raises -- returns ([], total) best-effort on weird inputs.
     """
     comps = []
@@ -1389,6 +1395,39 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
             'detail': (f"unsigned RFA at a signing impasse: "
                        f"x{RFA_IMPASSE_RIGHTS_MULT:g} (buyer must still "
                        f"sign a player who refused his own club)"),
+        })
+        running = _new
+
+    # Trade-request discount (mirrors player_trade_value, applied after the
+    # RFA-impasse multiplier there too): a player who wants out has no
+    # leverage -- everyone knows he's available, so the return discounts.
+    try:
+        _tr_mult, _tr_why = 1.0, ""
+        try:
+            from player_decision import wants_out as _wo2
+            _wants_out = bool(_wo2(player))
+        except Exception:
+            _wants_out = False
+        _risk = float(getattr(player, "trade_request_risk", 0) or 0)
+        if _wants_out:
+            _tr_mult, _tr_why = 0.75, "trade request filed (wants out)"
+        elif _risk >= 75:
+            _tr_mult, _tr_why = (
+                0.70, f"trade-request risk {_risk:g}: imminent request")
+        elif _risk >= 50:
+            _tr_mult, _tr_why = (
+                0.80, f"trade-request risk {_risk:g}: likely request")
+        elif _risk >= 25:
+            _tr_mult, _tr_why = (
+                0.90, f"trade-request risk {_risk:g}: possible request")
+    except Exception:
+        _tr_mult, _tr_why = 1.0, ""
+    if _tr_mult != 1.0:
+        _new = running * _tr_mult
+        comps.append({
+            'label': 'Trade-request discount',
+            'delta': int(_new - running),
+            'detail': f"{_tr_why}: x{_tr_mult:g} (no leverage -- known to be available)",
         })
         running = _new
 
