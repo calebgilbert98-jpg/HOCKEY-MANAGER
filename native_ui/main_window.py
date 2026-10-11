@@ -2378,6 +2378,26 @@ class MainWindow(QMainWindow):
         """
         if not self.game:
             return
+        # Race guard: a season-flow quick advance / automation may still be
+        # running its worker thread after its progress dialog was closed.
+        # Starting a second simulate_day() worker on the same game object
+        # would corrupt league state -- refuse instead of overlapping.
+        # The season-flow screen is lazily instantiated, so absence from
+        # _screens means no background sim is running.
+        try:
+            _sf_wrapper = getattr(self, "_screens", {}).get("season_flow")
+            _sf_inner = (_sf_wrapper.widget()
+                         if hasattr(_sf_wrapper, "widget") else None)
+            if (_sf_inner is not None
+                    and hasattr(_sf_inner, "is_background_sim_running")
+                    and _sf_inner.is_background_sim_running()):
+                self._notify_info(
+                    "Simulation in progress",
+                    "Simulation in progress -- please wait for it to finish "
+                    "before continuing.")
+                return
+        except Exception as e:
+            print(f"[native] season-flow busy check failed: {e}")
         try:
             label, blockers = self.game.get_continue_state()
             if blockers:
