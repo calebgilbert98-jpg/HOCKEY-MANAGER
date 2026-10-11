@@ -111,6 +111,17 @@ class GameSaveManager:
     
     def __init__(self, game_manager):
         self.game_manager = game_manager
+        # Session-owner wiring (root-cause fix): the parked-session
+        # serializer (_serializable_team_talk_sessions) and restore
+        # (_restore_team_talk_sessions) read self.app, but nothing ever
+        # assigned it, so both silently no-op'd. Prefer the GUI-app
+        # back-reference the game manager already carries (main.py sets
+        # game_manager.app before any GameSaveManager is constructed);
+        # fall back to the wrapped game manager itself -- the session
+        # owner in native-UI/headless paths, which never set
+        # game_manager.app (native-ui/screens/staff.py parks its staff
+        # negotiate chains on the game manager via _chain_owner()).
+        self.app = getattr(game_manager, 'app', None) or game_manager
         self.save_directory = "saves"
         self.autosave_enabled = True
         self.autosave_frequency = 7  # Days between autosaves
