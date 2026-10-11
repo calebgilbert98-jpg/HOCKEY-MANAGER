@@ -30,10 +30,19 @@ class SystemsRivalryScreen(BaseScreen):
 
     @staticmethod
     def _store(league):
+        import logging
+        _logger = logging.getLogger(__name__)
         try:
             import reputation_system as rs
             return rs._rivalry_store(league)
         except Exception:
+            # Import/setup failure here would silently read the raw
+            # league.rivalries attribute instead -- log the traceback so a
+            # missing reputation_system is diagnosable (e.g. a PyInstaller
+            # bundling miss).
+            _logger.exception(
+                "Could not load the rivalry store via reputation_system; "
+                "falling back to league.rivalries")
             return list(getattr(league, "rivalries", None) or [])
 
     def _build_body(self):
@@ -50,6 +59,8 @@ class SystemsRivalryScreen(BaseScreen):
 
     def _rec_card(self, r):
         """One rivalry record as a card; None if it can't be parsed."""
+        import logging
+        _logger = logging.getLogger(__name__)
         try:
             a = str(r.get("a_name", "?"))
             b = str(r.get("b_name", "?"))
@@ -59,7 +70,13 @@ class SystemsRivalryScreen(BaseScreen):
             origin = str(r.get("origin", "") or "")
             story = str(r.get("story", "") or "").strip()[:280]
             date = str(r.get("date", "") or "")
-        except Exception:
+        except Exception as exc:
+            # A record the screen can't parse would just vanish -- log it
+            # so malformed rivalry data is visible instead of silently
+            # dropping cards.
+            _logger.warning(
+                "Could not parse rivalry record of type %s; card "
+                "skipped: %s", type(r).__name__, exc)
             return None
         band, tone = heat_band(intensity)
 
@@ -87,6 +104,8 @@ class SystemsRivalryScreen(BaseScreen):
         return card
 
     def refresh(self):
+        import logging
+        _logger = logging.getLogger(__name__)
         content = getattr(self, "_content", None)
         if content is None:
             return
@@ -102,7 +121,13 @@ class SystemsRivalryScreen(BaseScreen):
         try:
             import reputation_system as rs
             mine = rs.get_rivalries_for(store, team)
-        except Exception:
+        except Exception as exc:
+            # A failed lookup would silently render "No rivalries yet" --
+            # log it with the team name so a real lookup failure isn't
+            # mistaken for an empty store.
+            _logger.warning(
+                "get_rivalries_for failed for team %r; showing no "
+                "rivalries: %s", getattr(team, "team_name", ""), exc)
             mine = []
         my_name = getattr(team, "team_name", "")
         try:
@@ -111,7 +136,13 @@ class SystemsRivalryScreen(BaseScreen):
                     and my_name not in (r.get("a_name"), r.get("b_name"))]
             recs.sort(key=lambda r: -float(r.get("intensity", 0) or 0))
             hottest = recs[:8]
-        except Exception:
+        except Exception as exc:
+            # A failed ranking would silently render "The league is quiet
+            # right now" -- log it so a real computation failure isn't
+            # mistaken for a quiet league.
+            _logger.warning(
+                "Hottest-feuds computation failed for team %r; showing "
+                "empty league section: %s", my_name, exc)
             hottest = []
 
         # --- Your rivalries ---
