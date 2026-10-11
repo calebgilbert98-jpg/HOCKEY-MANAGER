@@ -21,15 +21,15 @@ from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="season_summary/resolve_gm") or game
 
 
 def _league(game):
-    return safe_call(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league, context="season_summary/resolve_league")
 
 
 def _season_label(league):
-    y = safe_call(lambda: int(getattr(league, "season_year", 0) or 0), 0)
+    y = safe_call(lambda: int(getattr(league, "season_year", 0) or 0), 0, context="season_summary/season_label_year")
     return f"{y}-{y + 1}" if y else ""
 
 
@@ -37,12 +37,13 @@ def _season_over(league):
     """True when the regular season is complete."""
     try:
         sched = safe_call(lambda: list(getattr(league, "schedule", None)
-                                   or []), []) or []
+                                   or []), [],
+                          context="season_summary/season_over_schedule") or []
         if sched:
             return not any(not g.get("played", False)
                            for g in sched if isinstance(g, dict))
-        bracket = safe_call(lambda: getattr(league, "playoff_bracket", None))
-        champ = safe_call(lambda: getattr(bracket, "stanley_cup_champion", None))
+        bracket = safe_call(lambda: getattr(league, "playoff_bracket", None), context="season_summary/season_over_bracket")
+        champ = safe_call(lambda: getattr(bracket, "stanley_cup_champion", None), context="season_summary/season_over_champion")
         return champ is not None
     except Exception:
         return False
@@ -50,8 +51,8 @@ def _season_over(league):
 
 def _players(league):
     out = []
-    for t in (safe_call(lambda: list(league.teams), []) or []):
-        out.extend(safe_call(lambda: list(t.roster), []) or [])
+    for t in (safe_call(lambda: list(league.teams), [], context="season_summary/players_teams") or []):
+        out.extend(safe_call(lambda: list(t.roster), [], context="season_summary/players_roster") or [])
     return out
 
 
@@ -59,7 +60,7 @@ def _roster_map(league):
     try:
         import awards_race as ar
         return ar.roster_team_map(
-            safe_call(lambda: list(league.teams), []) or [])
+            safe_call(lambda: list(league.teams), [], context="season_summary/roster_map_teams") or [])
     except Exception:
         return {}
 
@@ -70,7 +71,7 @@ def _calc_season_awards_impl(game, league):
     split)."""
     import awards_race as ar
     players = _players(league)
-    teams = safe_call(lambda: list(league.teams), []) or []
+    teams = safe_call(lambda: list(league.teams), [], context="season_summary/awards_teams") or []
     team_pct = {}
     for t in teams:
         gp = getattr(t, "games_played", 0) or 0
@@ -106,7 +107,7 @@ def _calc_season_awards_impl(game, league):
         except Exception:
             return None
 
-    d = safe_call(lambda: getattr(_gm(game), "current_date", None))
+    d = safe_call(lambda: getattr(_gm(game), "current_date", None), context="season_summary/awards_current_date")
 
     awards = {}
     awards["Hart Trophy (MVP)"] = _top(
@@ -152,9 +153,10 @@ def _ceremony_script(game, league):
 
     p = _Proxy()
     p.league = league
-    p.current_date = safe_call(lambda: getattr(gm, "current_date", None))
+    p.current_date = safe_call(lambda: getattr(gm, "current_date", None), context="season_summary/ceremony_current_date")
     p._playoff_bracket = safe_call(
-        lambda: getattr(league, "playoff_bracket", None))
+        lambda: getattr(league, "playoff_bracket", None),
+                                   context="season_summary/ceremony_bracket")
 
     def _calc(players):
         return _calc_season_awards_impl(game, league)
@@ -319,15 +321,15 @@ class SeasonSummaryScreen(BaseScreen):
 
         team_info = None
         try:
-            ut = (safe_call(lambda: _gm(self.game).user_team)
-                  or safe_call(lambda: getattr(self.game, "user_team", None)))
+            ut = (safe_call(lambda: _gm(self.game).user_team, context="season_summary/summary_user_team")
+                  or safe_call(lambda: getattr(self.game, "user_team", None), context="season_summary/summary_user_team"))
             if ut is not None:
                 w = int(getattr(ut, "wins", 0) or 0)
                 l = int(getattr(ut, "losses", 0) or 0)
                 otl = int(getattr(ut, "ot_losses", 0)
                           or getattr(ut, "otl", 0) or 0)
                 pts = int(getattr(ut, "points", 0) or 0)
-                table = safe_call(lambda: dict(league.standings), {}) or {}
+                table = safe_call(lambda: dict(league.standings), {}, context="season_summary/summary_standings") or {}
                 ordered = sorted(
                     table.items(),
                     key=lambda kv: (-int(kv[1].get("Points", 0) or 0),
@@ -336,7 +338,7 @@ class SeasonSummaryScreen(BaseScreen):
                 pos = (names.index(ut.team_name) + 1
                        if ut.team_name in names else None)
                 tscorers = sorted(
-                    [p for p in (safe_call(lambda: list(ut.roster), []) or [])
+                    [p for p in (safe_call(lambda: list(ut.roster), [], context="season_summary/summary_team_roster") or [])
                      if "GOALIE" not in str(getattr(
                          getattr(p, "primary_position", None),
                          "name", "")).upper()],
