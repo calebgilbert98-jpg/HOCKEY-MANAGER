@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget, QMenu,
 )
 from PySide6.QtCore import Qt
 
@@ -381,7 +381,8 @@ class BeatDialog(QDialog):
         self._region_combo.addItems(self.REGIONS)
 
         team = _user_team(game)
-        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [])
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
+                          context="scouting/load_staff")
         for s in staff:
             role = str(getattr(getattr(s, "role", None), "value",
                                getattr(s, "role", "") or ""))
@@ -774,6 +775,7 @@ class ScoutingScreen(BaseScreen):
         work_layout.setSpacing(12)
         self._build_assignment_section(work_layout)
         self._build_beats_section(work_layout)
+        self._build_suggestions_section(work_layout)
         self._build_reports_section(work_layout)
         return work
 
@@ -786,9 +788,26 @@ class ScoutingScreen(BaseScreen):
         new_btn.setCursor(Qt.PointingHandCursor)
         new_btn.clicked.connect(self._new_assignment)
         assign_btn_row.addWidget(new_btn)
+        cancel_btn = QPushButton("Cancel Selected")
+        cancel_btn.setToolTip(
+            "Cancel the selected assignment (right-click also works). "
+            "The scout is freed up; any report filed so far is kept.")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.clicked.connect(self._cancel_selected_assignment)
+        assign_btn_row.addWidget(cancel_btn)
+        # The 30-assignment cap is communicated up front (D-13), never
+        # silently enforced.
+        self._cap_label = QLabel("")
+        self._cap_label.setStyleSheet("color: #8b95ab; font-size: 11px;")
+        assign_btn_row.addWidget(self._cap_label)
         assign_btn_row.addStretch()
         assign_layout.addLayout(assign_btn_row)
         self._assign_list = QListWidget()
+        # Right-click a live assignment to cancel it (mainline parity with
+        # ProfessionalScoutingView._on_assignment_right_click).
+        self._assign_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._assign_list.customContextMenuRequested.connect(
+            self._on_assign_context_menu)
         assign_layout.addWidget(self._assign_list)
         layout.addWidget(assign_box)
 
@@ -811,7 +830,83 @@ class ScoutingScreen(BaseScreen):
         beat_layout.addWidget(self._beat_list)
         layout.addWidget(beat_box)
 
-    def _build_reports_section(self, layout):
+    def _build_suggestions_section(self, layout):
+        """Scout suggestions (D-13, mainline parity).
+
+        Qt port of ModernScoutingWindow's Targets tab: the unified
+        trade-target surface (trade_market.get_unified_targets) plus the
+        "Refresh suggestions" button that asks the user's scouts for new
+        value tips (trade_market.refresh_scout_suggestions).
+        """
+        sugg_box = QGroupBox("Scout Suggestions")
+        sugg_layout = QVBoxLayout(sugg_box)
+        sugg_note = QLabel(
+            "Trade-target tips from your scouts. Hit Refresh Suggestions "
+            "to ask them for new value tips.")
+        sugg_note.setStyleSheet("color: #8b95ab; font-size: 12px;")
+        sugg_note.setWordWrap(True)
+        sugg_layout.addWidget(sugg_note)
+        sugg_btn_row = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh Suggestions")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.clicked.connect(self._refresh_suggestions)
+        sugg_btn_row.addWidget(refresh_btn)
+        sugg_btn_row.addStretch()
+        sugg_layout.addLayout(sugg_btn_row)
+        self._suggest_list = QListWidget()
+        sugg_layout.addWidget(self._suggest_list)
+        layout.addWidget(sugg_box)
+
+    def _refresh_suggestions(self):
+        """Ask the user's scouts for new value tips (mainline parity with
+        ModernScoutingWindow._targets_refresh_suggestions)."""
+        gm = _resolve_gm(self.game)
+        league = safe_call(lambda: gm.league, None,
+                           context="scouting/load_league")
+        if league is None:
+            QMessageBox.warning(self, "No Data", "No league data available.")
+            return
+        if _trade_market is None:
+            QMessageBox.warning(
+                self, "Scout Suggestions",
+                "Suggestion helpers are unavailable.")
+            return
+        n = safe_call(
+            lambda: _trade_market.refresh_scout_suggestions(gm, league), 0,
+            context="scouting/refresh_suggestions")
+        self._populate_suggestions()
+        if n:
+            QMessageBox.information(
+                self, "Scout Suggestions",
+                f"{n} new suggestion(s) from your scouts.")
+        else:
+            QMessageBox.information(
+                self, "Scout Suggestions",
+                "No new suggestions (your scouts found no new "
+                "value, or you have no scouts on staff).")
+
+    def _populate_suggestions(self):
+        """Fill the suggestions list from the unified targets surface."""
+        self._suggest_list.clear()
+        gm = _resolve_gm(self.game)
+        league = safe_call(lambda: gm.league, None,
+                           context="scouting/load_league")
+        entries = []
+        if league is not None and _trade_market is not None:
+            entries = safe_call(
+                lambda: _trade_market.get_unified_targets(league), [],
+                context="scouting/load_suggestions") or []
+        for e in entries:
+            try:
+                name = e.get("player_name", "?")
+                notes = e.get("notes", "") or ""
+                self._suggest_list.addItem(
+                    f"{name} — {notes}" if notes else name)
+            except Exception:
+                continue
+        if not entries:
+            self._suggest_list.addItem(
+                "No suggestions yet — hit Refresh Suggestions.")
         report_box = QGroupBox("Scouting Reports")
         report_layout = QVBoxLayout(report_box)
         self._report_list = QListWidget()
@@ -928,25 +1023,67 @@ class ScoutingScreen(BaseScreen):
                 QMessageBox.warning(
                     self, "Assignment", "Select a prospect and a scout.")
                 return
-            try:
-                # Direct game call (web: POST /api/scouting/assignment)
-                assignments = getattr(self.game, "scouting_assignments", None)
-                if assignments is not None:
-                    assignments[prospect] = scout
-                else:
-                    # Fallback: try the module function
-                    try:
-                        import scouting as _sm
-                        if hasattr(_sm, "apply_player_assignment"):
-                            _sm.apply_player_assignment(
-                                self.game,
-                                getattr(prospect, "id", None),
-                                getattr(scout, "id", None))
-                    except Exception:
-                        pass
-                self.refresh()
-            except Exception as e:
-                QMessageBox.warning(self, "Assignment", f"Failed: {e}")
+            # Mainline-faithful create (D-13): the cap, duplicate refusal,
+            # and ETA pace are all communicated through the returned message.
+            ok, msg = _create_assignment(self.game, prospect, scout)
+            if ok:
+                QMessageBox.information(self, "Scouting Assignment", msg)
+            else:
+                QMessageBox.warning(self, "Scouting Assignment", msg)
+            self.refresh()
+
+    def _on_assign_context_menu(self, pos):
+        """Right-click menu on a live assignment: cancel it.
+
+        Qt port of ProfessionalScoutingView._on_assignment_right_click.
+        """
+        item = self._assign_list.itemAt(pos)
+        if item is None:
+            return
+        self._assign_list.setCurrentItem(item)
+        menu = QMenu(self)
+        action = menu.addAction("Cancel Assignment")
+        if menu.exec(self._assign_list.mapToGlobal(pos)) == action:
+            self._cancel_selected_assignment()
+
+    def _selected_assignment_player(self):
+        """The player behind the currently selected assignment row."""
+        item = self._assign_list.currentItem()
+        if item is None:
+            return None
+        try:
+            return item.data(Qt.UserRole)
+        except Exception:
+            return None
+
+    def _cancel_selected_assignment(self):
+        """Cancel the selected REAL scouting assignment.
+
+        Mainline parity with ProfessionalScoutingView._cancel_assignment:
+        confirm first ("The scout is freed up; any report filed so far is
+        kept."), then pop the assignment so the scout is freed and the
+        assignment state is clean.
+        """
+        player = self._selected_assignment_player()
+        if player is None:
+            QMessageBox.warning(
+                self, "No Selection",
+                "Select an assignment to cancel.")
+            return
+        pname = getattr(player, "full_name", "this player")
+        reply = QMessageBox.question(
+            self, "Cancel Assignment",
+            f"Stop scouting {pname}?\n\n"
+            "The scout is freed up; any report filed so far is kept.",
+            QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        ok, msg = _cancel_assignment(self.game, player)
+        if ok:
+            QMessageBox.information(self, "Assignment Cancelled", msg)
+        else:
+            QMessageBox.warning(self, "Scouting", msg)
+        self.refresh()
 
     def _new_beat(self):
         dlg = BeatDialog(self.game, self)
@@ -1079,7 +1216,8 @@ class ScoutingScreen(BaseScreen):
         team_name is None for prospects and free agents.
         """
         gm = _resolve_gm(self.game)
-        league = safe_call(lambda: gm.league)
+        league = safe_call(lambda: gm.league,
+                           context="scouting/load_league")
         out = []
         seen = set()
 
@@ -1093,25 +1231,31 @@ class ScoutingScreen(BaseScreen):
 
         for attr in ("draft_prospects", "draft_reentries"):
             for p in safe_call(
-                    lambda: list(getattr(league, attr, None) or []), []):
+                    lambda: list(getattr(league, attr, None) or []), [],
+                    context="scouting/load_draft_pool"):
                 _add(p, "draft", None)
         for t in safe_call(
-                lambda: list(getattr(league, "teams", None) or []), []):
+                lambda: list(getattr(league, "teams", None) or []), [],
+                context="scouting/load_teams"):
             tname = getattr(t, "team_name", "") or ""
             # NHL roster
             for p in safe_call(
-                    lambda: list(getattr(t, "roster", None) or []), []):
+                    lambda: list(getattr(t, "roster", None) or []), [],
+                    context="scouting/load_roster"):
                 _add(p, "nhl", tname)
             # AHL roster
             for p in safe_call(
-                    lambda: list(getattr(t, "ahl_roster", None) or []), []):
+                    lambda: list(getattr(t, "ahl_roster", None) or []), [],
+                    context="scouting/load_ahl_roster"):
                 _add(p, "ahl", tname)
             # Prospects
             for p in safe_call(
-                    lambda: list(getattr(t, "prospects", None) or []), []):
+                    lambda: list(getattr(t, "prospects", None) or []), [],
+                    context="scouting/load_prospects"):
                 _add(p, "prospects", tname)
         for p in safe_call(
-                lambda: list(getattr(league, "free_agents", None) or []), []):
+                lambda: list(getattr(league, "free_agents", None) or []), [],
+                context="scouting/load_free_agents"):
             _add(p, "free", None)
         return out
 
@@ -1227,25 +1371,63 @@ class ScoutingScreen(BaseScreen):
 
     # --- Refresh ---
     def refresh(self):
-        gm = _resolve_gm(self.game)
         team = _user_team(self.game)
+        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
+                          context="scouting/load_staff")
+        # Player id -> player map for report/assignment rows that need the
+        # player object (advanced analysis, cancel).
+        by_id = {str(getattr(p, "id", "") or ""): p
+                 for p, _s, _t in self._db_pool()}
+        self._refresh_assignments(team)
+        self._refresh_beats(staff)
+        self._refresh_reports(team, by_id)
+        self._populate_suggestions()
+        self._refresh_staff_table(staff)
 
-        # Assignments
+        # Database
+        self._refresh_db_teams()
+        self._refresh_profile_combo()
+        self._refresh_db()
+
+    def _refresh_assignments(self, team):
+        """Active assignments with live ETA (D-13).
+
+        Each row shows scout, target, ETA (mainline: "complete" / "~Nd" /
+        "—"), and status (viewings · accuracy). The player object rides on
+        the item so cancel works by selection.
+        """
         self._assign_list.clear()
         assignments = safe_call(
             lambda: list((getattr(self.game, "scouting_assignments", None) or {}).items()), [],
             context="scouting/load_assignments")
+        reports = safe_call(
+            lambda: dict(getattr(team, "scouting_reports", None) or {}), {},
+            context="scouting/load_reports")
         for player, scout in assignments:
             pname = getattr(player, "full_name", "?")
             sname = getattr(scout, "full_name", getattr(scout, "name", "?"))
-            self._assign_list.addItem(f"{pname} → {sname}")
+            report = reports.get(getattr(player, "id", None))
+            views = getattr(report, "viewings", 0) if report else 0
+            acc = getattr(report, "accuracy", "—") if report else "—"
+            days = safe_call(
+                lambda: _estimate_days(self.game, player, scout), None,
+                context="scouting/estimate_eta")
+            eta = "complete" if days == 0 else (f"~{days}d" if days else "—")
+            item = QListWidgetItem(
+                f"{sname} → {pname} · ETA {eta} · "
+                f"{views} viewings · accuracy {acc}")
+            item.setData(Qt.UserRole, player)
+            self._assign_list.addItem(item)
         if not assignments:
             self._assign_list.addItem("No active assignments")
+        # Communicate the 30-assignment cap up front (D-13).
+        n = len(assignments)
+        self._cap_label.setText(
+            f"Active assignments: {n} / {_MAX_ACTIVE_ASSIGNMENTS}")
 
-        # Beats (from scouts with region set)
+    def _refresh_beats(self, staff):
+        """Regional beats (from scouts with a region set)."""
         self._beat_list.clear()
-        staff = safe_call(lambda: list(getattr(team, "staff", None) or []), [],
-                          context="scouting/load_staff")
         beats = 0
         for s in staff:
             region = getattr(s, "region", None) or getattr(s, "beat", None)
@@ -1256,21 +1438,28 @@ class ScoutingScreen(BaseScreen):
         if not beats:
             self._beat_list.addItem("No regional beats assigned")
 
-        # Reports
+    def _refresh_reports(self, team, by_id):
+        """Scouting reports; each row carries (player, report) for the
+        advanced-analysis dialog."""
         self._report_list.clear()
         reports = safe_call(
-            lambda: list((getattr(team, "scouting_reports", None) or {}).values()), [],
+            lambda: list((getattr(team, "scouting_reports", None) or {}).items()), [],
             context="scouting/load_reports")
-        for r in reports[:50]:
-            pname = getattr(getattr(r, "player", None), "full_name", "?")
+        for pid, r in reports[:50]:
+            player = by_id.get(str(pid))
+            if player is None:
+                player = getattr(r, "player", None)
+            pname = getattr(player, "full_name", None) or f"Player {pid}"
             acc = getattr(r, "accuracy", "?")
             viewings = getattr(r, "viewings", 0)
-            self._report_list.addItem(
+            item = QListWidgetItem(
                 f"{pname} — accuracy {acc} ({viewings} viewings)")
+            item.setData(Qt.UserRole, (player, r))
+            self._report_list.addItem(item)
         if not reports:
             self._report_list.addItem("No scouting reports yet")
 
-        # Staff table
+    def _refresh_staff_table(self, staff):
         scouts = []
         for s in staff:
             role = str(getattr(getattr(s, "role", None), "value",
@@ -1295,8 +1484,3 @@ class ScoutingScreen(BaseScreen):
                 i, 4, QTableWidgetItem(str(getattr(s, "age", "?"))))
             self._staff_table.setItem(
                 i, 5, QTableWidgetItem(str(getattr(s, "experience", "?"))))
-
-        # Database
-        self._refresh_db_teams()
-        self._refresh_profile_combo()
-        self._refresh_db()
