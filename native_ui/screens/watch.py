@@ -181,7 +181,8 @@ def _resolve_gm(game):
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return safe_call(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?",
+                      context="watch/team_name") or "?"
 
 
 def _abbr(name):
@@ -239,15 +240,19 @@ def _player_name(p):
 
 
 def _pos_short(p):
-    pos = safe_call(lambda: getattr(p, "primary_position", None))
-    val = safe_call(lambda: getattr(pos, "value", None)) or \
-        safe_call(lambda: getattr(pos, "name", ""), "") or ""
+    pos = safe_call(lambda: getattr(p, "primary_position", None),
+                      context="watch/pos_short:position")
+    val = safe_call(lambda: getattr(pos, "value", None),
+                      context="watch/pos_short:value") or \
+        safe_call(lambda: getattr(pos, "name", ""), "",
+                  context="watch/pos_short:name") or ""
     return str(val)
 
 
 def _is_goalie(p):
     name = str(safe_call(lambda: getattr(
-        getattr(p, "primary_position", None), "name", ""), "") or "").upper()
+        getattr(p, "primary_position", None), "name", ""), "",
+        context="watch/is_goalie") or "").upper()
     return "GOALIE" in name
 
 
@@ -357,7 +362,9 @@ def set_target_entry(entry):
 def _build_id_meta(home_team, away_team):
     meta = {}
     for idx, team in enumerate((home_team, away_team)):
-        roster = safe_call(lambda: list(getattr(team, "roster", None) or []), []) or []
+        roster = safe_call(
+            lambda: list(getattr(team, "roster", None) or []), [],
+            context="watch/id_meta:roster") or []
         for p in roster:
             try:
                 pid = getattr(p, "id", None)
@@ -368,7 +375,8 @@ def _build_id_meta(home_team, away_team):
                     "name": _player_name(p),
                     "goalie": _is_goalie(p),
                     "jersey": str(safe_call(lambda: getattr(
-                        p, "jersey_number", ""), "") or ""),
+                        p, "jersey_number", ""), "",
+                        context="watch/id_meta:jersey") or ""),
                 }
             except Exception:
                 continue
@@ -393,10 +401,13 @@ def _next_game(game):
         return None
     try:
         gm = _resolve_gm(game)
-        user_team = safe_call(lambda: getattr(gm, "user_team", None))
+        user_team = safe_call(lambda: getattr(gm, "user_team", None),
+                                  context="watch/next_game:user_team")
         my_name = _team_name(user_team)
-        today = safe_call(lambda: getattr(gm, "current_date", None)) or \
-            safe_call(lambda: getattr(game, "current_date", None))
+        today = safe_call(lambda: getattr(gm, "current_date", None),
+                              context="watch/next_game:gm_date") or \
+            safe_call(lambda: getattr(game, "current_date", None),
+                      context="watch/next_game:game_date")
         today = _date_key(today)
         by_date = _results_by_date(game)
         mine, other = [], []
@@ -430,7 +441,8 @@ def _team_obj(entry_team, gm):
         return entry_team
     want = entry_team.strip().lower()
     teams = safe_call(lambda: list(getattr(getattr(gm, "league", None),
-                                      "teams", None) or []), []) or []
+                                      "teams", None) or []), [],
+                      context="watch/team_obj:league_teams") or []
     for t in teams:
         if _team_name(t).strip().lower() == want:
             return t
@@ -466,7 +478,9 @@ def _ensure_live_sim(game):
         q = queue.Queue()
         sim = GameSim(home, away, high_fidelity=True)
         try:
-            sim.league = safe_call(lambda: getattr(gm, "league", None))
+            sim.league = safe_call(
+                lambda: getattr(gm, "league", None),
+                context="watch/ensure_sim:league")
         except Exception:
             pass
         game_date = _date_key(entry.get("date"))
@@ -517,9 +531,15 @@ def _ensure_live_sim(game):
                     pass
             finally:
                 try:
-                    hs = int(safe_call(lambda: sim.home_score, 0) or 0)
-                    aws = int(safe_call(lambda: sim.away_score, 0) or 0)
-                    per = int(safe_call(lambda: sim.period, 3) or 3)
+                    hs = int(safe_call(
+                        lambda: sim.home_score, 0,
+                        context="watch/run:home_score") or 0)
+                    aws = int(safe_call(
+                        lambda: sim.away_score, 0,
+                        context="watch/run:away_score") or 0)
+                    per = int(safe_call(
+                        lambda: sim.period, 3,
+                        context="watch/run:period") or 3)
                     q.put({"type": "game_end", "home_score": hs,
                            "away_score": aws, "period": per})
                     _finish_sim(game, sim, home, away, hs, aws,
@@ -709,7 +729,9 @@ def _finish_sim_impl(game, sim, home_team, away_team, hs, aws, period,
     try:
         _npg = getattr(gm, "_narrative_postgame", None)
         if callable(_npg):
-            _user_team = safe_call(lambda: getattr(gm, "user_team", None))
+            _user_team = safe_call(
+                lambda: getattr(gm, "user_team", None),
+                context="watch/finish_sim:user_team")
             _npg(sim, home_team, away_team, (hs, aws),
                  went_ot=went_ot, shootout=went_so,
                  roll_incidents=False,
@@ -2263,7 +2285,9 @@ class WatchScreen(BaseScreen):
                     "No live game — start one from the Visual tab."))
                 return
             gs = _normalize_gs(safe_call(lambda: getattr(sim, "game_stats",
-                                                    None), {}) or {})
+                                                    None), {},
+                                             context="watch/box:game_stats")
+                                       or {})
             if not gs:
                 self._box_layout.addWidget(self._empty(
                     "Stats will appear once the sim gets going."))
