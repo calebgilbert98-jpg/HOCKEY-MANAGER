@@ -1070,6 +1070,39 @@ class TradesScreen(BaseScreen):
                         self._give_picks.discard(k)
         except Exception:
             pass
+        try:
+            # Partner-side mirror of the above: staged wants must be
+            # validated against the partner's refreshed asset lists, or a
+            # partner-side roster move while the screen sat open ships
+            # phantom players_in/picks_in. None means "not loaded" (don't
+            # wipe); [] means "loaded empty" (evict everything staged).
+            _wplayers = self._partner_players
+            if _wplayers is not None:
+                _valid_wpids = set()
+                for _entry in _wplayers:
+                    try:
+                        _valid_wpids.add(_pid(_entry[0]))
+                    except Exception:
+                        continue
+                for k in list(self._want_pids):
+                    if k not in _valid_wpids:
+                        self._want_pids.discard(k)
+        except Exception:
+            pass
+        try:
+            _wpicks = self._partner_picks
+            if _wpicks is not None:
+                _valid_wpicks = set()
+                for _pk in _wpicks:
+                    try:
+                        _valid_wpicks.add(_pid(_pk))
+                    except Exception:
+                        continue
+                for k in list(self._want_picks):
+                    if k not in _valid_wpicks:
+                        self._want_picks.discard(k)
+        except Exception:
+            pass
         for k in list(self._retention):
             if k not in self._give_pids:
                 del self._retention[k]
@@ -1679,6 +1712,11 @@ class TradesScreen(BaseScreen):
 
     def _mp_propose(self):
         """Human-to-human propose through the MP layer."""
+        # Defensive prune FIRST: the roster can mutate between the last
+        # prune-triggering UI event and the Propose click. Without this,
+        # the offer below is built from raw staged sets and ships phantom
+        # players_out/picks_out/players_in/picks_in.
+        self._prune_terms()
         host, client = self._mp_state()
         my = _user_team(self.game)
         my_name = _team_name(my)
