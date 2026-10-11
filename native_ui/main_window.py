@@ -2027,6 +2027,16 @@ class MainWindow(QMainWindow):
         self._screen_classes = {}
         self._register_all_screens()
 
+        # Continue latch: on_continue's own run_threaded worker has the
+        # same X-close shape as season-flow's -- dialog X-closed ->
+        # _on_done never fires -> worker finishes unattended. A second
+        # on_continue press in that window would start an overlapping
+        # simulate_day() on the same game object, so on_continue refuses
+        # while this latch is set. Cleared by _on_done on the normal path
+        # and by the abandon watchdog on the X-close path (same class as
+        # season_flow FIX-D1).
+        self._continue_worker_in_flight = False
+
         # Apply theme
         self.setStyleSheet(THEME_QSS)
 
@@ -2384,20 +2394,35 @@ class MainWindow(QMainWindow):
         # would corrupt league state -- refuse instead of overlapping.
         # The season-flow screen is lazily instantiated, so absence from
         # _screens means no background sim is running.
+        busy = False
         try:
             _sf_wrapper = getattr(self, "_screens", {}).get("season_flow")
             _sf_inner = (_sf_wrapper.widget()
                          if hasattr(_sf_wrapper, "widget") else None)
-            if (_sf_inner is not None
+            busy = (_sf_inner is not None
                     and hasattr(_sf_inner, "is_background_sim_running")
-                    and _sf_inner.is_background_sim_running()):
-                self._notify_info(
-                    "Simulation in progress",
-                    "Simulation in progress -- please wait for it to finish "
-                    "before continuing.")
-                return
+                    and _sf_inner.is_background_sim_running())
         except Exception as e:
             print(f"[native] season-flow busy check failed: {e}")
+        if busy:
+            self._notify_info(
+                "Simulation in progress",
+                "Simulation in progress -- please wait for it to finish "
+                "before continuing.")
+            return
+        # Own-worker guard: on_continue's progress dialog is window-modal,
+        # so a second press is blocked while it is visible -- but X-closing
+        # it leaves the worker running unattended (run_threaded's _poll
+        # returns early and _on_done never fires) while the shortcut and
+        # hero click become pressable again. Refuse until the first worker
+        # reports done; the latch is cleared by _on_done on the normal path
+        # and reclaimed by the abandon watchdog below on the X-close path.
+        if self._continue_worker_in_flight:
+            self._notify_info(
+                "Simulation in progress",
+                "Simulation in progress -- please wait for it to finish "
+                "before continuing.")
+            return
         try:
             label, blockers = self.game.get_continue_state()
             if blockers:
@@ -2420,13 +2445,24 @@ class MainWindow(QMainWindow):
 
             create_fallback_save(self.game, "continue")
 
+            # Worker completion channel (mirrors season_flow FIX-D1): the
+            # worker always reports done in a finally, even when _on_done
+            # never fires because the user X-closed the progress dialog.
+            _continue_done = [False]
+
             def _do_sim(cancel_event, progress):
                 # Runs OFF the UI thread. Must not touch widgets.
-                if hasattr(self.game, "simulate_day"):
-                    self.game.simulate_day()
+                try:
+                    if hasattr(self.game, "simulate_day"):
+                        self.game.simulate_day()
+                finally:
+                    _continue_done[0] = True
 
             def _on_done(cancelled, error):
-                # Runs ON the UI thread.
+                # Runs ON the UI thread. Fires on the normal path only --
+                # never after an X-close; then _poll_continue_abandon owns
+                # the reclaim (silent, no dialogs).
+                self._continue_worker_in_flight = False
                 if error is not None:
                     print(f"[native] continue failed: {error}")
                 elif not cancelled:
@@ -2434,8 +2470,39 @@ class MainWindow(QMainWindow):
 
             # For a single day the sim is usually fast; run_threaded handles
             # both fast and slow cases with a responsive progress dialog.
-            run_threaded(self, "Simulating day...", _do_sim,
-                         on_done=_on_done, status="Simulating day...")
+            self._continue_worker_in_flight = True
+            try:
+                _continue_dlg = run_threaded(
+                    self, "Simulating day...", _do_sim,
+                    on_done=_on_done, status="Simulating day...")
+            except Exception:
+                # Never leave the latch set on a synchronous start failure
+                # (the outer except swallows it) -- that would brick Continue.
+                self._continue_worker_in_flight = False
+                raise
+            # Abandon watchdog (same class as season_flow FIX-D1): if the
+            # user X-closes the progress dialog, run_threaded's _poll
+            # returns early and _on_done never fires. Reclaim the latch
+            # once the worker reports done, with a silent refresh so the
+            # UI reflects the day that was simulated unattended.
+            def _poll_continue_abandon():
+                try:
+                    if not self._continue_worker_in_flight:
+                        return
+                    if (_continue_done[0]
+                            and getattr(_continue_dlg, "_closed", False)):
+                        # Worker finished but the dialog is gone without
+                        # _on_done having fired -> abandoned: reclaim.
+                        self._continue_worker_in_flight = False
+                        try:
+                            self._refresh_after_continue()
+                        except Exception:
+                            pass
+                        return
+                    QTimer.singleShot(100, _poll_continue_abandon)
+                except Exception:
+                    pass
+            QTimer.singleShot(100, _poll_continue_abandon)
         except Exception as e:
             print(f"[native] continue failed: {e}")
 
