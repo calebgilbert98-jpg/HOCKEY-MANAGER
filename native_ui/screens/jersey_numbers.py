@@ -162,9 +162,14 @@ class JerseyNumbersScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _selected_player(self):
         row = self._table.currentRow()
-        if 0 <= row < len(self._players):
-            return self._players[row]
-        return None
+        if row < 0:
+            return None
+        # Row order may differ from _players after sorting; read the
+        # player object off the name cell (col 2) instead.
+        item = self._table.item(row, 2)
+        if item is None:
+            return None
+        return item.data(Qt.UserRole + 1)
 
     def _on_reassign(self, *args):
         p = self._selected_player()

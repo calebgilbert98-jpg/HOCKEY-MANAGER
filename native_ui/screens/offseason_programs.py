@@ -151,9 +151,14 @@ class OffseasonProgramsScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _selected_player(self):
         row = self._table.currentRow()
-        if 0 <= row < len(self._players):
-            return self._players[row]
-        return None
+        if row < 0:
+            return None
+        # Row order may differ from _players after sorting; read the
+        # player object off the name cell (col 0) instead.
+        item = self._table.item(row, 0)
+        if item is None:
+            return None
+        return item.data(Qt.UserRole + 1)
 
     def _sync_controls(self):
         """Show the selected player's current program in the combos."""

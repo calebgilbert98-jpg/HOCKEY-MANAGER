@@ -356,9 +356,15 @@ class CampScreen(BaseScreen):
         try:
             from ..widgets.context_menu import EntityContextMenu
             row = self._ratings_table.rowAt(pos.y())
-            if row < 0 or row >= len(self._ratings_players):
+            if row < 0:
                 return
-            player = self._ratings_players[row]
+            # Row order may differ from _ratings_players after sorting;
+            # read the player object off the name cell instead.
+            item = self._ratings_table.item(row, 0)
+            player = (item.data(Qt.UserRole + 1)
+                      if item is not None else None)
+            if player is None:
+                return
             is_user = False
             try:
                 team = self._team()
@@ -373,11 +379,17 @@ class CampScreen(BaseScreen):
             pass
 
     def _on_ratings_double_click(self, row, col):
-        if 0 <= row < len(self._ratings_players):
-            try:
-                self.main_window.show_player(self._ratings_players[row])
-            except Exception:
-                pass
+        # Row order may differ from _ratings_players after sorting;
+        # read the player object off the name cell instead.
+        item = self._ratings_table.item(row, 0)
+        player = (item.data(Qt.UserRole + 1)
+                  if item is not None else None)
+        if player is None:
+            return
+        try:
+            self.main_window.show_player(player)
+        except Exception:
+            pass
 
     # --- scrimmages tab ---------------------------------------------------
     def _refresh_scrimmages(self):
