@@ -58,6 +58,24 @@ def _safe_asdict(obj: Any) -> Dict[str, Any]:
         return {}
 
 
+# Fixed schedule-entry keys emitted by _serialize_schedule. Anything else
+# found on a live schedule dict (runtime stamps like the watch flow's
+# watched/watched_home_score/watched_away_score, score stamps from
+# schedule.py's _finalize_missed_game, tuple-promote metadata, ...) is
+# passed through under its own name by the serializer and restored by
+# _restore_schedule, so new stamps never silently drop across save/load.
+# 'time' is excluded: the restorer always stamps 19:00 explicitly.
+_SCHEDULE_FIXED_KEYS = frozenset({
+    'date', 'home_team', 'away_team', 'league', 'time', 'preseason',
+    'outdoor', 'playoff', 'event_type', 'series_id', 'series_game',
+    'round_name', 'round_key', 'marquee', 'hype_tags', 'played',
+    'watched', 'watched_home_score', 'watched_away_score',
+    # NHL_EVENT branch keys (restored by a separate path):
+    'nhl_event', 'event_title', 'event_description',
+})
+
+
+
 # Attributes that were 1-50 scale in save version 1.x and are 1-100 in 2.0+.
 # Used by the legacy save migrator to scale old saves up (x2, clamped 1-100).
 MIGRATE_50_TO_100_ATTRS = frozenset([
@@ -1081,7 +1099,7 @@ class GameSaveManager:
                                   'American Hockey League': 'AHL'}.get(league, league)
                     else:
                         continue
-                    schedule_data.append({
+                    entry = {
                         'date': game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date),
                         'home_team': home_team.team_name if hasattr(home_team, 'team_name') else str(home_team),
                         'away_team': away_team.team_name if hasattr(away_team, 'team_name') else str(away_team),
@@ -1110,7 +1128,37 @@ class GameSaveManager:
                         # schedules forget which games were already played
                         # (46 played playoff games lost it in sweep Run 11).
                         'played': bool(game.get('played')) if isinstance(game, dict) else False,
-                    })
+                        # Watch-flow stamps (2026-10-11 fixback): a watched
+                        # game was already simmed and recorded through the
+                        # watch screen. The day sim's `game.get('watched')`
+                        # guard must see them after a reload, or the game is
+                        # re-simmed -> double-recorded results, standings,
+                        # player stats, and career GP. Set by
+                        # native_ui/screens/watch.py::_mark_schedule_watched
+                        # (watched, watched_home_score, watched_away_score).
+                        'watched': bool(game.get('watched')) if isinstance(game, dict) else False,
+                        'watched_home_score': game.get('watched_home_score') if isinstance(game, dict) else None,
+                        'watched_away_score': game.get('watched_away_score') if isinstance(game, dict) else None,
+                    }
+                    if isinstance(game, dict):
+                        # General gap: schedule dict entries carry runtime
+                        # stamps beyond the fixed field set above (score
+                        # stamps from schedule.py's _finalize_missed_game,
+                        # trailing-tuple metadata promoted by watch.py's
+                        # tuple path, etc.). Pass anything else through
+                        # under its own name so future stamps never
+                        # silently drop again.
+                        for _k, _v in game.items():
+                            if _k in entry or _k in ('date', 'home_team', 'away_team', 'time'):
+                                continue
+                            try:
+                                pickle.dumps(_v)
+                            except Exception:
+                                print(f"WARNING: Dropping unpicklable schedule stamp during save: "
+                                      f"key={_k!r} on {game.get('date')}")
+                                continue
+                            entry[_k] = _v
+                    schedule_data.append(entry)
                 except (AttributeError, TypeError, IndexError) as e:
                     # Log skipped games instead of silently dropping them;
                     # a schedule round-trip must not lose games.
@@ -2809,6 +2857,24 @@ class GameSaveManager:
                             if game_data.get('marquee'):
                                 _restored['marquee'] = True
                             _restored['hype_tags'] = list(game_data.get('hype_tags') or [])
+                        # Watch-flow round-trip (2026-10-11 fixback): a
+                        # reloaded schedule must keep the watched flag and
+                        # its scores, or the day sim re-simms an already
+                        # recorded game (double results, standings, player
+                        # stats, career GP). Old saves lack these keys --
+                        # .get defaults keep them absent, no KeyError.
+                        if game_data.get('watched'):
+                            _restored['watched'] = True
+                            if game_data.get('watched_home_score') is not None:
+                                _restored['watched_home_score'] = game_data['watched_home_score']
+                            if game_data.get('watched_away_score') is not None:
+                                _restored['watched_away_score'] = game_data['watched_away_score']
+                        # General gap: restore any extra runtime stamps the
+                        # serializer passed through (score stamps,
+                        # tuple-promote metadata, future stamps).
+                        for _k, _v in game_data.items():
+                            if _k not in _SCHEDULE_FIXED_KEYS:
+                                _restored[_k] = _v
                         schedule.append(_restored)
                     else:
                         # Teams not found by name -- log instead of silently dropping
