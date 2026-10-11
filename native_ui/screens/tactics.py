@@ -13,9 +13,19 @@ writes into command-queue ops; here we call the same underlying
                                  coach-personality reactions, trust deltas,
                                  room events, morale shifts and news fire
                                  (mainline parity -- never flip control raw)
-- coach enforce                : ``rs.take_over_tactics(team, ctx)``
-- coach takeover               : ``rs.hand_back_tactics(team)`` +
+- staged changes               : ``self._pending`` (category -> system key),
+                                 mirroring mainline tactics_window; clicks stage
+                                 while the coach owns the whiteboard and apply
+                                 immediately when the GM does
+- coach enforce                : ``rs.enforce_tactics(team, pending, ctx)`` --
+                                 a ONE-TIME overrule of the staged changes;
+                                 control NEVER flips (mainline parity)
+- coach takeover               : ``rs.take_over_tactics(team, ctx)`` --
+                                 PERMANENT GM control of the whiteboard
+- coach handback               : ``rs.hand_back_tactics(team)`` +
                                  ``tactics.install_coach_systems(team, coach)``
+- preferred tactics            : ``tactics.save_preferred_tactics`` /
+                                 ``tactics.get_preferred_tactics``
 - legacy slider pills         : plain ``setattr(team, tactic_*, value)``
 - weekly practice plan         : ``team.dressing_room["practice_plan"]``
 """
@@ -156,6 +166,13 @@ class TacticsScreen(BaseScreen):
         self._practice_intensity = "moderate"
         self._foci_labels = dict(_PRACTICE_FOCI_FALLBACK)
         self._int_labels = dict(_PRACTICE_INT_FALLBACK)
+        # Staged tactical changes (category -> new system key), mirroring
+        # mainline tactics_window._pending. Clicks stage while the coach owns
+        # the whiteboard; Suggest / Enforce / Take Over consume them.
+        self._pending = {}
+        # Response lines that survive tab rebuilds (mainline _response_text).
+        self._coach_msg = ""
+        self._systems_msg = ""
         super().__init__(game, main_window, parent)
 
     def _resolve_team(self):
@@ -166,7 +183,8 @@ class TacticsScreen(BaseScreen):
         return self._team
 
     def _head_coach(self, team):
-        for s in safe_call(lambda: list(getattr(team, "staff", [])), []) or []:
+        for s in safe_call(lambda: list(getattr(team, "staff", [])), [],
+                           context="tactics/head_coach") or []:
             if "head coach" in _staff_role_str(s).lower():
                 return s
         return None
@@ -206,10 +224,13 @@ class TacticsScreen(BaseScreen):
             pass
 
     def _skaters(self, team):
-        roster = safe_call(lambda: list(team.roster), []) or []
+        roster = safe_call(lambda: list(team.roster), [],
+                           context="tactics/skaters") or []
         return [p for p in roster
                 if not str(safe_call(lambda: getattr(p, "primary_position", ""),
-                                 "")).upper().startswith("G")]
+                                     "",
+                                     context="tactics/skaters")
+                           ).upper().startswith("G")]
 
     def _build_body(self):
         intro = QLabel(
@@ -315,7 +336,8 @@ class TacticsScreen(BaseScreen):
         # ---- status bar
         bar = QHBoxLayout()
         bar.setSpacing(16)
-        active = safe_call(lambda: _tx.matching_identity(team))
+        active = safe_call(lambda: _tx.matching_identity(team),
+                           context="tactics/matching_identity")
         preset_name = "Custom mix"
         try:
             if active:
@@ -323,7 +345,8 @@ class TacticsScreen(BaseScreen):
                     "name", active)
         except Exception:
             pass
-        fam = safe_call(lambda: float(getattr(team, "tactics_familiarity", 85)), 85)
+        fam = safe_call(lambda: float(getattr(team, "tactics_familiarity", 85)), 85,
+                        context="tactics/familiarity")
         control = safe_call(lambda: _tx.get_tactics_control(team), "coach",
                             context="tactics/get_control")
         roster_fit = safe_call(lambda: _tx.team_system_fit(team),
@@ -359,10 +382,17 @@ class TacticsScreen(BaseScreen):
         self._section("Whiteboard Modules", lay)
         hint = QLabel(
             "Click a system to install it. Double-click for the scout report: "
-            "blurb, tradeoffs, roster fit vs current, and NHL exemplars.")
+            "blurb, tradeoffs, roster fit vs current, and NHL exemplars. "
+            "While the coach owns the whiteboard, clicks are STAGED — "
+            "Suggest, Enforce, or Take Over from the Coach tab.")
         hint.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         hint.setWordWrap(True)
         lay.addWidget(hint)
+        self._systems_out = QLabel(self._systems_msg)
+        self._systems_out.setStyleSheet(f"color: {WARN}; font-size: 12px;")
+        self._systems_out.setWordWrap(True)
+        self._systems_out.setVisible(bool(self._systems_msg))
+        lay.addWidget(self._systems_out)
 
         for cat, _label, _attr in _tx.ALL_CATEGORIES:
             catalog = _tx.CATALOGS.get(cat, {})
@@ -377,7 +407,8 @@ class TacticsScreen(BaseScreen):
 
             cur = catalog.get(current, {})
             cur_name = cur.get("name", current or "—")
-            cur_trade = safe_call(lambda: _tx.system_tradeoffs(cat, current), "")
+            cur_trade = safe_call(lambda: _tx.system_tradeoffs(cat, current), "",
+                                  context="tactics/system_tradeoffs")
             running = QLabel(
                 f"Running: <b>{cur_name}</b>"
                 + (f" <span style='color:{DIM};'>({cur_trade})</span>"
@@ -399,7 +430,10 @@ class TacticsScreen(BaseScreen):
 
             for skey, s in catalog.items():
                 pill = self._make_pill(s.get("name", skey),
-                                       active=(skey == current))
+                                       # A staged change shows as the
+                                       # selected one (mainline parity).
+                                       active=(skey == self._pending.get(
+                                           cat, current)))
                 pill.setProperty("sys_key", skey)
                 pill.setToolTip(s.get("blurb", ""))
                 pill.installEventFilter(self)
@@ -429,9 +463,12 @@ class TacticsScreen(BaseScreen):
             desc.setStyleSheet(f"color: {DIM}; font-size: 12px;")
             box_lay.addWidget(desc)
             row = QHBoxLayout()
-            current = safe_call(lambda: getattr(team, attr, default), default)
-            if not safe_call(lambda: hasattr(team, attr), False):
-                safe_call(lambda: setattr(team, attr, current))
+            current = safe_call(lambda: getattr(team, attr, default), default,
+                                context="tactics/legacy_attr")
+            if not safe_call(lambda: hasattr(team, attr), False,
+                             context="tactics/legacy_attr"):
+                safe_call(lambda: setattr(team, attr, current),
+                          context="tactics/legacy_attr")
             for v in values:
                 pill = self._make_pill(v, active=(v == current))
                 pill.setProperty("tactic_attr", attr)
@@ -446,7 +483,8 @@ class TacticsScreen(BaseScreen):
 
         # ---- expected impact
         self._section("Expected Impact", lay)
-        engine = safe_call(lambda: _tx.resolve_team_tactics(team), {}) or {}
+        engine = safe_call(lambda: _tx.resolve_team_tactics(team), {},
+                           context="tactics/resolve") or {}
         eng_lab = QLabel("Engine multipliers from the seven modules:")
         eng_lab.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         lay.addWidget(eng_lab)
@@ -471,7 +509,8 @@ class TacticsScreen(BaseScreen):
         badges.addStretch(1)
         lay.addLayout(badges)
 
-        id_lines = safe_call(lambda: _tx.describe_team_tactics(team), []) or []
+        id_lines = safe_call(lambda: _tx.describe_team_tactics(team), [],
+                           context="tactics/describe") or []
         id_lab = QLabel("Identity: " + (" · ".join(id_lines) if id_lines else "—"))
         id_lab.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         id_lab.setWordWrap(True)
@@ -486,7 +525,8 @@ class TacticsScreen(BaseScreen):
     def _system_detail_text(self, cat, skey, current, catalog, team):
         s = catalog.get(skey, {})
         blurb = s.get("blurb", "")
-        trade = safe_call(lambda: _tx.system_tradeoffs(cat, skey), "")
+        trade = safe_call(lambda: _tx.system_tradeoffs(cat, skey), "",
+                          context="tactics/system_tradeoffs")
         ex = s.get("exemplars", []) or []
         fit_txt = ""
         try:
@@ -518,12 +558,18 @@ class TacticsScreen(BaseScreen):
         lay.addWidget(lab)
 
     def _impact_lines(self, team):
-        es = safe_call(lambda: getattr(team, 'tactic_even_strength', 'Balanced'), 'Balanced')
-        pp = safe_call(lambda: getattr(team, 'tactic_power_play', 'Offensive'), 'Offensive')
-        pk = safe_call(lambda: getattr(team, 'tactic_penalty_kill', 'Defensive'), 'Defensive')
-        lm = safe_call(lambda: getattr(team, 'tactic_line_matching', 'Standard'), 'Standard')
-        fc = safe_call(lambda: getattr(team, 'tactic_forecheck', '2-1-2'), '2-1-2')
-        off = safe_call(lambda: getattr(team, 'tactic_offense', 'Spread'), 'Spread')
+        es = safe_call(lambda: getattr(team, 'tactic_even_strength', 'Balanced'), 'Balanced',
+                       context="tactics/legacy_attr")
+        pp = safe_call(lambda: getattr(team, 'tactic_power_play', 'Offensive'), 'Offensive',
+                       context="tactics/legacy_attr")
+        pk = safe_call(lambda: getattr(team, 'tactic_penalty_kill', 'Defensive'), 'Defensive',
+                       context="tactics/legacy_attr")
+        lm = safe_call(lambda: getattr(team, 'tactic_line_matching', 'Standard'), 'Standard',
+                       context="tactics/legacy_attr")
+        fc = safe_call(lambda: getattr(team, 'tactic_forecheck', '2-1-2'), '2-1-2',
+                       context="tactics/legacy_attr")
+        off = safe_call(lambda: getattr(team, 'tactic_offense', 'Spread'), 'Spread',
+                        context="tactics/legacy_attr")
         atk = (_ES_ATTACK.get(es, 1.0) - 1.0) * 100
         allowed = (_ES_DEFENSE.get(es, 1.0) - 1.0) * 100
         pp_mult = _PP_MULT.get(pp, 1.05)
@@ -579,7 +625,8 @@ class TacticsScreen(BaseScreen):
             skey = pill.property("sys_key")
             team = self._team
             catalog = _tx.CATALOGS.get(cat, {})
-            current = safe_call(lambda: _tx.team_tactics(team).get(cat))
+            current = safe_call(lambda: _tx.team_tactics(team).get(cat),
+                                context="tactics/team_tactics")
             pill._detail.setText(
                 self._system_detail_text(cat, skey, current, catalog, team))
         except Exception:
@@ -589,8 +636,9 @@ class TacticsScreen(BaseScreen):
         """Apply a whiteboard system change through the canonical ownership flow.
 
         - GM owns the whiteboard -> apply directly via ``tactics.set_team_system``.
-        - Coach owns it -> route through ``reputation_system.suggest_tactics_to_coach``
-          so personality reactions, trust deltas, room events and morale fire.
+        - Coach owns it -> STAGE the change in ``self._pending`` (mainline
+          tactics_window parity); it flows through Suggest / Enforce /
+          Take Over from the Coach tab. Control never flips here.
         - Reputation service unavailable while the coach owns the whiteboard ->
           block the mutation and show an actionable error instead of silently
           bypassing coach consequences.
@@ -606,8 +654,9 @@ class TacticsScreen(BaseScreen):
             context="tactics/get_control")
         if control == "gm":
             _tx.set_team_system(team, cat, skey)
+            self._pending.pop(cat, None)
             return True
-        # Coach owns the whiteboard: the suggestion flow is mandatory.
+        # Coach owns the whiteboard: stage, don't suggest immediately.
         if _rs is None:
             QMessageBox.warning(
                 self, "Tactics",
@@ -616,12 +665,27 @@ class TacticsScreen(BaseScreen):
                 "coach. No changes were made. Restart the application and "
                 "try again.")
             return False
-        res = _rs.suggest_tactics_to_coach(
-            team, {cat: skey}, self._team_context()) or {}
-        text = res.get("text", "")
-        if text:
-            self._push_tactics_news(f"Tactics: {text}")
-        return bool(res.get("applied", False))
+        try:
+            current = (safe_call(lambda: _tx.team_tactics(team), {},
+                                 context="tactics/team_tactics") or {}).get(cat)
+        except Exception:
+            current = None
+        if skey == current:
+            self._pending.pop(cat, None)
+            self._systems_msg = ""
+            self.refresh()
+            return True
+        self._pending[cat] = skey
+        try:
+            sname = (_tx.CATALOGS.get(cat, {}).get(skey, {})
+                     .get("name", skey))
+        except Exception:
+            sname = skey
+        self._systems_msg = (
+            f"Staged: {CATEGORY_LABELS.get(cat, cat)} → {sname}. "
+            "Go to the Coach tab to Suggest, Enforce, or Take Over.")
+        self.refresh()
+        return False
 
     def _install_module(self, pill):
         try:
@@ -655,7 +719,8 @@ class TacticsScreen(BaseScreen):
         sub.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         sub.setWordWrap(True)
         lay.addWidget(sub)
-        active = safe_call(lambda: _tx.matching_identity(team))
+        active = safe_call(lambda: _tx.matching_identity(team),
+                           context="tactics/matching_identity")
         for key, p in _tx.IDENTITY_PRESETS.items():
             box = QGroupBox(p.get("name", key))
             box.setStyleSheet("QGroupBox { font-weight: bold; font-size: 15px; }")
@@ -710,7 +775,36 @@ class TacticsScreen(BaseScreen):
         if btn is None:
             return
         try:
-            _tx.apply_identity_preset(self._team, btn.property("preset_key"))
+            preset = btn.property("preset_key")
+            meta = _tx.IDENTITY_PRESETS.get(preset, {})
+            modules = meta.get("modules", {})
+            control = safe_call(lambda: _tx.get_tactics_control(self._team),
+                                "coach", context="tactics/get_control")
+            if control == "gm":
+                # The GM owns the whiteboard: install immediately.
+                _tx.apply_identity_preset(self._team, preset)
+                self._pending.clear()
+            else:
+                # Coach owns it: stage every differing module as pending
+                # (mainline parity) -- Suggest / Enforce / Take Over consume
+                # them from the Coach tab.
+                try:
+                    current = (safe_call(
+                        lambda: _tx.team_tactics(self._team), {},
+                        context="tactics/team_tactics") or {})
+                except Exception:
+                    current = {}
+                n = 0
+                for cat, key in modules.items():
+                    catalog = _tx.CATALOGS.get(cat, {})
+                    if key in catalog and current.get(cat) != key:
+                        self._pending[cat] = key
+                        n += 1
+                name = meta.get("name", preset)
+                self._coach_msg = (
+                    f"{name} staged ({n} modules) -- suggest it to the coach "
+                    "or enforce it from the Coach tab." if n else
+                    f"{name} already installed.")
         except Exception:
             pass
         self.refresh()
@@ -773,7 +867,7 @@ class TacticsScreen(BaseScreen):
                 if _rs is not None:
                     style = safe_call(
                         lambda: _rs.coach_style(coach).get("label", "Balanced"),
-                        "Balanced")
+                        "Balanced", context="tactics/coach_style")
                 mism = []
                 for cat, _label, _attr in _tx.ALL_CATEGORIES:
                     want = prefs.get(cat)
@@ -784,7 +878,8 @@ class TacticsScreen(BaseScreen):
                             f"{cat_dict.get(want, {}).get('name', want)}")
                 fit = _tx.coach_tactics_fit(coach, team)
                 cname = str(safe_call(lambda: getattr(coach, "full_name",
-                                                 "Coach"), "Coach"))
+                                                 "Coach"), "Coach",
+                                      context="tactics/coach_name"))
                 if mism:
                     cards.append({
                         "kind": "coach",
@@ -796,15 +891,17 @@ class TacticsScreen(BaseScreen):
                                     if len(mism) > 4 else "")
                                  + ". A coach running someone else's systems coaches worse."),
                         "action_label": "Let him install his systems",
-                        "action": ("coach_takeover",),
+                        "action": ("hand_back_whiteboard",),
                     })
         except Exception:
             pass
 
         # 3. Opponent intel
         try:
-            league = safe_call(lambda: self._gm.league)
-            teams = safe_call(lambda: list(league.teams), []) or []
+            league = safe_call(lambda: self._gm.league,
+                             context="tactics/league_teams")
+            teams = safe_call(lambda: list(league.teams), [],
+                              context="tactics/league_teams") or []
             hits = []
             for ai in teams:
                 if ai is team:
@@ -812,7 +909,8 @@ class TacticsScreen(BaseScreen):
                 if not getattr(ai, "tactical_intel", None):
                     continue
                 for cat, sys_key, heat in _tx.damaging_user_systems(ai, team):
-                    aname = safe_call(lambda: getattr(ai, "team_name", "?"), "?")
+                    aname = safe_call(lambda: getattr(ai, "team_name", "?"), "?",
+                                      context="tactics/league_teams")
                     sname = _tx.CATALOGS.get(cat, {}).get(
                         sys_key, {}).get("name", sys_key)
                     hits.append((heat, aname, CATEGORY_LABELS.get(cat, cat),
@@ -844,7 +942,8 @@ class TacticsScreen(BaseScreen):
         # 4. Familiarity
         try:
             fam = float(safe_call(lambda: getattr(team, "tactics_familiarity",
-                                             85), 85))
+                                             85), 85,
+                                      context="tactics/familiarity"))
             if fam < 70:
                 cards.append({
                     "kind": "familiarity",
@@ -896,8 +995,8 @@ class TacticsScreen(BaseScreen):
             if action[0] == "system":
                 cat, skey = action[1], action[2]
                 self._apply_system_change(cat, skey, "intel_action")
-            elif action[0] == "coach_takeover":
-                self._coach_takeover()
+            elif action[0] == "hand_back_whiteboard":
+                self._hand_back_whiteboard()
         except Exception:
             pass
         self.refresh()
@@ -914,17 +1013,19 @@ class TacticsScreen(BaseScreen):
         try:
             style = ("Balanced" if _rs is None else safe_call(
                 lambda: _rs.coach_style(coach).get("label", "Balanced"),
-                "Balanced"))
+                "Balanced", context="tactics/coach_style"))
         except Exception:
             style = "Balanced"
-        prefs = safe_call(lambda: _tx.ensure_coach_tactics(coach), {}) or {}
-        mine = safe_call(lambda: _tx.team_tactics(team), {}) or {}
+        prefs = safe_call(lambda: _tx.ensure_coach_tactics(coach), {},
+                        context="tactics/coach_prefs") or {}
+        mine = safe_call(lambda: _tx.team_tactics(team), {},
+                         context="tactics/team_tactics") or {}
         fit = safe_call(lambda: _tx.coach_tactics_fit(coach, team),
                         context="tactics/coach_fit")
         control = safe_call(lambda: _tx.get_tactics_control(team), "coach",
                             context="tactics/get_control")
         cname = str(safe_call(lambda: getattr(coach, "full_name", "Coach"),
-                         "Coach"))
+                         "Coach", context="tactics/coach_name"))
 
         # Whiteboard control
         self._section("Whiteboard Control", lay)
@@ -997,50 +1098,129 @@ class TacticsScreen(BaseScreen):
         # Coach actions
         self._section("Coach Actions", lay)
         act_sub = QLabel(
-            "Suggest shows you his recommendation (this table). Enforce puts "
-            "the whiteboard in your hands — he stops adjusting mid-game. "
-            "Takeover hands it to him and installs his systems.")
+            "Stage systems on the Systems tab, then act here. <b>Suggest</b> "
+            "asks him to adopt your staged changes. <b>Enforce</b> overrules "
+            "him ONCE for those changes — he keeps the whiteboard and stays "
+            "in charge of mid-game adjustments. <b>Take Over</b> seizes the "
+            "whiteboard PERMANENTLY (his personality decides how he takes "
+            "it). <b>Hand Back</b> returns it to him and installs his "
+            "systems.")
         act_sub.setStyleSheet(f"color: {DIM}; font-size: 12px;")
         act_sub.setWordWrap(True)
         lay.addWidget(act_sub)
         act_row = QHBoxLayout()
-        suggest_btn = QPushButton("Suggest")
+        suggest_btn = QPushButton("Suggest to Coach")
         enforce_btn = QPushButton("Enforce My Systems")
-        takeover_btn = QPushButton("Coach Takeover")
+        takeover_btn = QPushButton("Take Over Whiteboard")
+        handback_btn = QPushButton("Hand Back Whiteboard")
         suggest_btn.setObjectName("primary-btn")
-        for b in (suggest_btn, enforce_btn, takeover_btn):
+        for b in (suggest_btn, enforce_btn, takeover_btn, handback_btn):
             b.setCursor(Qt.PointingHandCursor)
             act_row.addWidget(b)
         act_row.addStretch(1)
         lay.addLayout(act_row)
-        self._coach_suggest_out = QLabel("")
+
+        pref_row = QHBoxLayout()
+        save_pref_btn = QPushButton("Save as Preferred")
+        load_pref_btn = QPushButton("Load Preferred")
+        for b in (save_pref_btn, load_pref_btn):
+            b.setCursor(Qt.PointingHandCursor)
+            pref_row.addWidget(b)
+        pref_row.addStretch(1)
+        lay.addLayout(pref_row)
+
+        self._coach_suggest_out = QLabel(self._coach_msg)
         self._coach_suggest_out.setStyleSheet(f"color: {DIM}; font-size: 13px;")
         self._coach_suggest_out.setWordWrap(True)
         lay.addWidget(self._coach_suggest_out)
 
-        def _suggest():
+        def _show_recommendation():
             mism = [r for r in rows if not r["match"]]
             last = cname.split(" ")[-1]
             if mism:
                 parts = "; ".join(
                     f"{r['category']} to <b>{r['coach_wants']}</b>"
                     for r in mism)
-                self._coach_suggest_out.setText(
+                self._coach_msg = (
                     f"<b>{last}'s recommendation ({style}):</b> switch {parts}. "
                     "Or hand him the whiteboard and let him install it all.")
             else:
-                self._coach_suggest_out.setText(
+                self._coach_msg = (
                     f"He's happy — all seven modules already match his "
                     f"{style} preferences.")
+            self.refresh()
 
-        def _enforce():
-            # Route through the reputation/personality engine so the coach
-            # reacts per his makeup: trust deltas, room events, morale
-            # shifts and news all fire (mainline parity).
+        def _suggest():
+            if not self._pending:
+                _show_recommendation()
+                return
             res = {}
             if _rs is not None:
                 try:
-                    res = _rs.take_over_tactics(team, self._team_context()) or {}
+                    res = _rs.suggest_tactics_to_coach(
+                        team, dict(self._pending),
+                        self._team_context()) or {}
+                except Exception:
+                    res = {}
+            if res.get("applied"):
+                self._pending.clear()
+                text = res.get("text", "")
+                if text:
+                    self._push_tactics_news(f"Tactics: {text}")
+            self._coach_msg = res.get(
+                "text", "Could not suggest the staged changes.")
+            self.refresh()
+
+        def _enforce():
+            # ONE-TIME overrule (mainline parity): rs.enforce_tactics applies
+            # the staged changes for the next game and dings trust/morale --
+            # it NEVER flips whiteboard control. The permanent flip is the
+            # separate Take Over path below; take_over_tactics must not be
+            # called from here.
+            if not self._pending:
+                self._coach_msg = ("Nothing staged — pick systems on the "
+                                   "Systems tab first.")
+                self.refresh()
+                return
+            ans = QMessageBox.question(
+                self, "Enforce Tactics",
+                "Overrule your head coach and enforce these systems?\n"
+                "It works -- and he won't forget it.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+            res = {}
+            if _rs is not None:
+                try:
+                    res = _rs.enforce_tactics(
+                        team, dict(self._pending),
+                        self._team_context()) or {}
+                except Exception:
+                    res = {}
+            if res.get("applied"):
+                self._pending.clear()
+                text = res.get("text", "")
+                if text:
+                    self._push_tactics_news(f"Tactics: {text}")
+            self._coach_msg = res.get("text", "Could not enforce.")
+            self.refresh()
+
+        def _takeover():
+            # PERMANENT path (mainline parity): the GM takes the whiteboard.
+            # This is the ONLY one-time-flow path allowed to call
+            # take_over_tactics -- it is an explicit, confirmed seizure.
+            ans = QMessageBox.question(
+                self, "Take Over Whiteboard",
+                "Take permanent control of tactics from your head coach?\n"
+                "His reaction will depend on his personality.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+            res = {}
+            if _rs is not None:
+                try:
+                    res = _rs.take_over_tactics(
+                        team, self._team_context()) or {}
                 except Exception:
                     res = {}
             if not res:
@@ -1049,25 +1229,79 @@ class TacticsScreen(BaseScreen):
                     _tx.set_tactics_control(team, "gm")
                 except Exception:
                     pass
-            self._coach_suggest_out.setText(res.get(
+            if res.get("changed"):
+                # Pending changes are yours now -- apply them (mainline).
+                try:
+                    for cat, key in list(self._pending.items()):
+                        _tx.set_team_system(team, cat, key)
+                    self._pending.clear()
+                except Exception:
+                    pass
+                text = res.get("text", "")
+                if text:
+                    self._push_tactics_news(f"Tactics: {text}")
+            self._coach_msg = res.get(
                 "text",
                 "Whiteboard is yours. He will coach your systems and stop "
-                "adjusting mid-game."))
-            if res.get("changed"):
-                self._push_tactics_news(res.get("text", ""))
+                "adjusting mid-game.")
+            self.refresh()
+
+        def _save_pref():
+            try:
+                _tx.save_preferred_tactics(team)
+                self._coach_msg = ("Preferred tactics saved -- one click "
+                                   "gets you back to your hockey.")
+            except Exception as e:
+                self._coach_msg = f"Could not save: {e}"
+            self.refresh()
+
+        def _load_pref():
+            try:
+                pref = _tx.get_preferred_tactics(team)
+            except Exception:
+                pref = None
+            if not pref:
+                self._coach_msg = "No preferred tactics saved yet."
+                self.refresh()
+                return
+            try:
+                current = (safe_call(lambda: _tx.team_tactics(team), {},
+                                     context="tactics/team_tactics") or {})
+            except Exception:
+                current = {}
+            self._pending = {c: k for c, k in pref.items()
+                             if current.get(c) != k}
+            if safe_call(lambda: _tx.get_tactics_control(team), "coach",
+                         context="tactics/get_control") == "gm":
+                try:
+                    for cat, key in list(self._pending.items()):
+                        _tx.set_team_system(team, cat, key)
+                    self._pending.clear()
+                except Exception:
+                    pass
+                self._coach_msg = "Preferred tactics installed."
+            else:
+                self._coach_msg = ("Preferred tactics staged -- suggest them "
+                                   "to your coach, enforce them, or take "
+                                   "over.")
             self.refresh()
 
         suggest_btn.clicked.connect(_suggest)
         enforce_btn.clicked.connect(_enforce)
-        takeover_btn.clicked.connect(self._coach_takeover_refresh)
+        takeover_btn.clicked.connect(_takeover)
+        handback_btn.clicked.connect(self._hand_back_refresh)
+        save_pref_btn.clicked.connect(_save_pref)
+        load_pref_btn.clicked.connect(_load_pref)
         lay.addStretch(1)
 
-    def _coach_takeover(self):
+    def _hand_back_whiteboard(self):
         team = self._team
         coach = self._head_coach(team)
         # Personality-safe handback: trust repair, morale shift and room
         # event fire inside (mainline parity). hand_back_tactics flips
-        # control to "coach" internally.
+        # control to "coach" internally. This is NOT a takeover -- it is the
+        # explicit return of control (the takeover label on this button was
+        # the D-3 conflation bug).
         res = {}
         if _rs is not None:
             try:
@@ -1087,8 +1321,8 @@ class TacticsScreen(BaseScreen):
         if res.get("changed"):
             self._push_tactics_news(res.get("text", ""))
 
-    def _coach_takeover_refresh(self):
-        self._coach_takeover()
+    def _hand_back_refresh(self):
+        self._hand_back_whiteboard()
         self.refresh()
 
     def _on_set_control(self):
@@ -1099,6 +1333,10 @@ class TacticsScreen(BaseScreen):
         who = who if who in ("coach", "gm") else "coach"
         # Route through the personality engine so trust/morale/room-event
         # consequences fire (mainline parity); never flip control raw.
+        # NOTE: this is the legitimate PERMANENT control path (the "I Control"
+        # button) -- take_over_tactics belongs here and in the Coach tab's
+        # explicit "Take Over Whiteboard" button, never in the one-time
+        # Enforce flow.
         res = {}
         if _rs is not None:
             try:
@@ -1136,7 +1374,8 @@ class TacticsScreen(BaseScreen):
 
     def _practice_plan(self):
         plan = safe_call(lambda: (getattr(self._team, "dressing_room", None)
-                              or {}).get("practice_plan")) or {}
+                                  or {}).get("practice_plan"),
+                         context="tactics/practice_plan") or {}
         return plan
 
     def _rebuild_practice_tab(self, lay):
