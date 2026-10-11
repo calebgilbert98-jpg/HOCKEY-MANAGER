@@ -20,31 +20,31 @@ _HISTORY_CATS = ["points", "goals", "assists", "wins", "shutouts", "save_pct"]
 
 
 def _gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="history/resolve_gm") or game
 
 
 def _league(game):
     gm = _gm(game)
-    return (safe_call(lambda: gm.league)
-            or safe_call(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="history/resolve_league")
+            or safe_call(lambda: getattr(game, "league", None), context="history/resolve_league"))
 
 
 def _hist(game):
     """LeagueHistory with the same defensive fallbacks as the web bridge."""
-    h = safe_call(lambda: getattr(_gm(game), "league_history", None))
+    h = safe_call(lambda: getattr(_gm(game), "league_history", None), context="history/resolve_history")
     if h is None:
-        h = safe_call(lambda: getattr(game, "league_history", None))
+        h = safe_call(lambda: getattr(game, "league_history", None), context="history/resolve_history")
     if h is None:
         league = _league(game)
-        h = safe_call(lambda: getattr(league, "history", None)) if league else None
+        h = safe_call(lambda: getattr(league, "history", None), context="history/resolve_history") if league else None
     return h
 
 
 def _league_players(game):
     out = []
     league = _league(game)
-    for t in (safe_call(lambda: list(league.teams), []) or []):
-        out.extend(safe_call(lambda: list(t.roster), []) or [])
+    for t in (safe_call(lambda: list(league.teams), [], context="history/players_teams") or []):
+        out.extend(safe_call(lambda: list(t.roster), [], context="history/players_roster") or [])
     return out
 
 
@@ -105,7 +105,7 @@ class HistoryScreen(BaseScreen):
 
     def _load_champions(self):
         hist = _hist(self.game)
-        seasons = safe_call(lambda: hist.champions_list(), []) or []
+        seasons = safe_call(lambda: hist.champions_list(), [], context="history/champions_list") or []
         layout = self._champions_layout
         self._clear_layout(layout)
         if not seasons:
@@ -169,7 +169,8 @@ class HistoryScreen(BaseScreen):
         years = []
         if hist is not None:
             seasons = safe_call(lambda: list(getattr(hist, "seasons", None) or []),
-                            []) or []
+                            [],
+                                context="history/awards_seasons") or []
             years = sorted({s.get("year") for s in seasons
                             if isinstance(s, dict) and s.get("year")},
                            reverse=True)
@@ -191,7 +192,7 @@ class HistoryScreen(BaseScreen):
                 "No awards recorded yet."))
             return
         year = combo.currentData() if combo.count() else years[0]
-        season = safe_call(lambda: hist.get_season(year), {}) or {}
+        season = safe_call(lambda: hist.get_season(year), {}, context="history/awards_season") or {}
         awards = dict(season.get("awards", {}) or {})
         if season.get("conn_smythe"):
             awards = dict(awards)
@@ -304,7 +305,8 @@ class HistoryScreen(BaseScreen):
     def _load_hof(self):
         hist = _hist(self.game)
         inds = safe_call(lambda: list(getattr(hist, "hall_of_fame", None)
-                                  or []), []) or []
+                                  or []), [],
+                         context="history/hof_inductees") or []
         inds = sorted(inds,
                       key=lambda x: x.get("year_inducted", 0), reverse=True)
         self._hof_bar.setText(
@@ -397,13 +399,13 @@ class HistoryScreen(BaseScreen):
             self._adv_note.setText("Advanced metrics module unavailable.")
             return
         league = _league(self.game)
-        teams = safe_call(lambda: list(league.teams), []) or []
+        teams = safe_call(lambda: list(league.teams), [], context="history/advanced_teams") or []
         rows = []
         for t in teams:
             try:
                 m = team_advanced(t)
                 rows.append((
-                    safe_call(lambda: t.team_name, "?"),
+                    safe_call(lambda: t.team_name, "?", context="history/advanced_team_name"),
                     round(float(getattr(m, "cf_pct", 0) or 0), 1),
                     round(float(getattr(m, "ff_pct", 0) or 0), 1),
                     round(float(getattr(m, "xgf_pct", 0) or 0), 1),
@@ -516,11 +518,11 @@ class HistoryScreen(BaseScreen):
 
     def _reviews_teams(self):
         league = _league(self.game)
-        clubs = [t for t in (safe_call(lambda: list(league.teams), []) or [])
+        clubs = [t for t in (safe_call(lambda: list(league.teams), [], context="history/reviews_teams") or [])
                  if getattr(t, "league_name", "") == "National Hockey League"]
-        names = sorted({safe_call(lambda: t.team_name, "?") for t in clubs})
-        user = safe_call(lambda: getattr(_gm(self.game), "user_team", None))
-        user_name = safe_call(lambda: getattr(user, "team_name", ""), "")
+        names = sorted({safe_call(lambda: t.team_name, "?", context="history/reviews_team_name") for t in clubs})
+        user = safe_call(lambda: getattr(_gm(self.game), "user_team", None), context="history/reviews_user_team")
+        user_name = safe_call(lambda: getattr(user, "team_name", ""), "", context="history/reviews_user_name")
         return clubs, names, user_name
 
     def _load_reviews(self, init=True):
@@ -538,7 +540,7 @@ class HistoryScreen(BaseScreen):
             tcombo.blockSignals(False)
         team = tcombo.currentData() or ""
         club = next((t for t in clubs
-                     if safe_call(lambda: t.team_name, "") == team), None)
+                     if safe_call(lambda: t.team_name, "", context="history/reviews_match_team") == team), None)
         archive = dict(getattr(club, "season_reviews", None) or {}) \
             if club is not None else {}
         years = sorted(archive.keys(), reverse=True)
@@ -565,7 +567,7 @@ class HistoryScreen(BaseScreen):
 
     def _load_records(self):
         hist = _hist(self.game)
-        fr = safe_call(lambda: getattr(hist, "franchise_records", None))
+        fr = safe_call(lambda: getattr(hist, "franchise_records", None), context="history/records_store")
         layout = self._records_layout
         self._clear_layout(layout)
         cards = [
@@ -579,7 +581,7 @@ class HistoryScreen(BaseScreen):
         any_data = False
         for label, attr in cards:
             try:
-                store = safe_call(lambda: getattr(fr, attr, None), None) \
+                store = safe_call(lambda: getattr(fr, attr, None), None, context="history/records_attr") \
                     if fr is not None else None
                 d = dict(store or {})
                 franchises = len(d)
