@@ -1717,6 +1717,32 @@ class TradesScreen(BaseScreen):
         # the offer below is built from raw staged sets and ships phantom
         # players_out/picks_out/players_in/picks_in.
         self._prune_terms()
+        # The partner-retention ask (retention WE want the other side to
+        # keep on players we receive) is a native-UI concept only: the MP
+        # wire format has no field for it, so it would be silently dropped
+        # from the offer. Warn instead of silently stripping.
+        acquire_terms = parse_retention_terms(
+            self._retention_acquire, set(self._want_pids))
+        if acquire_terms:
+            n = len(acquire_terms)
+            box = QMessageBox(QMessageBox.Icon.Question,
+                              "Retention ask not sent",
+                              "You asked the partner GM to retain salary on "
+                              f"{n} incoming player{'s' if n != 1 else ''}. "
+                              "Partner-retention asks only apply to AI "
+                              "trade evaluations — they are NOT transmitted "
+                              "in multiplayer offers.\n\nContinue anyway "
+                              "(the offer goes through WITHOUT the "
+                              "retention ask), or Cancel to go back and "
+                              "adjust the deal?",
+                              QMessageBox.StandardButton.NoButton, self)
+            cont_btn = box.addButton("Continue",
+                                     QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is not cont_btn:
+                self._schedule_evaluate()
+                return
         host, client = self._mp_state()
         my = _user_team(self.game)
         my_name = _team_name(my)
