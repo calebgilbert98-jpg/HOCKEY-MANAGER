@@ -1698,10 +1698,22 @@ class StaffScreen(BaseScreen):
             return
         _touch_chain(self.game, parked=False)
         self._clear_park_notice(sess)
-        remaining = [str(i)
-                     for i in (sess.get("remaining_staff_ids") or [])]
-        names = dict(sess.get("staff_names") or {})
-        results = [str(r) for r in (sess.get("completed_results") or [])]
+        try:
+            remaining = [str(i)
+                         for i in (sess.get("remaining_staff_ids") or [])]
+        except (TypeError, ValueError):
+            # Corrupt/hand-edited save: treat as no remaining staff.
+            remaining = []
+        try:
+            names = dict(sess.get("staff_names") or {})
+        except (TypeError, ValueError):
+            # Corrupt/hand-edited save: fall back to an empty name map.
+            names = {}
+        try:
+            results = [str(r) for r in (sess.get("completed_results") or [])]
+        except (TypeError, ValueError):
+            # Corrupt/hand-edited save: start with an empty result list.
+            results = []
         live = self._live_staff_by_id()
         staff_objs = []
         for sid in remaining:
