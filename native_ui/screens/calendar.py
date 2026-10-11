@@ -6,9 +6,18 @@ per-day game counts, event markers for the trade deadline, entry
 draft, opening night, and season end). A deadline countdown banner
 sits above the grid. Clicking a day opens a details dialog listing
 that day's games with teams, scores, and status.
+
+Mainline parity (calendar_window.py): the month grid also surfaces
+mainline's marquee events (NHL special events stamped on the
+schedule, jersey-retirement ceremonies, the Olympic window, break
+days, and fixed league dates) with mainline's marker priority, and
+the day-detail dialog enriches user-team games with team form and
+the season series. Event markers in the grid are clickable:
+deadline/draft markers navigate to the Deadline Center / Draft Day
+Central, other markers open the day-detail dialog.
 """
 import calendar as _cal
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QFrame,
@@ -18,21 +27,16 @@ from PySide6.QtCore import Qt, Signal
 
 from .base import BaseScreen
 from .schedule import _game_played_state, _results_by_date
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None),
+                     context="calendar/gm") or game
 
 
 def _league(game):
-    return _safe(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league, context="calendar/league")
 
 
 def _iso(d):
@@ -42,13 +46,14 @@ def _iso(d):
         return d.isoformat()
     if d is None:
         return ""
-    return _safe(lambda: str(d), "") or ""
+    return safe_call(lambda: str(d), "", context="calendar/iso") or ""
 
 
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?",
+                     context="calendar/team_name") or "?"
 
 
 _MONTHS = ["January", "February", "March", "April", "May", "June",
@@ -103,15 +108,19 @@ class _DayDetailDialog(QDialog):
 
     Event markers (trade deadline, entry draft) are clickable and
     navigate to the Deadline Center / Draft Day Central. Team names
-    in game cards are clickable and open the team page.
+    in game cards are clickable and open the team page. User-team
+    games are enriched with team form (last 5) and the season series
+    vs the opponent, from real results and the schedule (mainline
+    parity with calendar_window._insert_game_details).
     """
 
     def __init__(self, iso_date, games, events, my_name, today_iso,
-                 parent=None, main_window=None):
+                 parent=None, main_window=None, games_by_date=None):
         super().__init__(parent)
         self._iso = str(iso_date or "")
         self._today_iso = today_iso or ""
         self._main_window = main_window
+        self._games_by_date = games_by_date or {}
         self._cards = []
         self._event_labels = []
         self._empty_label = None
@@ -180,6 +189,17 @@ class _DayDetailDialog(QDialog):
                 games_layout.addWidget(self._make_game_card(g))
         games_layout.addStretch()
 
+        # Day enrichment (mainline parity): team form + season series
+        # for each distinct opponent the user team faced this day.
+        mine_games = [g for g in (games or [])
+                      if g.get("mine") and g.get("opponent")]
+        seen_opps = []
+        for g in mine_games:
+            if g["opponent"] not in seen_opps:
+                seen_opps.append(g["opponent"])
+        for opp in seen_opps:
+            games_layout.addWidget(self._make_enrichment(opp))
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         close_btn = QPushButton("Close")
@@ -228,6 +248,143 @@ class _DayDetailDialog(QDialog):
         btn.clicked.connect(
             lambda _c=False, t=str(team_name or ""): self._open_team(t))
         return btn
+
+    # ------------------------------------------------------------------
+    # Day-detail enrichment (port of mainline calendar_window.py:
+    # _recent_form_lines, _describe_user_result, _season_series_lines).
+    # ------------------------------------------------------------------
+    def _user_played_games(self):
+        """Played user-team games, oldest first, from the real schedule."""
+        out = []
+        for iso in sorted(self._games_by_date):
+            for g in self._games_by_date[iso]:
+                try:
+                    if g.get("mine") and g.get("played"):
+                        out.append((iso, g))
+                except Exception:
+                    continue
+        return out
+
+    @staticmethod
+    def _describe_game(iso, g):
+        """Return (outcome, summary line) for a played user-team game.
+
+        Outcome is 'W', 'L' or 'T'. Returns None when the scores are
+        missing or malformed.
+        """
+        try:
+            is_home = bool(g.get("is_home"))
+            us = g.get("home_score") if is_home else g.get("away_score")
+            them = g.get("away_score") if is_home else g.get("home_score")
+            if us is None or them is None:
+                return None
+            outcome = "W" if us > them else ("L" if us < them else "T")
+            try:
+                when = date.fromisoformat(str(iso)[:10]).strftime("%b %d")
+            except Exception:
+                when = str(iso)
+            venue = "vs" if is_home else "@"
+            opp = g.get("opponent") or g.get("away") or "?"
+            return outcome, f"{when}: {outcome} {us}-{them} {venue} {opp}"
+        except Exception:
+            return None
+
+    def _recent_form_lines(self):
+        """Last-5 form lines plus record and streak, from real results."""
+        played = self._user_played_games()
+        if not played:
+            return ["No games played yet this season."]
+        described = [d for d in
+                     (self._describe_game(i, g) for i, g in played[-5:])
+                     if d]
+        if not described:
+            return ["No games played yet this season."]
+        lines = [f"  {text}" for _outcome, text in described]
+        w = sum(1 for o, _ in described if o == "W")
+        l = sum(1 for o, _ in described if o == "L")
+        lines.append(f"  Last 5: {w}-{l}")
+        # Current streak (walk back from the most recent result).
+        streak_outcome, streak_n = None, 0
+        for iso, g in reversed(played):
+            d = self._describe_game(iso, g)
+            if not d or d[0] == "T":
+                break
+            if streak_outcome is None:
+                streak_outcome = d[0]
+            if d[0] == streak_outcome:
+                streak_n += 1
+            else:
+                break
+        if streak_outcome:
+            lines.append(f"  Streak: {streak_outcome}{streak_n}")
+        return lines
+
+    def _season_series_lines(self, opponent):
+        """Season series vs an opponent: results plus upcoming meetings."""
+        lines = []
+        meetings = [(i, g) for i, g in self._user_played_games()
+                    if g.get("opponent") == opponent]
+        described = [d for d in
+                     (self._describe_game(i, g) for i, g in meetings) if d]
+        if not described:
+            lines.append("First meeting this season.")
+        else:
+            w = sum(1 for o, _ in described if o == "W")
+            l = sum(1 for o, _ in described if o == "L")
+            lines.append(f"Series record: {w}-{l}")
+            for _outcome, text in described:
+                lines.append(f"  {text}")
+        # Upcoming meetings from the schedule.
+        upcoming = []
+        for iso in sorted(self._games_by_date):
+            if iso <= self._iso:
+                continue
+            for g in self._games_by_date[iso]:
+                try:
+                    if (g.get("mine") and g.get("opponent") == opponent
+                            and not g.get("played")):
+                        venue = "vs" if g.get("is_home") else "@"
+                        try:
+                            when = date.fromisoformat(
+                                str(iso)[:10]).strftime("%b %d")
+                        except Exception:
+                            when = str(iso)
+                        upcoming.append(f"{when}: {venue} {opponent}")
+                        break  # one line per day
+                except Exception:
+                    continue
+        if upcoming:
+            lines.append("Upcoming: " + "; ".join(upcoming[:4]))
+        else:
+            lines.append("No further meetings scheduled.")
+        return lines
+
+    def _make_enrichment(self, opponent):
+        """Team Form (Last 5) + Season Series vs an opponent."""
+        box = QFrame()
+        box.setObjectName("tile")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(14, 10, 14, 10)
+        bl.setSpacing(2)
+        fh = QLabel("Team Form (Last 5)")
+        fh.setStyleSheet("font-size: 13px; font-weight: 800; color: #e8b34b;")
+        bl.addWidget(fh)
+        for line in self._recent_form_lines():
+            fl = QLabel(line)
+            fl.setStyleSheet("font-size: 12px; color: #cdd6e4;")
+            bl.addWidget(fl)
+        sh = QLabel(f"Season Series vs {opponent}")
+        sh.setStyleSheet(
+            "font-size: 13px; font-weight: 800; color: #e8b34b; "
+            "margin-top: 6px;")
+        sh.setWordWrap(True)
+        bl.addWidget(sh)
+        for line in self._season_series_lines(opponent):
+            sl = QLabel(line)
+            sl.setStyleSheet("font-size: 12px; color: #cdd6e4;")
+            sl.setWordWrap(True)
+            bl.addWidget(sl)
+        return box
 
     def _make_game_card(self, g):
         card = QFrame()
