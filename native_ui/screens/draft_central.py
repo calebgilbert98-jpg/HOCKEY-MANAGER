@@ -164,19 +164,16 @@ class DraftCentralScreen(BaseScreen):
         if screen is None:
             return
         widget = screen.widget() if hasattr(screen, "widget") else screen
-        give_picks = getattr(widget, "_give_picks", None)
-        if not isinstance(give_picks, set):
+        # Public deep-link API (B NEW-2): route staging through
+        # TradesScreen.preload_give_asset instead of poking _give_picks
+        # and hand-rolling the render pipeline.
+        fn = getattr(widget, "preload_give_asset", None)
+        if not callable(fn):
             return
-        give_picks.add(str(pick_id))
-        for meth in ("_prune_terms", "_render_asset_lists",
-                     "_update_slot_labels", "_render_deal_chips",
-                     "_render_terms", "_schedule_evaluate"):
-            fn = getattr(widget, meth, None)
-            if callable(fn):
-                try:
-                    fn()
-                except Exception:
-                    pass
+        try:
+            fn(str(pick_id))
+        except Exception:
+            pass
 
     def _next_pick_id(self):
         """ID of the user's next unmade draft pick, or None.
