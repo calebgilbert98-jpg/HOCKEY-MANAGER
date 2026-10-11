@@ -616,29 +616,31 @@ def _controversies(app, game_date, rng):
             key = f"player:{_safe(lambda: p.id, id(p))}"
             if not _recent_ok(app, key, "rumor", game_date):
                 continue
+            pts = _pts(p)
             story = rng.choice([
-                "RUMOR MILL: {name} is a natural speculation target -- the {team} star has just {pts} points in {gp} games.",
-                "Is {name}'s time in {team} running out? {pts} points in {gp} games isn't cutting it for an {ovr} OVR player.",
-                "RUMOR MILL: {name}'s name keeps surfacing -- {pts} points in {gp} games and the speculation isn't dying down.",
-                "RUMOR MILL: With {pts} points in {gp} games, {name} is the name that keeps coming up in {team} speculation.",
+                "RUMOR MILL: {name} is a natural speculation target -- the {team} star has just {pts} {points_word} in {gp} games.",
+                "Is {name}'s time in {team} running out? {pts} {points_word} in {gp} games isn't cutting it for an {ovr} OVR player.",
+                "RUMOR MILL: {name}'s name keeps surfacing -- {pts} {points_word} in {gp} games and the speculation isn't dying down.",
+                "RUMOR MILL: With {pts} {points_word} in {gp} games, {name} is the name that keeps coming up in {team} speculation.",
                 "RUMOR MILL: A change of scenery could unlock {name} -- {ovr} OVR talent always draws trade speculation.",
-                "{pts} points in {gp} games isn't the {name} {team} paid for -- and it's starting to show.",
+                "{pts} {points_word} in {gp} games isn't the {name} {team} paid for -- and it's starting to show.",
                 "RUMOR MILL: {team} won't say {name} is available. They won't say he isn't, either.",
                 "The {name} watch is on: {pts} in {gp} for a {ovr} OVR player rarely stays quiet in {team}.",
-                "RUMOR MILL: Could a contender buy low on {name}? {pts} points in {gp} games makes it a debate worth having.",
-                "Is {name}'s future in {team} in doubt? {pts} points in {gp} games keeps the rumor mill fed.",
+                "RUMOR MILL: Could a contender buy low on {name}? {pts} {points_word} in {gp} games makes it a debate worth having.",
+                "Is {name}'s future in {team} in doubt? {pts} {points_word} in {gp} games keeps the rumor mill fed.",
                 "RUMOR MILL: {name}'s production has dipped in {team} -- and the rumor mill is only getting louder.",
                 "Don't be shocked if {name} is wearing different colors by spring -- {pts} in {gp} has {team} rethinking.",
                 "RUMOR MILL: Landing {name} won't come cheap -- {team} knows what a {ovr} OVR star is worth.",
-                "{name} would look good in a lot of top sixes -- {team} knows it, and {pts} points in {gp} hasn't scared anyone off.",
+                "{name} would look good in a lot of top sixes -- {team} knows it, and {pts} {points_word} in {gp} hasn't scared anyone off.",
                 "RUMOR MILL: If {name} were ever available, {ovr} OVR talent wouldn't stay on the market long.",
-                "The longer {name} sits at {pts} points in {gp} games, the louder the {team} rumor mill gets.",
-                "RUMOR MILL: {name} is the big swing -- {ovr} OVR talent at {pts} points in {gp} games.",
-                "Retool or reload? {team}'s answer may decide {name}'s future -- {pts} points in {gp} games.",
-                "{team} fans are split on {name} -- but {pts} points in {gp} games is below the {ovr} OVR bar.",
-                "RUMOR MILL: If {team} sells, {name} is the headline piece -- {pts} points in {gp} games.",
-            ]).format(name=_pname(p), team=_tname(t), pts=_pts(p),
-                      gp=_gp(p), ovr=int(_ovr(p)))
+                "The longer {name} sits at {pts} {points_word} in {gp} games, the louder the {team} rumor mill gets.",
+                "RUMOR MILL: {name} is the big swing -- {ovr} OVR talent at {pts} {points_word} in {gp} games.",
+                "Retool or reload? {team}'s answer may decide {name}'s future -- {pts} {points_word} in {gp} games.",
+                "{team} fans are split on {name} -- but {pts} {points_word} in {gp} games is below the {ovr} OVR bar.",
+                "RUMOR MILL: If {team} sells, {name} is the headline piece -- {pts} {points_word} in {gp} games.",
+            ]).format(name=_pname(p), team=_tname(t), pts=pts,
+                      gp=_gp(p), ovr=int(_ovr(p)),
+                      points_word="point" if pts == 1 else "points")
             stories.append(story)
             _mark_recent(app, key, "rumor", game_date)
     # Holdout speculation: stars in final contract year (low years left)
@@ -800,27 +802,28 @@ def _team_stories(app, game_date, rng):
                 _mark_recent(app, key, "streak", game_date)
             elif pct <= 0.25 and _recent_ok(app, key, "slump", game_date):
                 story = rng.choice([
-                    "SLUMP WATCH: {team} has managed just {w} wins in {gp} games.",
+                    "SLUMP WATCH: {team} has managed just {w} {wins_word} in {gp} games.",
                     "The numbers are ugly: {team} is {w}-{l}-{otl} and searching for answers.",
                     "SLUMP WATCH: {w}-{l}-{otl} -- {team}'s record needs no sugarcoating.",
                     "Ouch. {team} is {w}-{l}-{otl} through {gp} games.",
-                    "SLUMP WATCH: Just {w} wins in {gp} games for {team} -- the record says it all.",
+                    "SLUMP WATCH: Just {w} {wins_word} in {gp} games for {team} -- the record says it all.",
                     "{team}'s {w}-{l}-{otl} mark is the kind that gives a beat writer nightmares.",
                     "SLUMP WATCH: {w}-{l}-{otl}. There's no way to dress that up for {team}.",
                     "The ledger is brutal: {team} sits at {w}-{l}-{otl}.",
                     "SLUMP WATCH: {team} is {w}-{l}-{otl} -- the losses column is doing the talking.",
-                    "{w} wins. {gp} games. {team}'s record is {w}-{l}-{otl}, and it's rough.",
+                    "{w} {wins_word}. {gp} games. {team}'s record is {w}-{l}-{otl}, and it's rough.",
                     "SLUMP WATCH: Read the record and wince: {team} is {w}-{l}-{otl}.",
                     "Not much to like in {team}'s {w}-{l}-{otl} record through {gp}.",
                     "SLUMP WATCH: {team} is staring at {w}-{l}-{otl} through {gp} games.",
                     "A {w}-{l}-{otl} record for {team} -- the kind that gets circled in red ink.",
-                    "SLUMP WATCH: {w} wins in {gp} games. That is {team}'s season so far.",
+                    "SLUMP WATCH: {w} {wins_word} in {gp} games. That is {team}'s season so far.",
                     "Yikes: {team} is {w}-{l}-{otl} through {gp} games.",
                     "SLUMP WATCH: The {team} ledger reads {w}-{l}-{otl} -- and it's not pretty.",
                     "{team}'s {w}-{l}-{otl} record is a tough look through {gp} games.",
                     "SLUMP WATCH: {w}-{l}-{otl} for {team}. The record is what it is.",
                     "File this under rough: {team} is {w}-{l}-{otl} through {gp} games.",
-                ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp)
+                ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp,
+                          wins_word="win" if w == 1 else "wins")
                 stories.append(story)
                 _mark_recent(app, key, "slump", game_date)
         except Exception:
