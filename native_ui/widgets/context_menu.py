@@ -807,20 +807,21 @@ class EntityContextMenu(QMenu):
             mgr = EntityContextMenu._shortlist_manager(game)
             if mgr is None:
                 raise RuntimeError("shortlist system unavailable")
-            import shortlist_system as _ss
-            e = _ss.ShortlistEntry(
-                player_id=str(getattr(player, "id", "")),
-                player_name=getattr(player, "full_name", "?"),
-                category=cat.currentText(),
-                priority=prio_map.get(prio.currentText(), 2),
-                notes=notes.toPlainText().strip(),
-            )
-            mgr.entries.append(e)
-            mgr.save_shortlist()
-            QMessageBox.information(
-                main_window, "Shortlist",
-                f"{getattr(player, 'full_name', '?')} added to the "
-                f"shortlist ({cat.currentText()}).")
+            name = getattr(player, "full_name", "?")
+            added = mgr.add_player(str(getattr(player, "id", "")),
+                                   name,
+                                   cat.currentText(),
+                                   notes=notes.toPlainText().strip(),
+                                   priority=prio_map.get(prio.currentText(), 2))
+            if added:
+                QMessageBox.information(
+                    main_window, "Shortlist",
+                    f"{name} added to the "
+                    f"shortlist ({cat.currentText()}).")
+            else:
+                QMessageBox.warning(
+                    main_window, "Already on Shortlist",
+                    f"{name} is already in {cat.currentText()}.")
         except Exception as exc:
             QMessageBox.warning(
                 main_window, "Shortlist",
