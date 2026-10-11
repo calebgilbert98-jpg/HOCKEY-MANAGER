@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QScrollArea, QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QMenu,
+    QTableWidgetItem, QVBoxLayout, QWidget, QMenu, QTextEdit,
 )
 from PySide6.QtCore import Qt
 
@@ -731,6 +731,110 @@ class ProfileEditorDialog(QDialog):
         self.accept()
 
 
+class AdvancedAnalysisDialog(QDialog):
+    """Fog-of-war-safe advanced analysis for one player.
+
+    Qt port of ProfessionalScoutingView._advanced_analysis: everything
+    shown is scout-filtered -- the filed report's graded potential range,
+    its accuracy-graded attribute bands, strengths/weaknesses the scout
+    actually listed, comparables and projection. With no report, only the
+    public consensus range is shown. Never raw attributes.
+    """
+
+    def __init__(self, game, player, report=None, parent=None):
+        super().__init__(parent)
+        self.game = game
+        self.setWindowTitle(
+            f"Advanced Analysis — {getattr(player, 'full_name', '?')}")
+        self.setMinimumSize(560, 560)
+
+        layout = QVBoxLayout(self)
+        header = QLabel(
+            f"{getattr(player, 'full_name', '?')}  ·  {_pos_str(player)}  ·  "
+            f"Age {getattr(player, 'age', '?')}")
+        header.setStyleSheet("font-size: 14px; font-weight: bold;")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        body = QTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(self._analysis_text(player, report))
+        layout.addWidget(body, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _report_lines(self, player, report):
+        """Fog-of-war-safe (label, text) rows + graded potential."""
+        if _scout_helpers is not None:
+            try:
+                return _scout_helpers.report_display_lines(player, report)
+            except Exception:
+                pass
+        return [], "?"
+
+    def _analysis_text(self, player, report):
+        lines = []
+
+        def hdr(text):
+            lines.append(text)
+            lines.append("=" * len(text))
+
+        if report is not None:
+            rows, pot = self._report_lines(player, report)
+            hdr("SCOUT-FILTERED BREAKDOWN")
+            lines.append(f"Graded potential: {pot}")
+            lines.append(
+                f"Report accuracy: {getattr(report, 'accuracy', '?')} "
+                f"({getattr(report, 'viewings', 0)} viewings)")
+            try:
+                lines.append(
+                    f"Reliability: {getattr(report, 'reliability', 0.0):.0%}")
+            except Exception:
+                pass
+            lines.append("")
+
+            # Accuracy-graded attribute bands the scout actually filed
+            scouted = getattr(report, "scouted_attributes", None) or {}
+            if scouted:
+                hdr("ATTRIBUTE BANDS (as graded by the scout)")
+                for attr in sorted(scouted):
+                    label = attr.replace("_", " ").title()
+                    lines.append(f"• {label}: {scouted[attr]}")
+                lines.append("")
+
+            for label, text in rows:
+                if label in ("Accuracy", "Viewings"):
+                    continue  # already shown above
+                hdr(label.upper())
+                lines.append(text)
+                lines.append("")
+
+            lines.append(
+                "These are the scout's graded reads, not measurements. "
+                "Higher accuracy narrows the bands.")
+        else:
+            crange = "?"
+            if _scout_logic is not None:
+                try:
+                    crange = _scout_logic.consensus_range(player)
+                except Exception:
+                    pass
+            hdr("PUBLIC CONSENSUS (UN SCOUTED)")
+            lines.append(f"Potential range: {crange}")
+            lines.append("")
+            lines.append(
+                "No filed report exists for this player, so there is no "
+                "advanced breakdown to show -- anything more would be "
+                "guessing.")
+            lines.append("")
+            lines.append(
+                "Assign a scout to build a real evaluation; the breakdown "
+                "above fills in as viewings accumulate and accuracy rises.")
+        return "\n".join(lines)
+
+
 class ScoutingScreen(BaseScreen):
     title = "Scouting"
 
@@ -907,8 +1011,17 @@ class ScoutingScreen(BaseScreen):
         if not entries:
             self._suggest_list.addItem(
                 "No suggestions yet — hit Refresh Suggestions.")
+
+    def _build_reports_section(self, layout):
         report_box = QGroupBox("Scouting Reports")
         report_layout = QVBoxLayout(report_box)
+        analysis_btn = QPushButton("Advanced Analysis…")
+        analysis_btn.setToolTip(
+            "Fog-of-war-safe breakdown of the selected report "
+            "(or public consensus for an unscouted player).")
+        analysis_btn.setCursor(Qt.PointingHandCursor)
+        analysis_btn.clicked.connect(self._analyze_selected_report)
+        report_layout.addWidget(analysis_btn)
         self._report_list = QListWidget()
         report_layout.addWidget(self._report_list)
         layout.addWidget(report_box)
@@ -989,6 +1102,13 @@ class ScoutingScreen(BaseScreen):
         clear_btn.setToolTip("Reset all database filters")
         clear_btn.clicked.connect(self._clear_db_filters)
         filter_row.addWidget(clear_btn)
+
+        analyze_btn = QPushButton("Advanced Analysis…")
+        analyze_btn.setToolTip(
+            "Fog-of-war-safe breakdown of the selected player "
+            "(filed report if scouted, public consensus otherwise)")
+        analyze_btn.clicked.connect(self._analyze_selected_db_player)
+        filter_row.addWidget(analyze_btn)
         layout.addLayout(filter_row)
 
     def _build_db_results(self, layout):
@@ -1084,6 +1204,60 @@ class ScoutingScreen(BaseScreen):
         else:
             QMessageBox.warning(self, "Scouting", msg)
         self.refresh()
+
+    # --- Advanced analysis ---
+    def _selected_report(self):
+        """The (player, report) behind the selected report row."""
+        item = self._report_list.currentItem()
+        if item is None:
+            return None, None
+        try:
+            data = item.data(Qt.UserRole)
+            if isinstance(data, tuple) and len(data) == 2:
+                return data
+        except Exception:
+            pass
+        return None, None
+
+    def _analyze_selected_report(self):
+        """Advanced analysis for the selected report row (mainline parity:
+        the analysis dialog is available from the reports list)."""
+        player, report = self._selected_report()
+        if report is None:
+            QMessageBox.warning(
+                self, "No Selection",
+                "Select a scouting report to analyze.")
+            return
+        if player is None:
+            player = getattr(report, "player", None)
+        if player is None:
+            QMessageBox.warning(
+                self, "Analysis", "Could not resolve the player.")
+            return
+        AdvancedAnalysisDialog(self.game, player, report, self).exec()
+
+    def _analyze_selected_db_player(self):
+        """Advanced analysis for the selected database row (mainline parity:
+        the analysis is available from the player list -- filed report if
+        scouted, public consensus range otherwise)."""
+        row = self._db_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(
+                self, "No Selection",
+                "Select a player in the database to analyze.")
+            return
+        item = self._db_table.item(row, 0)
+        player = item.data(Qt.UserRole + 1) if item is not None else None
+        if player is None:
+            QMessageBox.warning(
+                self, "Analysis", "Could not resolve the player.")
+            return
+        team = _user_team(self.game)
+        report = safe_call(
+            lambda: (getattr(team, "scouting_reports", None) or {}).get(
+                getattr(player, "id", None)),
+            None, context="scouting/load_report_for_analysis")
+        AdvancedAnalysisDialog(self.game, player, report, self).exec()
 
     def _new_beat(self):
         dlg = BeatDialog(self.game, self)
