@@ -322,7 +322,16 @@ class EntityContextMenu(QMenu):
                     return
                 if _is_own_team(player_team):
                     # Own-team player: never the partner/wanted side.
-                    EntityContextMenu._preselect_give_player(widget, pid)
+                    # Stage on the give side through the screen's public
+                    # deep-link API (B NEW-2) -- one canonical pipeline,
+                    # never raises; a missed stage is cosmetic, not an
+                    # error. Convention matches draft_central (1cbc6fc).
+                    fn = getattr(widget, "preload_give_asset", None)
+                    if callable(fn):
+                        try:
+                            fn(player)
+                        except Exception:
+                            pass
                     return
                 setter(team_name or "", pid or "")
             else:
@@ -335,37 +344,6 @@ class EntityContextMenu(QMenu):
             QMessageBox.warning(
                 main_window, "Could not open trade proposal",
                 f"The trade screen could not preload this selection: {exc}")
-
-    @staticmethod
-    def _preselect_give_player(widget, pid):
-        """Preselect an own-team player on the user's (give) side of the
-        trade screen.
-
-        set_teams() has no give-side player parameter -- it only knows
-        the partner/want side -- so the pid is added to the screen's
-        give set and the same render pipeline set_teams uses is run.
-        Never raises; a missed preselect is cosmetic, not an error.
-        """
-        try:
-            if not pid or widget is None:
-                return
-            my_pids = {str(getattr(p, "id", "") or "")
-                       for p, _ in (getattr(widget, "_my_players", None)
-                                     or [])}
-            if pid not in my_pids:
-                return
-            give_pids = getattr(widget, "_give_pids", None)
-            if not isinstance(give_pids, set):
-                return
-            give_pids.add(pid)
-            for meth in ("_prune_terms", "_render_asset_lists",
-                         "_update_slot_labels", "_render_terms",
-                         "_schedule_evaluate"):
-                fn = getattr(widget, meth, None)
-                if callable(fn):
-                    fn()
-        except Exception as exc:
-            print(f"[ctx] give-side preselect failed: {exc}")
 
     @staticmethod
     def _open_staff_detail(main_window, staff):
