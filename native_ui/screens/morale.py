@@ -284,6 +284,107 @@ class AdviseCoachDialog(QDialog):
 
 
 # ----------------------------------------------------------------------
+# Line Control dialog (port of morale_window.LineControlPopup)
+# ----------------------------------------------------------------------
+
+class LineControlDialog(QDialog):
+    """Discuss (amicable) vs seize (nuclear) the lineup pen.
+
+    Qt port of morale_window.LineControlPopup. The GM sits the coach down:
+    the dialog shows the coach's likely response to an amicable discussion
+    BEFORE the GM commits (via reputation_system.preview_line_control_discussion),
+    then routes both choices through the same shared engine --
+    reputation_system.set_line_control(..., approach=...) -- that mainline
+    uses. No consequence logic is duplicated here: trust deltas, happiness
+    penalties, team-event feed entries, and coach-line re-installation all
+    live in the shared module.
+    """
+
+    def __init__(self, game, team, coach, roster, ctx, parent=None):
+        super().__init__(parent)
+        self._game = game
+        self._team = team
+        self._coach = coach
+        self._roster = list(roster or [])
+        self._ctx = dict(ctx or {})
+        self.setWindowTitle("Line Control")
+        self.setMinimumWidth(480)
+
+        layout = QVBoxLayout(self)
+
+        cname = safe_call(lambda: getattr(coach, "full_name", "Coach"), "Coach")
+        title = QLabel(f"The lineup pen: {cname}")
+        title.setObjectName("section-header")
+        layout.addWidget(title)
+
+        sub = QLabel(
+            f"{safe_call(lambda: _rs.control_label(coach), '')} \u00b7 GM trust "
+            f"{safe_call(lambda: int(getattr(coach, 'gm_trust', 70) or 70), 70)}/100")
+        sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
+        sub.setWordWrap(True)
+        layout.addWidget(sub)
+
+        preview = safe_call(
+            lambda: _rs.preview_line_control_discussion(coach, self._ctx), None)
+        if not isinstance(preview, dict):
+            preview = {"text": "No read on the coach.", "tone": "wary"}
+        plbl = QLabel(f"Discuss: \"{preview.get('text', '')}\"")
+        plbl.setWordWrap(True)
+        plbl.setStyleSheet("font-size: 13px;")
+        layout.addWidget(plbl)
+
+        tone = str(preview.get("tone", "wary"))
+        tone_color = "#4CAF50" if tone in ("welcomes", "accepts") else "#F44336"
+        tone_lbl = QLabel(f"Likely response: {tone.upper()}")
+        tone_lbl.setWordWrap(True)
+        tone_lbl.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: {tone_color};")
+        layout.addWidget(tone_lbl)
+
+        discuss_btn = QPushButton("Discuss: \"let me try something\"")
+        discuss_btn.setCursor(Qt.PointingHandCursor)
+        discuss_btn.clicked.connect(lambda _c: self._take("discuss"))
+        layout.addWidget(discuss_btn)
+
+        seize_btn = QPushButton("Seize control (nuclear option)")
+        seize_btn.setCursor(Qt.PointingHandCursor)
+        seize_btn.clicked.connect(lambda _c: self._take("seize"))
+        layout.addWidget(seize_btn)
+
+        self._result = QLabel("")
+        self._result.setWordWrap(True)
+        self._result.setStyleSheet("font-size: 13px;")
+        layout.addWidget(self._result)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+
+    def _take(self, approach):
+        """Apply the choice through the shared engine (mainline parity)."""
+        if _rs is None or self._coach is None:
+            self._result.setText("Line-control engine unavailable.")
+            return
+        try:
+            out = _rs.set_line_control(
+                self._team, "gm", self._ctx, self._roster,
+                coach=self._coach, approach=approach)
+        except Exception as e:
+            self._result.setText(f"Line control change failed: {e}")
+            return
+        color = "#4CAF50" if approach == "discuss" else "#F44336"
+        word = "DISCUSSED" if approach == "discuss" else "SEIZED"
+        self._result.setText(
+            f"<b style='color:{color}'>{word}</b>: {(out or {}).get('text', '')}")
+        parent_screen = self.parent()
+        if hasattr(parent_screen, "refresh"):
+            QTimer.singleShot(800, parent_screen.refresh)
+
+
+# ----------------------------------------------------------------------
 # Morale screen
 # ----------------------------------------------------------------------
 
@@ -410,7 +511,8 @@ class MoraleScreen(BaseScreen):
             pass
         return ctx
 
-    def _apply_line_control(self, team, coach, roster, target):
+    def _apply_line_control(self, team, coach, roster, target,
+                            approach="seize"):
         """Route line-control changes through reputation_system.set_line_control.
 
         Mainline parity (morale_window._open_line_control_popup /
@@ -422,9 +524,12 @@ class MoraleScreen(BaseScreen):
         entire chain: no morale consequences, no happiness shifts, no feed
         entry.
 
-        approach="seize" matches this toggle button's direct-takeover
-        semantics (mainline's nuclear option). Giving the pen back
-        (gm -> coach) is always amicable per mainline.
+        approach="seize" matches the direct-takeover semantics (mainline's
+        nuclear option); approach="discuss" routes the amicable conversation
+        (mainline's "let me try something"): trust deltas and happiness
+        penalties are decided by the coach's personality via
+        preview_line_control_discussion. Giving the pen back (gm -> coach)
+        is always amicable per mainline.
         Returns the engine's outcome text for display, or "" / None on
         failure.
         """
@@ -433,7 +538,7 @@ class MoraleScreen(BaseScreen):
         try:
             out = _rs.set_line_control(
                 team, target, self._team_context(), roster,
-                coach=coach, approach="seize")
+                coach=coach, approach=approach)
             return (out or {}).get("text", "")
         except Exception as e:
             return f"Line control change failed: {e}"
@@ -2068,13 +2173,28 @@ class MoraleScreen(BaseScreen):
             return
         if action == "line_control":
             cur = safe_call(lambda: getattr(team, "line_control", "coach"), "coach")
-            target = "coach" if cur == "gm" else "gm"
-            outcome = self._apply_line_control(team, coach, roster, target)
-            if outcome and getattr(self, "_coach_body", None) is not None:
-                try:
-                    self._coach_body.setText(outcome)
-                except Exception:
-                    pass
+            if cur == "gm":
+                # Giving the pen back is always amicable (mainline parity:
+                # morale_window._open_line_control_popup skips the dialog).
+                outcome = self._apply_line_control(team, coach, roster, "coach")
+                if outcome and getattr(self, "_coach_body", None) is not None:
+                    try:
+                        self._coach_body.setText(outcome)
+                    except Exception:
+                        pass
+                self.refresh()
+                return
+            if coach is None:
+                self._coach_body.setText(
+                    "No head coach on staff \u2014 the lines conversation needs a coach.")
+                return
+            # Mainline parity: open the Discuss-vs-Seize dialog instead of a
+            # bare seize. The preview and both outcomes run through the
+            # shared reputation_system engine.
+            dlg = LineControlDialog(
+                self.game, team, coach, roster, self._team_context(),
+                parent=self)
+            dlg.exec()
             self.refresh()
             return
         if action == "back_room":
