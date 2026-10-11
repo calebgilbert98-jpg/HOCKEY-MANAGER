@@ -14,13 +14,15 @@ by a QTimer on the GUI thread. When the sim finishes, the game is flagged
 as watched (so day-advance doesn't re-sim it) and the result is recorded
 so the replay screen and box-score dialog can find it.
 """
+import math
 import queue
 import threading
 import time
 from datetime import date, datetime
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QComboBox, QTabWidget, QTextBrowser,
+    QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QComboBox,
+    QTabWidget, QTextBrowser, QProgressBar,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
     QGraphicsRectItem, QTableWidget, QTableWidgetItem, QHeaderView,
     QScrollArea, QWidget, QVBoxLayout, QFrame,
@@ -47,6 +49,128 @@ _HIGHLIGHT_TYPES = {"goal", "hit", "penalty", "fight", "milestone",
 # Pacing (web _PACE parity): seconds of held "beat" per event type.
 _PACE = {"goal": 2.0, "fight": 2.0, "penalty": 1.2, "period_end": 1.5,
          "period_start": 1.0, "milestone": 1.0}
+
+# In-game tactics whiteboard categories (mainline pbp_visual_sim parity:
+# (team.tactics key, short label, tactics.py catalog attribute)).
+_TAC_CATS = (
+    ("forecheck", "Forechk", "FORECHECK_SYSTEMS"),
+    ("neutral_zone", "NeutZne", "NEUTRAL_ZONE_SYSTEMS"),
+    ("dzone", "D-Zone", "DZONE_SYSTEMS"),
+    ("ozone", "O-Zone", "OZONE_SYSTEMS"),
+    ("breakout", "Brkout", "BREAKOUT_SYSTEMS"),
+    ("pp", "PowPly", "POWERPLAY_SYSTEMS"),
+    ("pk", "PenKill", "PENALTY_KILL_SYSTEMS"),
+)
+
+
+class _ClickLabel(QLabel):
+    """QLabel that fires a callback on mouse click (collapsible panels)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_click = None
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        try:
+            if callable(self.on_click):
+                self.on_click()
+        except Exception as e:
+            print(f"[watch] strip click failed: {e}")
+        super().mousePressEvent(event)
+
+
+def _calc_winprob(home_score, away_score, period, clock,
+                  home_shots, away_shots):
+    """Home win probability: score lead + shot tilt, time-weighted.
+
+    Faithful port of mainline pbp_visual_sim._calc_winprob.
+    """
+    lead = home_score - away_score
+    try:
+        t_rem = max(0.0, float(clock) + max(0, 3 - int(period)) * 1200)
+    except Exception:
+        t_rem = 3600.0
+    x = lead * 1.7 / (1.0 + t_rem / 750.0)
+    try:
+        x += (int(home_shots) - int(away_shots)) * 0.015
+    except Exception:
+        pass
+    p = 1.0 / (1.0 + math.exp(-x))
+    return min(0.98, max(0.02, p))
+
+
+def _momentum_reading(sim, mom, home_name, away_name):
+    """Fused momentum (mainline pbp_visual_sim._momentum_reading parity).
+
+    Prefers momentum.read_momentum(sim) when the sim carries a tracker;
+    falls back to the local recent-events deques. Returns
+    {"score": -100..100, "label", "drivers", "risk_home", "risk_away"}.
+    """
+    try:
+        from momentum import read_momentum as _rm
+        if sim is not None and \
+                getattr(sim, "_momentum_events", None) is not None:
+            return _rm(sim)
+    except Exception:
+        pass
+    try:
+        net = sum(mom.get("home", [])) - sum(mom.get("away", []))
+    except Exception:
+        net = 0.0
+    s = max(-100.0, min(100.0, net / 24.0 * 100.0))
+    side = "Even" if abs(s) < 15 else ("Home" if s > 0 else "Away")
+    return {"score": s, "label": side, "drivers": [],
+            "risk_home": 1.0, "risk_away": 1.0}
+
+
+def _tension_color(v):
+    if v >= 75:
+        return "#ff6b6b"
+    if v >= 50:
+        return "#ff9f5c"
+    if v >= 25:
+        return "#ffd166"
+    return "#7bc96f"
+
+
+def _tension_mood(v):
+    if v >= 75:
+        return "BOILING"
+    if v >= 50:
+        return "CHIPPY"
+    if v >= 25:
+        return "HEATING"
+    return "CALM"
+
+
+def _tension_breakdown(home_team, away_team, gm):
+    """Pre-game tension drivers (mainline PBPVisualSim init parity)."""
+    try:
+        import reputation_system as _rs
+        rivalries = safe_call(lambda: getattr(gm, "rivalries", None) or [],
+                              [], context="watch/tension:rivalries") or []
+        bd = _rs.game_tension_breakdown(
+            home_team, away_team, rivalries,
+            is_playoff=False, series_game=0)
+        if isinstance(bd, dict):
+            return bd
+    except Exception:
+        pass
+    return {"tension": 0.0, "drivers": []}
+
+
+def _side_of(name, home_name, away_name):
+    """'home'/'away'/None for a team name (momentum attribution)."""
+    try:
+        n = str(name or "").strip().lower()
+        if n and n == str(home_name or "").strip().lower():
+            return "home"
+        if n and n == str(away_name or "").strip().lower():
+            return "away"
+    except Exception:
+        pass
+    return None
 
 
 def _resolve_gm(game):
@@ -212,6 +336,10 @@ _watch = {
     "home_name": "", "away_name": "",
     "home_abbr": "", "away_abbr": "",
     "id_meta": {}, "game": None,
+    # OBS-3: set by _finish_sim when result processing failed and the
+    # game was deliberately left UN-watched so the day sim re-processes
+    # it. Surfaced loudly in the UI by WatchScreen._finish().
+    "finish_alert": None,
 }
 
 # When set (by schedule.py's Watch action), _next_game() returns this
@@ -416,39 +544,31 @@ def _ensure_live_sim(game):
         return _watch
 
 
-def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
-                game_date, run_result=None):
-    """Flag the schedule entry watched and record the result canonically.
+def _set_finish_alert(msg):
+    """Record a loud, user-visible finish failure (OBS-3).
 
-    Mirrors web_ui/screens/watch.py::_mark_game_watched for the watched
-    flag, then routes the result through
-    GameManager._process_single_game_result -- the same canonical
-    post-game pipeline the day-sim uses for GameSim games. That builder
-    supplies player ratings, lines, TOI/fatigue, three stars, the media
-    engine, news log, and narrative hooks, and it internally performs the
-    record + standings update -- so the direct _record_game_result and
-    _update_standings_fast calls that used to live here are gone (calling
-    both double-recorded).
-
-    Exactly-once: the high-fidelity GameSim already flushed player season
-    stats live, so stats_from_events=False; it modeled fights/brawls live,
-    so the narrative hook runs with roll_incidents=False (the day-sim
-    GameSim branch does the same -- rolling again would double-record
-    incidents in the rivalry store).
+    Runs on the background sim thread; WatchScreen._finish() surfaces it
+    on the GUI thread via the status line, the ticker, and a dialog.
     """
-    gm = _resolve_gm(game)
-    today = game_date or safe_call(
-        lambda: getattr(gm, "current_date", None),
-        context="watch/finish_sim:resolve_date")
-    hn, an = _team_name(home_team), _team_name(away_team)
-    # 1. Flag the real schedule entry. Dict entries get the flag in
-    #    place. Tuple entries are immutable and -- worse -- simulate_day
-    #    converts them to FRESH dicts (game_manager.py), which would drop
-    #    any flag. So replace a matching tuple in-place with an equivalent
-    #    dict carrying watched=True. simulate_day then takes the dict path
-    #    (same object, flag preserved) and its `game.get('watched')` guard
-    #    skips re-simming. This surpasses the web version, which skips
-    #    tuples entirely.
+    with _watch_lock:
+        _watch["finish_alert"] = msg
+    print(f"[watch] FINISH ALERT: {msg}")
+
+
+def _mark_schedule_watched(gm, today, hn, an, hs, aws):
+    """Flag the real schedule entry watched.
+
+    OBS-3: called ONLY after the result was confirmed recorded, so no
+    exception path can leave a game marked-watched but unrecorded.
+    Mirrors web_ui/screens/watch.py::_mark_game_watched for the watched
+    flag. Dict entries get the flag in place. Tuple entries are
+    immutable and -- worse -- simulate_day converts them to FRESH dicts
+    (game_manager.py), which would drop any flag. So replace a matching
+    tuple in-place with an equivalent dict carrying watched=True.
+    simulate_day then takes the dict path (same object, flag preserved)
+    and its `game.get('watched')` guard skips re-simming. This surpasses
+    the web version, which skips tuples entirely.
+    """
     try:
         league = safe_call(lambda: getattr(gm, "league", None), None,
                            context="watch/finish_sim:resolve_league")
@@ -487,7 +607,60 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                     continue
     except Exception:
         pass
-    # 2. Canonical inputs: unpack the sim's own run() return
+
+
+def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
+                game_date, run_result=None):
+    """Never raises: fail-closed finish (OBS-3).
+
+    Any unexpected failure leaves the game UN-watched and records a loud
+    alert, so the day sim still processes it normally -- a stranded game
+    (marked-watched but never recorded) is impossible by construction.
+    """
+    try:
+        _finish_sim_impl(game, sim, home_team, away_team, hs, aws,
+                         period, game_date, run_result)
+    except Exception as e:
+        _set_finish_alert(
+            "⚠️ The watched game could not be recorded "
+            f"({type(e).__name__}: {e}). It was left un-watched so the "
+            "day sim will process it normally -- advance the day to "
+            "re-sim it.")
+
+
+def _finish_sim_impl(game, sim, home_team, away_team, hs, aws, period,
+                     game_date, run_result=None):
+    """Record the watched result canonically, then flag the entry watched.
+
+    OBS-3 atomicity (fail-closed): the result is processed FIRST and the
+    schedule entry is marked watched ONLY after the record is confirmed.
+    A processing failure therefore leaves the game exactly as if it had
+    never been watched -- the day sim's `game.get('watched')` guard does
+    not fire and the game is re-processed normally instead of stranded.
+
+    Routes the result through GameManager._process_single_game_result --
+    the same canonical post-game pipeline the day-sim uses for GameSim
+    games. That builder supplies player ratings, lines, TOI/fatigue,
+    three stars, the media engine, news log, and narrative hooks, and it
+    internally performs the record + standings update -- so the direct
+    _record_game_result and _update_standings_fast calls that used to
+    live here are gone (calling both double-recorded).
+
+    Exactly-once: the high-fidelity GameSim already flushed player season
+    stats live, so stats_from_events=False; it modeled fights/brawls live,
+    so the narrative hook runs with roll_incidents=False (the day-sim
+    GameSim branch does the same -- rolling again would double-record
+    incidents in the rivalry store).
+    """
+    gm = _resolve_gm(game)
+    today = game_date or safe_call(
+        lambda: getattr(gm, "current_date", None),
+        context="watch/finish_sim:resolve_date")
+    hn, an = _team_name(home_team), _team_name(away_team)
+    # NOTE (OBS-3): the schedule entry is NOT flagged here. It is marked
+    # watched only at the very end, after the result is confirmed
+    # recorded -- see _mark_schedule_watched below.
+    # 1. Canonical inputs: unpack the sim's own run() return
     #    (winner, loser, scores, game_log, notable_events). If the sim
     #    raised mid-game, fall back to attribute reads / score-derived
     #    values so the game is still recorded.
@@ -545,6 +718,11 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                  game_date=today)
     except Exception:
         pass
+    # 2. Record the result FIRST (OBS-3 atomicity). The schedule entry is
+    #    only flagged watched afterwards, on a confirmed record -- so a
+    #    failure here leaves the game un-watched and the day sim picks it
+    #    up normally instead of stranding it.
+    recorded = False
     _proc = getattr(gm, "_process_single_game_result", None)
     if callable(_proc):
         # Canonical: record + standings happen inside (exactly once). On
@@ -554,8 +732,13 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
             _proc(today, home_team, away_team, winner, loser,
                   (hs, aws), events, notable, sim,
                   stats_from_events=False, preseason=False)
+            recorded = True
         except Exception as e:
-            print(f"[watch] canonical result processing failed: {e}")
+            _set_finish_alert(
+                "⚠️ Result recording failed "
+                f"({type(e).__name__}: {e}). The game was left un-watched "
+                "so the day sim will re-process it -- advance the day to "
+                "re-sim it. (It is NOT recorded yet.)")
     else:
         # Fallback: the game manager predates the canonical API. Record
         # the raw sim output the old way so the game is never dropped.
@@ -583,6 +766,7 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                     "team_stats": dict(
                         getattr(sim, "team_stats", None) or {}),
                 })
+                recorded = True
             else:
                 gr = getattr(game, "game_results", None)
                 if isinstance(gr, list):
@@ -594,6 +778,7 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                         "away_score": aws,
                         "winner": winner,
                     })
+                    recorded = True
             if gm is not None and not isinstance(home_team, str) \
                     and not isinstance(away_team, str):
                 upd = getattr(gm, "_update_standings_fast", None)
@@ -601,8 +786,12 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
                     upd(home_team, away_team, winner, (hs, aws),
                         went_to_ot=(went_ot or went_so), preseason=False)
         except Exception as e:
-            print(f"[watch] fallback record failed: {e}")
-    # 4. Lore: deliver any headlines the sim collected -- the same call
+            _set_finish_alert(
+                "⚠️ Fallback result recording failed "
+                f"({type(e).__name__}: {e}). The game was left un-watched "
+                "so the day sim will re-process it -- advance the day to "
+                "re-sim it. (It is NOT recorded yet.)")
+    # 3. Lore: deliver any headlines the sim collected -- the same call
     #    the day-sim makes right after result processing.
     try:
         import headlines as _hl_mod
@@ -611,6 +800,11 @@ def _finish_sim(game, sim, home_team, away_team, hs, aws, period,
             _drain(gm, sim)
     except Exception:
         pass
+    # 4. OBS-3: flag the schedule entry watched ONLY on a confirmed
+    #    record. Every failure path above leaves the game un-watched, so
+    #    the day sim still processes it -- no stranded games, ever.
+    if recorded:
+        _mark_schedule_watched(gm, today, hn, an, hs, aws)
 
 
 def _normalize_gs(game_stats):
@@ -1182,12 +1376,32 @@ class WatchScreen(BaseScreen):
         self._paused = False
         self._btn_pause.setEnabled(False)
         self._btn_start.setEnabled(True)
+        self._btn_simend.setEnabled(False)
         with _watch_lock:
             a, h = _watch["away_abbr"], _watch["home_abbr"]
+            alert = _watch["finish_alert"]
+            _watch["finish_alert"] = None
         self._ticker.setText(f"Final: {a} {self._score['away']} — "
                              f"{self._score['home']} {h}")
-        self._status.setText("Game complete — result recorded. "
-                             "Open the Box Score tab for the full recap.")
+        if alert:
+            # OBS-3: the result was NOT recorded and the game was left
+            # un-watched on purpose -- say so loudly, never silently.
+            self._status.setStyleSheet(
+                "color: #ff6b6b; font-size: 13px; font-weight: bold;")
+            self._status.setText(alert)
+            self._ticker.setText("⚠️ " + alert)
+            try:
+                QMessageBox.warning(
+                    self, "Game not recorded",
+                    alert + "\n\nAdvance the day and the day sim will "
+                    "process this game normally.")
+            except Exception:
+                pass
+        else:
+            self._status.setStyleSheet("color: #8b95ab; font-size: 12px;")
+            self._status.setText("Game complete — result recorded. "
+                                 "Open the Box Score tab for the full recap.")
+        self._show_three_stars()
         self._render_box(force=True)
 
     # -- rendering ----------------------------------------------------
