@@ -118,14 +118,29 @@ class SystemsCircumstanceScreen(BaseScreen):
         or None), is_home, fake (sim stub), and key (composite), or None
         if the engine/game context is unavailable.
         """
+        import logging
+        _logger = logging.getLogger(__name__)
+
         team = user_team(self.game)
         league = league_of(self.game)
         if team is None or league is None:
             return None
         try:
             import attribute_composites as acmp
+        except Exception:
+            # Bundling/import failure here is the silent "no game data"
+            # screen -- log the traceback so a missing engine module
+            # is diagnosable (e.g. a PyInstaller bundling miss).
+            _logger.exception(
+                "Could not import attribute_composites for the "
+                "circumstance screen; rendering 'no game data'")
+            return None
+        try:
             import condition_system as cs
         except Exception:
+            _logger.exception(
+                "Could not import condition_system for the "
+                "circumstance screen; rendering 'no game data'")
             return None
 
         key = self._combo.currentData()
@@ -154,6 +169,9 @@ class SystemsCircumstanceScreen(BaseScreen):
 
     def _render_next_game(self, body, context):
         """Render the next-game note and opponent read."""
+        import logging
+        _logger = logging.getLogger(__name__)
+
         team, league, nxt = context.team, context.league, context.nxt
         is_home = context.is_home
 
@@ -180,7 +198,13 @@ class SystemsCircumstanceScreen(BaseScreen):
             import physicality as phys
             heat = float(phys.rivalry_heat_between(
                 getattr(league, "rivalries", None), h, a) or 0.0)
-        except Exception:
+        except Exception as exc:
+            # Rendering "Minimal" on a lookup failure is fine, but the
+            # failure must be visible in the logs so the screen isn't
+            # silently lying about a rivalry that should be hot.
+            _logger.warning(
+                "Rivalry heat lookup failed for %s @ %s; rivalry "
+                "shown as low-heat baseline: %s", an, hn, exc)
             heat = 0.0
         band, tone = heat_band(heat)
         opp = QFrame()
@@ -248,7 +272,17 @@ class SystemsCircumstanceScreen(BaseScreen):
                         heat = max(0.0, min(100.0, heat)) / 100.0
                         r_term = (0.6 if kind == "physical"
                                   else -0.6) * heat
-                    except Exception:
+                    except Exception as exc:
+                        # The screen claims the components are "verified to
+                        # sum to the engine's own total". A zeroed rivalry
+                        # term breaks that invariant while the total still
+                        # comes from the engine, so the failure must be
+                        # logged with enough context to diagnose it.
+                        _logger.warning(
+                            "Rivalry heat lookup failed for player %s "
+                            "(kind=%r); rivalry term zeroed, so the shown "
+                            "components may not sum to the engine total: %s",
+                            pid, kind, exc)
                         r_term = 0.0
                 rows.append({"name": player_name(p), "pos": pos_short(p),
                              "total": round(float(total), 2),
