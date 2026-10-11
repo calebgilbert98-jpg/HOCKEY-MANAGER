@@ -243,6 +243,30 @@ class AdviseCoachDialog(QDialog):
         close_row.addWidget(close_btn)
         layout.addLayout(close_row)
 
+    def _mp_send(self, action, params):
+        """Route to the MP host when this machine is a client; True = routed.
+
+        Mainline parity (morale_window.AdviceDialog._mp_send): an MP client
+        must not mutate local advice/feature state -- the host applies
+        advise_coach / unfeature_player and the next STATE_SYNC refreshes
+        this screen. mp_client None (host / single-player) or a send
+        failure falls straight through to the local engine.
+        """
+        try:
+            client = getattr(self._game, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault(
+                "team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            self._result.setText(
+                "Sent to the host \u2014 the room will react after the "
+                "next sync.")
+            return True
+        except Exception:
+            return False
+
     def _send_advice(self, advice, player_id="", unfeature=False):
         if _rs is None or self._coach is None:
             self._result.setText("No head coach on staff.")
@@ -257,6 +281,22 @@ class AdviseCoachDialog(QDialog):
                         break
                 except Exception:
                     continue
+        # MP routing first (mainline parity with
+        # morale_window.AdviceDialog._request_feature/_rescind_feature/
+        # _give_advice): on a multiplayer client the advice goes to the
+        # host -- no local mutation, the next STATE_SYNC refreshes the
+        # screen. team_id is set by _mp_send.
+        if unfeature:
+            if self._mp_send("unfeature_player",
+                             {"player_id": str(player_id)}):
+                return
+        elif advice == "feature_player":
+            if self._mp_send("advise_coach",
+                             {"advice_type": "feature_player",
+                              "target_player_id": str(player_id)}):
+                return
+        elif self._mp_send("advise_coach", {"advice_type": advice}):
+            return
         try:
             if unfeature and target is not None:
                 out = _rs.unfeature_player(self._coach, target, self._team)
@@ -1806,6 +1846,13 @@ class MoraleScreen(BaseScreen):
         _gm, team, league = self._resolve()
         if team is None or league is None or not target or _rs is None:
             return
+        # MP routing first (mainline parity with
+        # morale_window.RivalryDialog._declare): on a multiplayer client
+        # the declaration goes to the host -- no local mutation, the next
+        # STATE_SYNC refreshes the screen.
+        if self._mp_send("declare_rivalry",
+                         {"target_team": target, "target_kind": kind}):
+            return
         target_team = None
         for t in list(getattr(league, "teams", []) or []):
             try:
@@ -1834,6 +1881,13 @@ class MoraleScreen(BaseScreen):
     def _renounce_rivalry(self, kind, target):
         _gm, team, league = self._resolve()
         if team is None or league is None or _rs is None:
+            return
+        # MP routing first (mainline parity with
+        # morale_window.RivalryDialog._renounce): on a multiplayer client
+        # the renouncement goes to the host -- no local mutation, the next
+        # STATE_SYNC refreshes the screen.
+        if self._mp_send("renounce_rivalry",
+                         {"target_team": target, "target_kind": kind}):
             return
         target_team = None
         for t in list(getattr(league, "teams", []) or []):
@@ -2256,6 +2310,12 @@ class MoraleScreen(BaseScreen):
             self.refresh()
             return
         if action == "back_room":
+            # MP routing first (mainline parity with
+            # morale_window.MoraleView._do_back_room): on a multiplayer
+            # client the team event goes to the host -- no local mutation,
+            # the next STATE_SYNC refreshes the screen.
+            if self._mp_send("team_event", {"event": "gm_backing"}):
+                return
             if _me is not None:
                 try:
                     _me.gm_public_backing(league, team, "room",
@@ -2269,6 +2329,21 @@ class MoraleScreen(BaseScreen):
         if coach is None:
             self._coach_body.setText(
                 "No head coach on staff — this action needs a coach.")
+            return
+        # MP routing first (mainline parity with
+        # morale_window.MoraleView._do_bag_skate/_do_speech/_do_practice):
+        # on a multiplayer client the team event goes to the host -- no
+        # local mutation, the next STATE_SYNC refreshes the screen.
+        if action == "bag_skate":
+            if self._mp_send("team_event", {"event": "bag_skate"}):
+                return
+        elif action == "speech":
+            if self._mp_send("team_event", {"event": "inspiring_speech"}):
+                return
+        elif action == "practice":
+            if self._mp_send("team_event", {"event": "great_practice"}):
+                return
+        else:
             return
         try:
             if action == "bag_skate":
