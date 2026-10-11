@@ -363,8 +363,39 @@ class LineControlDialog(QDialog):
         close_row.addWidget(close_btn)
         layout.addLayout(close_row)
 
+    def _mp_send(self, action, params):
+        """Route to the MP host when this machine is a client; True = routed.
+
+        Mainline parity (morale_window.LineControlPopup._mp_send): an MP
+        client must not mutate local line-control state -- the host applies
+        set_line_control and the next STATE_SYNC refreshes this screen.
+        mp_client None (host / single-player) or a send failure falls
+        straight through to the local engine.
+        """
+        try:
+            client = getattr(self._game, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            params.setdefault(
+                "team_id", getattr(self._team, "team_name", ""))
+            client.send_action(action, params)
+            self._result.setText(
+                "Sent to the host \u2014 the room will react after the "
+                "next sync.")
+            return True
+        except Exception:
+            return False
+
     def _take(self, approach):
         """Apply the choice through the shared engine (mainline parity)."""
+        # MP routing first (mainline parity with
+        # morale_window.LineControlPopup._discuss/_seize): on a multiplayer
+        # client the action goes to the host -- no local mutation, the next
+        # STATE_SYNC refreshes the screen.
+        if self._mp_send("set_line_control",
+                         {"holder": "gm", "approach": approach}):
+            return
         if _rs is None or self._coach is None:
             self._result.setText("Line-control engine unavailable.")
             return
@@ -510,6 +541,28 @@ class MoraleScreen(BaseScreen):
         except Exception:
             pass
         return ctx
+
+    def _mp_send(self, action, params):
+        """Route a GM action to the multiplayer host when this is a client.
+
+        Mainline parity (morale_window.MoraleView._mp_send): returns True
+        when routed -- the caller must NOT mutate local state, the host
+        applies it and the next STATE_SYNC refreshes this screen. The host
+        is always local (mp_client is None) and keeps working exactly as
+        before; a send failure also falls through to the local path.
+        """
+        try:
+            client = getattr(self.game, "mp_client", None)
+            if client is None:
+                return False
+            params = dict(params or {})
+            team = getattr(self.game, "user_team", None)
+            params.setdefault("team_id",
+                              getattr(team, "team_name", "") if team else "")
+            client.send_action(action, params)
+            return True
+        except Exception:
+            return False
 
     def _apply_line_control(self, team, coach, roster, target,
                             approach="seize"):
@@ -2176,6 +2229,11 @@ class MoraleScreen(BaseScreen):
             if cur == "gm":
                 # Giving the pen back is always amicable (mainline parity:
                 # morale_window._open_line_control_popup skips the dialog).
+                # MP client: route to the host, no local mutation, no local
+                # refresh -- the host applies it and the next STATE_SYNC
+                # refreshes the screen (mainline parity: morale_window.py:335).
+                if self._mp_send("set_line_control", {"holder": "coach"}):
+                    return
                 outcome = self._apply_line_control(team, coach, roster, "coach")
                 if outcome and getattr(self, "_coach_body", None) is not None:
                     try:
