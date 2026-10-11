@@ -18,6 +18,7 @@ import math
 import queue
 import threading
 import time
+from collections import deque
 from datetime import date, datetime
 
 from PySide6.QtWidgets import (
@@ -958,6 +959,24 @@ class WatchScreen(BaseScreen):
         self._puck_item = None
         self._text_count = 0
         self._last_box_refresh = 0.0
+        # D-11 (mainline pbp_visual_sim parity): live game-state meters.
+        self._winprob = 0.5         # home win probability
+        self._shots = {"home": 0, "away": 0}
+        self._mom = {"home": deque(maxlen=10), "away": deque(maxlen=10)}
+        self._tension_base = {"tension": 0.0, "drivers": []}
+        self._tension_live = []     # in-game contributors: {label, points}
+        self._momentum_open = False
+        self._tension_open = False
+        self._last_strip_refresh = 0.0
+        self._fast_forward = False  # sim-to-end: drain the queue instantly
+        self._suppress_beats = False
+        self._home_name = ""
+        self._away_name = ""
+        # D-11: in-game tactics whiteboard state (mainline parity).
+        self._tac_pending = {}      # cat -> system key (coach-control mode)
+        self._tac_response_text = ""
+        self._tac_built = False
+        self._card_dialog = None    # player-card popup (InGamePopup port)
         super().__init__(game, main_window, parent)
 
         self._pump_timer = QTimer(self)
@@ -981,6 +1000,65 @@ class WatchScreen(BaseScreen):
         self._scorebug.setAlignment(Qt.AlignCenter)
         self._layout.addWidget(self._scorebug)
 
+        # D-11 (mainline pbp_visual_sim parity): live game-state strips --
+        # win-probability meter, momentum bar, tension meter, matchup
+        # (shadowing) indicator.
+        strip = QHBoxLayout()
+        strip.setSpacing(12)
+        self._winprob_bar = QProgressBar()
+        self._winprob_bar.setRange(0, 100)
+        self._winprob_bar.setValue(50)
+        self._winprob_bar.setTextVisible(False)
+        self._winprob_bar.setFixedWidth(110)
+        self._winprob_bar.setFixedHeight(10)
+        self._winprob_bar.setToolTip("Home win probability (score lead + "
+                                     "shot tilt, time-weighted)")
+        strip.addWidget(QLabel("Win prob:"))
+        strip.addWidget(self._winprob_bar)
+        self._winprob_label = QLabel("50%")
+        self._winprob_label.setStyleSheet("font-weight: bold;")
+        strip.addWidget(self._winprob_label)
+        strip.addSpacing(8)
+        self._mom_bar = QProgressBar()
+        self._mom_bar.setRange(0, 100)
+        self._mom_bar.setValue(50)
+        self._mom_bar.setTextVisible(False)
+        self._mom_bar.setFixedWidth(110)
+        self._mom_bar.setFixedHeight(10)
+        self._mom_bar.setToolTip("Momentum: recent shots, goals, fights "
+                                 "(click for drivers)")
+        strip.addWidget(QLabel("Momentum:"))
+        strip.addWidget(self._mom_bar)
+        self._momentum_label = _ClickLabel("Even")
+        self._momentum_label.setToolTip("Click for momentum drivers")
+        self._momentum_label.on_click = self._toggle_momentum_panel
+        strip.addWidget(self._momentum_label)
+        strip.addSpacing(8)
+        self._tension_label = _ClickLabel("🟢 CALM 0.0")
+        self._tension_label.setToolTip("Game intensity (click for drivers)")
+        self._tension_label.on_click = self._toggle_tension_panel
+        strip.addWidget(QLabel("Tension:"))
+        strip.addWidget(self._tension_label)
+        strip.addSpacing(8)
+        self._matchup_label = QLabel("Matchup: –")
+        self._matchup_label.setToolTip("Live line matchup / shadowing")
+        strip.addWidget(self._matchup_label)
+        strip.addStretch()
+        self._layout.addLayout(strip)
+        # Collapsible driver panels (mainline momentum/tension panels).
+        self._momentum_panel = QLabel("")
+        self._momentum_panel.setWordWrap(True)
+        self._momentum_panel.setStyleSheet(
+            "color: #aeb6c8; font-size: 12px; padding: 2px 4px;")
+        self._momentum_panel.hide()
+        self._layout.addWidget(self._momentum_panel)
+        self._tension_panel = QLabel("")
+        self._tension_panel.setWordWrap(True)
+        self._tension_panel.setStyleSheet(
+            "color: #aeb6c8; font-size: 12px; padding: 2px 4px;")
+        self._tension_panel.hide()
+        self._layout.addWidget(self._tension_panel)
+
         # Controls
         ctrl = QHBoxLayout()
         ctrl.setSpacing(8)
@@ -995,6 +1073,15 @@ class WatchScreen(BaseScreen):
         self._btn_pause.setEnabled(False)
         self._btn_pause.clicked.connect(self._toggle_pause)
         ctrl.addWidget(self._btn_pause)
+
+        # D-11: sim-to-end (mainline PBPVisualSim._sim_to_end parity).
+        self._btn_simend = QPushButton("⏩ Sim to End")
+        self._btn_simend.setCursor(Qt.PointingHandCursor)
+        self._btn_simend.setEnabled(False)
+        self._btn_simend.setToolTip("Skip ahead: consume the rest of the "
+                                    "game instantly")
+        self._btn_simend.clicked.connect(self._sim_to_end)
+        ctrl.addWidget(self._btn_simend)
 
         ctrl.addWidget(QLabel("Speed:"))
         self._speed_box = QComboBox()
@@ -1116,6 +1203,18 @@ class WatchScreen(BaseScreen):
         self._tabs.addTab(box_scroll, "📊 Box Score")
         self._box_tab_index = self._tabs.count() - 1
 
+        # D-11: in-game tactics whiteboard (mainline PBPVisualSim parity).
+        tac_scroll = QScrollArea()
+        tac_scroll.setWidgetResizable(True)
+        tac_scroll.setFrameShape(QFrame.NoFrame)
+        tac_inner = QWidget()
+        self._tac_layout = QVBoxLayout(tac_inner)
+        self._tac_layout.setAlignment(Qt.AlignTop)
+        self._tac_layout.setSpacing(4)
+        tac_scroll.setWidget(tac_inner)
+        self._tabs.addTab(tac_scroll, "♟ Tactics")
+        self._tac_tab_index = self._tabs.count() - 1
+
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
     # -- lifecycle ----------------------------------------------------
@@ -1141,14 +1240,39 @@ class WatchScreen(BaseScreen):
             self._watching = True
             self._finished = False
             self._paused = False
+            self._fast_forward = False
             self._skate = None
             self._text_count = 0
             self._text_feed.clear()
+            # D-11: reset live meters for the new game.
+            self._winprob = 0.5
+            self._shots = {"home": 0, "away": 0}
+            self._mom = {"home": deque(maxlen=10), "away": deque(maxlen=10)}
+            self._tension_live = []
+            self._tac_pending = {}
+            self._tac_response_text = ""
+            self._momentum_open = False
+            self._tension_open = False
+            self._momentum_panel.hide()
+            self._tension_panel.hide()
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
+            self._btn_simend.setEnabled(True)
             self._btn_pause.setText("⏸ Pause")
+            self._btn_simend.setText("⏩ Sim to End")
             self._status.setText("Live sim running in the background — "
                                  "Space pauses, C toggles the camera.")
+            # D-11: pre-game tension drivers (mainline parity).
+            try:
+                with _watch_lock:
+                    home, away = _watch["home"], _watch["away"]
+                    self._home_name = _watch["home_name"]
+                    self._away_name = _watch["away_name"]
+                gm = _resolve_gm(self.game)
+                self._tension_base = _tension_breakdown(home, away, gm)
+            except Exception:
+                self._tension_base = {"tension": 0.0, "drivers": []}
+            self._refresh_strips(force=True)
         if not self._pump_timer.isActive():
             self._pump_timer.start()
 
@@ -1260,6 +1384,176 @@ class WatchScreen(BaseScreen):
         except Exception:
             pass
 
+    # -- D-11 live meters (mainline pbp_visual_sim parity) -------------
+
+    def _push_momentum(self, side, weight):
+        """Recent-events momentum deque (mainline _push_momentum)."""
+        if side in self._mom:
+            self._mom[side].append(weight)
+
+    def _tension_add(self, label, points):
+        """Log an in-game moment as a live intensity contributor."""
+        try:
+            self._tension_live.append({"label": label,
+                                       "points": round(float(points), 1)})
+            if len(self._tension_live) > 12:
+                self._tension_live.pop(0)
+        except Exception:
+            pass
+
+    def _tension_value(self):
+        """Current 0-100 intensity: pre-game drivers + live moments."""
+        try:
+            v = float((self._tension_base or {}).get("tension", 0.0))
+            v += sum(float(d.get("points", 0)) for d in self._tension_live)
+            return max(0.0, min(100.0, round(v, 1)))
+        except Exception:
+            return 0.0
+
+    def _update_winprob(self):
+        try:
+            self._winprob = _calc_winprob(
+                self._score["home"], self._score["away"],
+                self._period, self._clock,
+                self._shots["home"], self._shots["away"])
+        except Exception:
+            pass
+
+    def _refresh_strips(self, force=False):
+        """Repaint win-prob / momentum / tension / matchup strips."""
+        try:
+            now = time.monotonic()
+            if not force and now - self._last_strip_refresh < 1.0:
+                return
+            self._last_strip_refresh = now
+            with _watch_lock:
+                home_name = _watch["home_name"]
+                away_name = _watch["away_name"]
+                habbr = _watch["home_abbr"] or "HOM"
+                aabbr = _watch["away_abbr"] or "AWY"
+                sim = _watch["sim"]
+            # Win probability (home perspective).
+            self._update_winprob()
+            p = self._winprob
+            self._winprob_bar.setValue(int(round(p * 100)))
+            self._winprob_label.setText(f"{habbr} {int(round(p * 100))}%")
+            # Momentum.
+            r = _momentum_reading(sim, self._mom, home_name, away_name)
+            frac = max(-1.0, min(1.0, float(r.get("score", 0.0)) / 100.0))
+            self._mom_bar.setValue(int(round(50 + frac * 50)))
+            lbl = r.get("label", "")
+            drv = (r.get("drivers") or [""])[0]
+            self._momentum_label.setText((lbl + (f" — {drv}" if drv else ""))
+                                         or "Even")
+            if self._momentum_open:
+                self._render_momentum_panel()
+            # Tension.
+            v = self._tension_value()
+            col = _tension_color(v)
+            self._tension_label.setText(
+                f'<span style="color:{col}">●</span> '
+                f"{_tension_mood(v)} {v:.1f}")
+            if self._tension_open:
+                self._render_tension_panel()
+            # Matchup / shadowing indicator (throttled ~5s).
+            if force or now - self._matchup_tick > 5.0:
+                self._matchup_tick = now
+                self._refresh_matchup()
+        except Exception as e:
+            print(f"[watch] strips failed: {e}")
+
+    def _render_momentum_panel(self):
+        """Drivers + AI risk appetite (mainline _render_momentum_panel)."""
+        try:
+            with _watch_lock:
+                home_name = _watch["home_name"]
+                away_name = _watch["away_name"]
+                habbr = _watch["home_abbr"] or "HOM"
+                aabbr = _watch["away_abbr"] or "AWY"
+                sim = _watch["sim"]
+            r = _momentum_reading(sim, self._mom, home_name, away_name)
+            lines = []
+            for d in (r.get("drivers") or [])[:6]:
+                lines.append(f"• {d}")
+            if not (r.get("drivers") or []):
+                lines.append("No momentum drivers yet — play some hockey.")
+            try:
+                lines.append(
+                    f"AI risk appetite — {habbr} "
+                    f"{r.get('risk_home', 1.0):.2f} / {aabbr} "
+                    f"{r.get('risk_away', 1.0):.2f} "
+                    f"(moves goalie-pull timing, never conversion)")
+            except Exception:
+                pass
+            self._momentum_panel.setText("<br>".join(lines))
+        except Exception:
+            pass
+
+    def _toggle_momentum_panel(self):
+        self._momentum_open = not self._momentum_open
+        if self._momentum_open:
+            self._render_momentum_panel()
+            self._momentum_panel.show()
+        else:
+            self._momentum_panel.hide()
+
+    def _render_tension_panel(self):
+        """Intensity drivers, hottest first (mainline parity)."""
+        try:
+            drivers = (list((self._tension_base or {}).get("drivers", []))
+                       + list(self._tension_live))
+            drivers.sort(key=lambda d: -abs(float(d.get("points", 0) or 0)))
+            if not drivers:
+                self._tension_panel.setText("No intensity data for this game.")
+                return
+            rows = []
+            for d in drivers[:14]:
+                pts = float(d.get("points", 0) or 0)
+                col = "#ff9f5c" if pts > 0 else "#7bc96f"
+                sign = "+" if pts > 0 else ""
+                rows.append(
+                    f'<span style="color:{col}"><b>{sign}{pts:g}</b></span> '
+                    f"{d.get('label', '')}")
+            self._tension_panel.setText("<br>".join(rows))
+        except Exception:
+            pass
+
+    def _toggle_tension_panel(self):
+        self._tension_open = not self._tension_open
+        if self._tension_open:
+            self._render_tension_panel()
+            self._tension_panel.show()
+        else:
+            self._tension_panel.hide()
+
+    def _refresh_matchup(self):
+        """Live shadow/matchup readout (mainline _update_matchup_readout)."""
+        try:
+            with _watch_lock:
+                sim = _watch["sim"]
+            cm = None
+            try:
+                from matchups import current_matchup
+                if sim is not None:
+                    cm = current_matchup(sim)
+            except Exception:
+                pass
+            if cm:
+                txt = (f"L{cm['home_line']} vs L{cm['away_line']} · "
+                       f"{cm['edge']}")
+            else:
+                txt = "Matchup: –"
+            self._matchup_label.setText(txt)
+            edge = (cm or {}).get("edge", "")
+            if edge in ("strong edge", "edge"):
+                self._matchup_label.setStyleSheet("color: #7bc96f;")
+            elif edge in ("outmatched", "strongly outmatched"):
+                self._matchup_label.setStyleSheet("color: #ff9f5c;")
+            else:
+                self._matchup_label.setStyleSheet("")
+        except Exception:
+            pass
+
     def _apply_camera(self):
         try:
             if self._follow_player_pid and self._follow_player_pid in self._dots:
@@ -1289,6 +1583,8 @@ class WatchScreen(BaseScreen):
                     Qt.KeepAspectRatio)
             elif "Box" in name:
                 self._render_box(force=True)
+            elif "Tactics" in name:
+                self._refresh_tactics_tab()
         except Exception:
             pass
 
@@ -1298,11 +1594,28 @@ class WatchScreen(BaseScreen):
 
     # -- pump: drain the sim queue on the GUI thread ------------------
 
+    def _sim_to_end(self):
+        """Sim-to-end: consume the rest of the game instantly.
+
+        Mainline PBPVisualSim._sim_to_end parity: wait for the sim, then
+        consume everything with no pacing/beats until the game ends.
+        """
+        if not self._watching or self._finished:
+            return
+        self._paused = False
+        self._fast_forward = True
+        self._suppress_beats = True
+        self._btn_simend.setEnabled(False)
+        self._btn_simend.setText("⏩ Fast-forwarding…")
+        self._status.setText("Fast-forwarding to the final whistle…")
+        if not self._pump_timer.isActive():
+            self._pump_timer.start()
+
     def _pump(self):
         if self._paused:
             return
         now = time.monotonic()
-        if now < self._hold_until:
+        if now < self._hold_until and not self._fast_forward:
             return  # big-moment beat: hold the frame
         with _watch_lock:
             q = _watch["queue"]
@@ -1310,7 +1623,8 @@ class WatchScreen(BaseScreen):
         if q is None:
             self._pump_timer.stop()
             return
-        burst = max(1, int(40 * self._speed))
+        # Sim-to-end: drain in big chunks (GUI stays alive); no beats.
+        burst = 100000 if self._fast_forward else max(1, int(40 * self._speed))
         latest = None
         try:
             for _ in range(burst):
@@ -1334,6 +1648,8 @@ class WatchScreen(BaseScreen):
             self._render_skate(latest)
             self._apply_camera()
         self._render_scorebug()
+        # D-11: live meters (throttled inside).
+        self._refresh_strips()
         # Refresh the stats overlay if visible.
         if self._btn_stats.isChecked():
             self._update_stats_overlay()
@@ -1353,15 +1669,52 @@ class WatchScreen(BaseScreen):
             self._period = ev.get("period", 3)
             self._clock = 0
             return
+        # D-11: live meters (mainline pbp_visual_sim parity).
+        try:
+            hn, an = self._home_name, self._away_name
+            if et in ("shot", "missed_shot", "blocked_shot"):
+                side = _side_of(ev.get("attacking_team"), hn, an)
+                if side:
+                    self._shots[side] += 1
+                    self._push_momentum(side, 1)
+            elif et == "goal":
+                side = _side_of(ev.get("scoring_team"), hn, an)
+                if side:
+                    self._shots[side] += 1
+                    self._push_momentum(side, 3)
+            elif et == "fight":
+                side = _side_of(ev.get("winner_team") or ev.get("team_a"),
+                                hn, an)
+                if side:
+                    self._push_momentum(side, 2)
+                a = _player_name(ev.get("player_a") or ev.get("hitting_player"))
+                b = _player_name(ev.get("player_b") or ev.get("target_player"))
+                self._tension_add(f"Fight: {a} vs {b}", 6.0)
+            elif et == "hit" and ev.get("result") == "turnover_caused":
+                self._tension_add(
+                    f"Big hit: {_player_name(ev.get('hitting_player'))} on "
+                    f"{_player_name(ev.get('target_player'))}", 3.0)
+            elif et == "penalty":
+                try:
+                    mins = int(ev.get("minutes", 0) or 0)
+                except Exception:
+                    mins = 0
+                if mins >= 5:
+                    self._tension_add(
+                        f"Major penalty: {_player_name(ev.get('player'))}",
+                        4.0)
+        except Exception:
+            pass
         text, big = _event_text(ev)
         if et in _HIGHLIGHT_TYPES or big:
             self._ticker.setText(text.replace("<b>", "")
                                      .replace("</b>", "")
                                      .replace("🚨 ", "").replace("🥊 ", "")
                                      .replace("⭐ ", ""))
-            # Big-moment beat (web _PACE parity).
-            hold = _PACE.get(et, 0.35) / max(0.25, self._speed)
-            self._hold_until = time.monotonic() + hold
+            # Big-moment beat (web _PACE parity) -- skipped in sim-to-end.
+            if not self._suppress_beats:
+                hold = _PACE.get(et, 0.35) / max(0.25, self._speed)
+                self._hold_until = time.monotonic() + hold
         # Text feed (skip raw skate noise).
         bar = self._text_feed.verticalScrollBar()
         near_bottom = (bar.value() >= bar.maximum() - 60)
