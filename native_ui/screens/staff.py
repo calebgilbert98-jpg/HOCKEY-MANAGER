@@ -16,25 +16,19 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
 # ----------------------------------------------------------------------
 # Helpers (web_ui/screens/staff.py + staff_detail.py parity)
 # ----------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _staff_name(s):
-    name = _safe(lambda: getattr(s, "full_name", None), None)
+    name = safe_call(lambda: getattr(s, "full_name", None), None, context="staff full_name")
     if name:
         return name
-    fn = _safe(lambda: getattr(s, "first_name", ""), "") or ""
-    ln = _safe(lambda: getattr(s, "last_name", ""), "") or ""
+    fn = safe_call(lambda: getattr(s, "first_name", ""), "", context="staff first_name") or ""
+    ln = safe_call(lambda: getattr(s, "last_name", ""), "", context="staff last_name") or ""
     return f"{fn} {ln}".strip() or "?"
 
 
@@ -43,13 +37,13 @@ def _staff_role_value(s):
     role = getattr(s, "role", None)
     if role is None:
         return "Staff"
-    return _safe(lambda: getattr(role, "value", None) or str(role), "Staff")
+    return safe_call(lambda: getattr(role, "value", None) or str(role), "Staff", context="staff role value")
 
 
 def _staff_role_name(s):
     """Enum name of the role, e.g. 'HEAD_COACH'."""
-    return str(_safe(lambda: getattr(getattr(s, "role", None), "name", ""),
-                     "") or "")
+    return str(safe_call(lambda: getattr(getattr(s, "role", None), "name", ""),
+                     "", context="staff role name") or "")
 
 
 def _fmt_salary(sal):
@@ -187,11 +181,11 @@ class StaffScreen(BaseScreen):
                 getattr(game, "user_team", None)
             if team is None:
                 return
-            self._team_name = _safe(
-                lambda: getattr(team, "team_name", ""), "") or ""
+            self._team_name = safe_call(
+                lambda: getattr(team, "team_name", ""), "", context="load team_name") or ""
             self._staff = [s for s in
-                           _safe(lambda: list(getattr(team, "staff", []) or []),
-                                 [])]
+                           safe_call(lambda: list(getattr(team, "staff", []) or []),
+                                 [], context="load team staff list")]
         except Exception as e:
             print(f"[staff] load failed: {e}")
 
@@ -256,7 +250,7 @@ class StaffScreen(BaseScreen):
 
         for role, members in groups.items():
             members.sort(key=lambda m: int(
-                _safe(lambda: getattr(m, "overall_rating", 0), 0) or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="list sort overall_rating") or 0),
                          reverse=True)
             header = QLabel(
                 f"{role.upper()}  ({len(members)})")
@@ -277,7 +271,7 @@ class StaffScreen(BaseScreen):
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
 
-        rating = int(_safe(lambda: getattr(s, "overall_rating", 0), 0) or 0)
+        rating = int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="card overall_rating") or 0)
         color = _rating_color(rating)
 
         # Header: rating badge + name/sub
@@ -300,8 +294,8 @@ class StaffScreen(BaseScreen):
         name_lbl.mousePressEvent = \
             lambda e, staff=s: self._open_staff_detail(staff)
         name_col.addWidget(name_lbl)
-        age = _safe(lambda: getattr(s, "age", 0), 0) or 0
-        nat = _safe(lambda: getattr(s, "nationality", ""), "") or ""
+        age = safe_call(lambda: getattr(s, "age", 0), 0, context="card age") or 0
+        nat = safe_call(lambda: getattr(s, "nationality", ""), "", context="card nationality") or ""
         sub = " · ".join(x for x in
                          ([f"Age {age}"] if age else []) + ([nat] if nat
                                                            else []))
@@ -325,9 +319,9 @@ class StaffScreen(BaseScreen):
         v.addWidget(bar)
 
         # Meta
-        morale = _safe(lambda: getattr(s, "morale", "—"), "—")
-        exp = _safe(lambda: getattr(s, "experience", "—"), "—")
-        sal = _fmt_salary(_safe(lambda: getattr(s, "salary", 0), 0))
+        morale = safe_call(lambda: getattr(s, "morale", "—"), "—", context="card morale")
+        exp = safe_call(lambda: getattr(s, "experience", "—"), "—", context="card experience")
+        sal = _fmt_salary(safe_call(lambda: getattr(s, "salary", 0), 0, context="card salary"))
         meta = QLabel(
             f"<span style='color:#8b95ab'>Morale</span> <b>{morale}</b>"
             f" &nbsp; <span style='color:#8b95ab'>Exp</span> <b>{exp}y</b>"
@@ -364,7 +358,7 @@ class StaffScreen(BaseScreen):
             cats.setdefault(_staff_cat(s), []).append(s)
         for members in cats.values():
             members.sort(key=lambda m: int(
-                _safe(lambda: getattr(m, "overall_rating", 0), 0) or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="org/report sort overall_rating") or 0),
                 reverse=True)
 
         def has_role(s, *names):
@@ -374,8 +368,8 @@ class StaffScreen(BaseScreen):
             """Vacant chairs first, then NHL-assigned, then AHL/farm staff."""
             return sorted(
                 members,
-                key=lambda m: 0 if str(_safe(
-                    lambda: getattr(m, "assignment", ""), "") or ""
+                key=lambda m: 0 if str(safe_call(
+                    lambda: getattr(m, "assignment", ""), "", context="org assignment sort") or ""
                 ).lower() != "ahl" else 1)
 
         tree = []
@@ -418,8 +412,8 @@ class StaffScreen(BaseScreen):
         name_lbl.mousePressEvent = \
             lambda e, staff=s: self._open_staff_detail(staff)
         box.addWidget(name_lbl)
-        rating = _safe(lambda: getattr(s, "overall_rating", 0), 0) or 0
-        sal = int(_safe(lambda: getattr(s, "salary", 0), 0) or 0)
+        rating = safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="org person overall_rating") or 0
+        sal = int(safe_call(lambda: getattr(s, "salary", 0), 0, context="org person salary") or 0)
         money = f" · {_fmt_salary(sal)}" if sal else ""
         dim = QLabel(
             f"{_staff_role_value(s)} · {rating} OVR{money}")
@@ -483,11 +477,11 @@ class StaffScreen(BaseScreen):
 
         staff = self._staff
         total = len(staff)
-        exp = sum(int(_safe(lambda: getattr(s, "experience", 0), 0) or 0)
+        exp = sum(int(safe_call(lambda: getattr(s, "experience", 0), 0, context="report total experience") or 0)
                   for s in staff)
-        rat = sum(int(_safe(lambda: getattr(s, "overall_rating", 0), 0) or 0)
+        rat = sum(int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="report total rating") or 0)
                   for s in staff)
-        tot_sal = sum(int(_safe(lambda: getattr(s, "salary", 0), 0) or 0)
+        tot_sal = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context="report total salary") or 0)
                       for s in staff)
         avg_exp = round(exp / total, 1) if total else 0
         avg_rat = round(rat / total, 1) if total else 0
@@ -518,12 +512,12 @@ class StaffScreen(BaseScreen):
             if not members:
                 continue
             members.sort(key=lambda m: int(
-                _safe(lambda: getattr(m, "overall_rating", 0), 0) or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="org/report sort overall_rating") or 0),
                 reverse=True)
-            sal_sum = sum(int(_safe(lambda: getattr(s, "salary", 0), 0) or 0)
+            sal_sum = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context="report dept salary sum") or 0)
                           for s in members)
-            rat_sum = sum(int(_safe(lambda: getattr(s, "overall_rating", 0),
-                                    0) or 0) for s in members)
+            rat_sum = sum(int(safe_call(lambda: getattr(s, "overall_rating", 0),
+                                    0, context="report dept rating sum") or 0) for s in members)
             avg = round(rat_sum / len(members), 1) if members else 0
             header = QLabel(
                 f"{cat.upper()} DEPARTMENT  ({len(members)})"
@@ -531,8 +525,8 @@ class StaffScreen(BaseScreen):
             header.setObjectName("section-header")
             lay.addWidget(header)
             for s in members:
-                years = int(_safe(lambda: getattr(s, "contract_years", 0),
-                                  0) or 0)
+                years = int(safe_call(lambda: getattr(s, "contract_years", 0),
+                                  0, context="report row contract_years") or 0)
                 row = QWidget()
                 rl = QHBoxLayout(row)
                 rl.setContentsMargins(0, 2, 0, 2)
@@ -545,25 +539,25 @@ class StaffScreen(BaseScreen):
                 rl.addWidget(nm)
                 detail = QLabel(
                     f"{_staff_role_value(s)} · "
-                    f"{_safe(lambda: getattr(s, 'overall_rating', '?'), '?')} "
+                    f"{safe_call(lambda: getattr(s, 'overall_rating', '?'), '?', context="report row overall_rating")} "
                     f"OVR · "
-                    f"{_safe(lambda: getattr(s, 'experience', '?'), '?')}y · "
-                    f"{_fmt_money(_safe(lambda: getattr(s, 'salary', 0), 0))} "
+                    f"{safe_call(lambda: getattr(s, 'experience', '?'), '?', context="report row experience")}y · "
+                    f"{_fmt_money(safe_call(lambda: getattr(s, 'salary', 0), 0, context="report row salary"))} "
                     f"· {years}y left · {_staff_status(s)}")
                 detail.setStyleSheet("color: #8b95ab; font-size: 12px;")
                 rl.addWidget(detail, 1)
                 lay.addWidget(row)
 
         expiring = [s for s in staff
-                    if int(_safe(lambda: getattr(s, "contract_years", 99),
-                                 99) or 99) <= 1]
+                    if int(safe_call(lambda: getattr(s, "contract_years", 99),
+                                 99, context="report expiring filter") or 99) <= 1]
         if expiring:
             header = QLabel("CONTRACT EXPIRATIONS")
             header.setObjectName("section-header")
             lay.addWidget(header)
             for s in expiring:
-                years = int(_safe(lambda: getattr(s, "contract_years", 0),
-                                  0) or 0)
+                years = int(safe_call(lambda: getattr(s, "contract_years", 0),
+                                  0, context="report row contract_years") or 0)
                 row = QLabel(
                     f"• <b>{_staff_name(s)}</b> "
                     f"<span style='color:#8b95ab'>{_staff_role_value(s)} — "
@@ -663,7 +657,7 @@ class StaffScreen(BaseScreen):
             if team is None:
                 return False, "No team loaded."
             # Unique-role guard (GM / Head Coach)
-            if _safe(lambda: _Staff.is_unique_role(new_role), False):
+            if safe_call(lambda: _Staff.is_unique_role(new_role), False, context="reassign unique-role check"):
                 conflict = [s for s in
                             list(getattr(team, "staff", []) or [])
                             if s is not staff
@@ -780,10 +774,10 @@ class StaffScreen(BaseScreen):
                 terms = aco.assistant_development_deltas(p, team) or []
             except Exception:
                 continue
-            pname = _safe(
-                lambda: getattr(p, "full_name", None), None) or \
-                f"{_safe(lambda: getattr(p, 'first_name', ''), '')} " \
-                f"{_safe(lambda: getattr(p, 'last_name', ''), '')}".strip() \
+            pname = safe_call(
+                lambda: getattr(p, "full_name", None), None, context="assistant player full_name") or \
+                f"{safe_call(lambda: getattr(p, 'first_name', ''), '', context="assistant player first_name")} " \
+                f"{safe_call(lambda: getattr(p, 'last_name', ''), '', context="assistant player last_name")}".strip() \
                 or "?"
             for label, pts in terms:
                 # Labels are "<Spec> assistant: <Name>" or
