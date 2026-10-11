@@ -20,17 +20,13 @@ from PySide6.QtGui import QColor
 # Game-data helpers (ported from web_ui/screens/schedule.py, Flask removed)
 # ----------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _team_name(t):
     if isinstance(t, str):
         return t
-    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+    return safe_call(lambda: getattr(t, "team_name", str(t)), "?", context="boxscore/get_team_name") or "?"
 
 
 def _abbr(name):
@@ -83,7 +79,7 @@ def _results_by_date(game):
     except Exception:
         pass
     by_date = {}
-    results = _safe(lambda: list(getattr(game, "game_results", None) or []), []) or []
+    results = safe_call(lambda: list(getattr(game, "game_results", None) or []), [], context="boxscore/load_game_results") or []
     for r in results:
         try:
             k = _date_key(r.get("date"))
@@ -128,23 +124,23 @@ def _find_game_result(game, date_iso, home_name, away_name=None):
 
 
 def _pos_short(player):
-    pos = _safe(lambda: getattr(player, "primary_position", None))
-    val = _safe(lambda: getattr(pos, "value", None)) or \
-        _safe(lambda: getattr(pos, "name", ""), "") or ""
+    pos = safe_call(lambda: getattr(player, "primary_position", None), context="boxscore/get_primary_position")
+    val = safe_call(lambda: getattr(pos, "value", None), context="boxscore/get_pos_value") or \
+        safe_call(lambda: getattr(pos, "name", ""), "", context="boxscore/get_pos_name") or ""
     return str(val)
 
 
 def _is_goalie(player):
     def _pos_name():
         return getattr(getattr(player, "primary_position", None), "name", "")
-    name = str(_safe(_pos_name, "") or "").upper()
+    name = str(safe_call(_pos_name, "", context="boxscore/get_pos_name") or "").upper()
     return "GOALIE" in name
 
 
 def _roster_lookup(r):
     by_id = {}
     for team in (r.get("home_team"), r.get("away_team")):
-        for p in _safe(lambda: list(getattr(team, "roster", None) or []), []) or []:
+        for p in safe_call(lambda: list(getattr(team, "roster", None) or []), [], context="boxscore/load_roster") or []:
             try:
                 pid = getattr(p, "id", None)
                 if pid is not None and pid not in by_id:
@@ -175,13 +171,13 @@ def _period_label(period):
 
 
 def _player_name(by_id, pid):
-    return _safe(lambda: getattr(by_id.get(pid), "full_name", "Unknown"),
-                 "Unknown")
+    return safe_call(lambda: getattr(by_id.get(pid), "full_name", "Unknown"), "Unknown",
+                 context="boxscore/get_player_name")
 
 
 def _scoring_summary(r, by_id, home_name, away_name):
     """Goals grouped by period with running score."""
-    events = _safe(lambda: list(r.get("event_log") or []), []) or []
+    events = safe_call(lambda: list(r.get("event_log") or []), [], context="boxscore/load_event_log") or []
     goals = [e for e in events
              if isinstance(e, dict) and e.get("type") == "GOAL_ADVANCED"]
 
@@ -192,7 +188,7 @@ def _scoring_summary(r, by_id, home_name, away_name):
     goals.sort(key=_key)
     if not goals:
         # Fallback for quick-simmed games: notable Goal events.
-        for ne in _safe(lambda: list(r.get("notable_events") or []), []) or []:
+        for ne in safe_call(lambda: list(r.get("notable_events") or []), [], context="boxscore/load_notable_events") or []:
             try:
                 if isinstance(ne, dict) and ne.get("event") == "Goal":
                     goals.append({"_ne": True, "details": {
@@ -214,7 +210,7 @@ def _scoring_summary(r, by_id, home_name, away_name):
             period = d.get("period", 1)
             scorer_id = d.get("scorer_id")
             sp = by_id.get(scorer_id)
-            scorer_team = _safe(lambda: getattr(sp, "team_name", ""), "") or ""
+            scorer_team = safe_call(lambda: getattr(sp, "team_name", ""), "", context="boxscore/get_team_name") or ""
             if scorer_team == home_name:
                 home_running += 1
             elif scorer_team == away_name:
@@ -246,7 +242,7 @@ def _box_player_stats(r, by_id, home_name, away_name):
     # per-goalie GA still record the beaten goalie).
     ga_by_goalie = {}
     try:
-        events = _safe(lambda: list(r.get("event_log") or []), []) or []
+        events = safe_call(lambda: list(r.get("event_log") or []), [], context="boxscore/load_event_log") or []
         for e in events:
             if isinstance(e, dict) and e.get("type") == "GOAL_ADVANCED":
                 gid = (e.get("details", {}) or {}).get("goaltender_id")
@@ -265,7 +261,7 @@ def _box_player_stats(r, by_id, home_name, away_name):
                 p = gs.get("player") or by_id.get(pid)
                 if p is None:
                     continue
-                if _safe(lambda: getattr(p, "team_name", ""), "") != team_name:
+                if safe_call(lambda: getattr(p, "team_name", ""), "", context="boxscore/get_team_name") != team_name:
                     continue
                 if _is_goalie(p):
                     sa = int(gs.get("shots_against", 0) or 0)
@@ -320,22 +316,24 @@ def _box_team_stats(r, by_id, home_name, away_name):
     # Fallbacks from the event log when team_stats are missing.
     shots_a = shots_h = saves_a = saves_h = 0
     if not a_ts and not h_ts:
-        for e in _safe(lambda: list(r.get("event_log") or []), []) or []:
+        for e in safe_call(lambda: list(r.get("event_log") or []), [], context="boxscore/load_event_log") or []:
             try:
                 if not isinstance(e, dict):
                     continue
                 d = e.get("details", {}) or {}
                 if e.get("type") == "GOAL_ADVANCED":
                     p = by_id.get(d.get("scorer_id"))
-                    if p is not None and _safe(lambda: getattr(
-                            p, "team_name", ""), "") == home_name:
+                    if p is not None and safe_call(lambda: getattr(
+                            p, "team_name", ""), "",
+                            context="boxscore/get_team_name") == home_name:
                         shots_h += 1
                     else:
                         shots_a += 1
                 elif e.get("type") == "SAVE_ADVANCED":
                     p = by_id.get(d.get("goaltender_id"))
-                    if p is not None and _safe(lambda: getattr(
-                            p, "team_name", ""), "") == home_name:
+                    if p is not None and safe_call(lambda: getattr(
+                            p, "team_name", ""), "",
+                            context="boxscore/get_team_name") == home_name:
                         saves_h += 1
                         shots_a += 1
                     else:
