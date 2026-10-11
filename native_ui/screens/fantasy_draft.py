@@ -36,33 +36,28 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="fantasy_draft/_resolve_gm") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="fantasy_draft/_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="fantasy_draft/_user_team"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="fantasy_draft/_user_league")
+            or safe_call(lambda: getattr(game, "league", None), context="fantasy_draft/_user_league"))
 
 
 def _player_ovr(p):
@@ -101,8 +96,8 @@ def _same_team(a, b):
         return False
     if a is b:
         return True
-    na = _safe(lambda: getattr(a, "team_name", None))
-    nb = _safe(lambda: getattr(b, "team_name", None))
+    na = safe_call(lambda: getattr(a, "team_name", None), context="fantasy_draft/_same_team")
+    nb = safe_call(lambda: getattr(b, "team_name", None), context="fantasy_draft/_same_team")
     return na is not None and na == nb
 
 
@@ -133,13 +128,13 @@ def _get_manager(game, create=False):
     if _fd is None:
         return None, "fantasy_draft module unavailable"
     gm = _resolve_gm(game)
-    league = _safe(lambda: gm.league) if gm is not None else None
+    league = safe_call(lambda: gm.league, context="fantasy_draft/_get_manager") if gm is not None else None
     if league is None:
         return None, "no league loaded"
     mgr = _fd.get_fantasy_draft_manager(gm)
     if mgr is not None and _fd.fantasy_session_valid(mgr, league):
         try:
-            mgr.user_team = _safe(lambda: gm.user_team)
+            mgr.user_team = safe_call(lambda: gm.user_team, context="fantasy_draft/_get_manager")
         except Exception:
             pass
         return mgr, ""
@@ -149,8 +144,8 @@ def _get_manager(game, create=False):
                       "rosters are untouched.")
     if not create:
         return None, "no live draft session"
-    pending = bool(_safe(lambda: getattr(gm, "pending_fantasy_draft",
-                                        False), False))
+    pending = bool(safe_call(lambda: getattr(gm, "pending_fantasy_draft",
+                                        False), False, context="fantasy_draft/_get_manager"))
     if not pending:
         return None, ("No fantasy draft is pending. No new draft was "
                       "started -- your rosters are untouched.")
@@ -162,14 +157,14 @@ def _get_manager(game, create=False):
     except Exception as e:
         print(f"Pre-draft checkpoint failed (non-fatal): {e}")
     nhl_teams = [t for t in
-                 (_safe(lambda: list(getattr(league, "teams", None)), [])
+                 (safe_call(lambda: list(getattr(league, "teams", None)), [], context="fantasy_draft/_get_manager")
                   or [])
-                 if _safe(lambda: getattr(t, "league_name", ""), "")
+                 if safe_call(lambda: getattr(t, "league_name", ""), "", context="fantasy_draft/_get_manager")
                  == "National Hockey League"]
     all_players = _collect_players(nhl_teams, gm)
     mgr = _fd.FantasyDraftManager(nhl_teams, all_players)
     try:
-        mgr.user_team = _safe(lambda: gm.user_team)
+        mgr.user_team = safe_call(lambda: gm.user_team, context="fantasy_draft/_get_manager")
     except Exception:
         pass
     try:
@@ -295,7 +290,7 @@ def _run_ai(mgr, max_picks=4000):
 def _complete_draft(game, mgr):
     """Port of FantasyDraftView.complete_draft (non-Tk parts)."""
     gm = _resolve_gm(game)
-    league = _safe(lambda: gm.league) if gm is not None else None
+    league = safe_call(lambda: gm.league, context="fantasy_draft/_complete_draft") if gm is not None else None
     try:
         if gm is not None and hasattr(gm, "pending_fantasy_draft"):
             gm.pending_fantasy_draft = False
@@ -366,8 +361,8 @@ def _complete_draft(game, mgr):
             category="League",
             priority=3,
         )
-        user_team = _safe(lambda: gm.user_team) if gm is not None else None
-        inbox = _safe(lambda: getattr(user_team, "inbox", None))
+        user_team = safe_call(lambda: gm.user_team, context="fantasy_draft/_complete_draft") if gm is not None else None
+        inbox = safe_call(lambda: getattr(user_team, "inbox", None), context="fantasy_draft/_complete_draft")
         if inbox is not None:
             inbox.add_message(email)
     except Exception as e:
@@ -384,11 +379,11 @@ def _complete_draft(game, mgr):
     try:
         if gm is not None:
             gm._web_fantasy_completed = {
-                "rounds": _safe(lambda: int(
+                "rounds": safe_call(lambda: int(
                     getattr(getattr(mgr, "config", None), "rounds", 0)
-                    or 0), 0),
-                "total_picks": _safe(lambda: len(
-                    getattr(mgr, "draft_picks", None) or []), 0),
+                    or 0), 0, context="fantasy_draft/_complete_draft"),
+                "total_picks": safe_call(lambda: len(
+                    getattr(mgr, "draft_picks", None) or []), 0, context="fantasy_draft/_complete_draft"),
             }
     except Exception:
         pass
@@ -420,12 +415,12 @@ def make_fantasy_pick(game, player_id):
         except Exception:
             pass
     if not _same_team(getattr(cur, "team", None), user_team):
-        tn = _safe(lambda: getattr(cur.team, "team_name", "?"), "?")
+        tn = safe_call(lambda: getattr(cur.team, "team_name", "?"), "?", context="fantasy_draft/make_fantasy_pick")
         return f"not your turn -- {tn} is on the clock"
     player = None
     try:
         for p in mgr.get_available_players():
-            pid = _safe(lambda: getattr(p, "id", id(p)))
+            pid = safe_call(lambda: getattr(p, "id", id(p)), context="fantasy_draft/make_fantasy_pick")
             if str(pid) == str(player_id):
                 player = p
                 break
@@ -453,12 +448,12 @@ def get_fantasy_status(game):
     """Status dict mirroring the web _fantasy_status. Never raises."""
     try:
         gm = _resolve_gm(game)
-        pending = bool(_safe(lambda: getattr(gm, "pending_fantasy_draft",
-                                            False), False))
+        pending = bool(safe_call(lambda: getattr(gm, "pending_fantasy_draft",
+                                            False), False, context="fantasy_draft/get_fantasy_status"))
         mgr, _err = _get_manager(game, create=False)
         if mgr is None:
-            done_info = _safe(lambda: getattr(
-                gm, "_web_fantasy_completed", None))
+            done_info = safe_call(lambda: getattr(
+                gm, "_web_fantasy_completed", None), context="fantasy_draft/get_fantasy_status")
             if done_info:
                 return {"active": False, "pending": False,
                         "started": False, "completed": True,
@@ -469,37 +464,37 @@ def get_fantasy_status(game):
             cur = mgr.get_current_pick()
         except Exception:
             cur = None
-        complete = bool(_safe(lambda: mgr.is_draft_complete(), False))
+        complete = bool(safe_call(lambda: mgr.is_draft_complete(), False, context="fantasy_draft/get_fantasy_status"))
         user_team = getattr(mgr, "user_team", None) or _user_team(game)
-        uname = _safe(lambda: getattr(user_team, "team_name", ""), "")
+        uname = safe_call(lambda: getattr(user_team, "team_name", ""), "", context="fantasy_draft/get_fantasy_status")
         status = {
             "active": True,
             "pending": pending,
             "started": bool(getattr(mgr, "draft_started", False)),
             "complete": complete,
             "completed": False,
-            "rounds": _safe(lambda: int(getattr(
-                getattr(mgr, "config", None), "rounds", 0) or 0), 0),
-            "total_picks": _safe(lambda: len(
-                getattr(mgr, "draft_picks", None) or []), 0),
-            "picks_made": _safe(lambda: int(
-                getattr(mgr, "current_pick", 0) or 0), 0),
+            "rounds": safe_call(lambda: int(getattr(
+                getattr(mgr, "config", None), "rounds", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
+            "total_picks": safe_call(lambda: len(
+                getattr(mgr, "draft_picks", None) or []), 0, context="fantasy_draft/get_fantasy_status"),
+            "picks_made": safe_call(lambda: int(
+                getattr(mgr, "current_pick", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
             "user_team": uname,
         }
         if cur is not None and not complete:
             cteam = getattr(cur, "team", None)
-            cname = _safe(lambda: getattr(cteam, "team_name", "?"), "?")
+            cname = safe_call(lambda: getattr(cteam, "team_name", "?"), "?", context="fantasy_draft/get_fantasy_status")
             status["current"] = {
-                "overall": _safe(lambda: int(
-                    getattr(cur, "overall_pick", 0) or 0), 0),
-                "round": _safe(lambda: int(
-                    getattr(cur, "round_num", 0) or 0), 0),
+                "overall": safe_call(lambda: int(
+                    getattr(cur, "overall_pick", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
+                "round": safe_call(lambda: int(
+                    getattr(cur, "round_num", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
                 "team": cname,
                 "is_user_pick": _same_team(cteam, user_team),
             }
         try:
             status["draft_order"] = [
-                _safe(lambda t=t: getattr(t, "team_name", "?"), "?")
+                safe_call(lambda t=t: getattr(t, "team_name", "?"), "?", context="fantasy_draft/get_fantasy_status")
                 for t in (getattr(mgr, "draft_order", None) or [])]
         except Exception:
             status["draft_order"] = []
@@ -512,20 +507,20 @@ def get_fantasy_status(game):
             players = []
             for ovr, p in scored[:60]:
                 players.append({
-                    "id": _safe(lambda: str(getattr(p, "id", id(p))),
-                                str(id(p))),
-                    "name": _safe(lambda: getattr(p, "full_name", "?"),
-                                  "?"),
+                    "id": safe_call(lambda: str(getattr(p, "id", id(p))),
+                                str(id(p)), context="fantasy_draft/get_fantasy_status"),
+                    "name": safe_call(lambda: getattr(p, "full_name", "?"),
+                                  "?", context="fantasy_draft/get_fantasy_status"),
                     "position": _clean_pos(p),
-                    "age": _safe(lambda: int(getattr(p, "age", 0) or 0),
-                                 0),
+                    "age": safe_call(lambda: int(getattr(p, "age", 0) or 0),
+                                 0, context="fantasy_draft/get_fantasy_status"),
                     "overall": int(ovr),
-                    "salary": _safe(lambda: int(
+                    "salary": safe_call(lambda: int(
                         getattr(p, "salary", 0)
                         or getattr(getattr(p, "contract", None),
-                                   "salary", 0) or 0), 0),
-                    "former_team": _safe(lambda: getattr(
-                        p, "former_team", ""), "") or "",
+                                   "salary", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
+                    "former_team": safe_call(lambda: getattr(
+                        p, "former_team", ""), "", context="fantasy_draft/get_fantasy_status") or "",
                 })
             status["available"] = players
             status["available_count"] = len(avail)
@@ -536,30 +531,30 @@ def get_fantasy_status(game):
         try:
             picks = getattr(mgr, "draft_picks", None) or []
             done = [pk for pk in picks
-                    if _safe(lambda: getattr(pk, "player", None)) is not None]
+                    if safe_call(lambda: getattr(pk, "player", None), context="fantasy_draft/get_fantasy_status") is not None]
             recent = []
             for pk in done[-12:]:
                 pl = pk.player
                 recent.append({
-                    "overall": _safe(lambda: int(
-                        getattr(pk, "overall_pick", 0) or 0), 0),
-                    "team": _safe(lambda: getattr(
-                        getattr(pk, "team", None), "team_name", "?"), "?"),
-                    "player": _safe(lambda: getattr(pl, "full_name", "?"),
-                                    "?"),
+                    "overall": safe_call(lambda: int(
+                        getattr(pk, "overall_pick", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
+                    "team": safe_call(lambda: getattr(
+                        getattr(pk, "team", None), "team_name", "?"), "?", context="fantasy_draft/get_fantasy_status"),
+                    "player": safe_call(lambda: getattr(pl, "full_name", "?"),
+                                    "?", context="fantasy_draft/get_fantasy_status"),
                     "ovr": _player_ovr(pl),
                 })
             status["recent_picks"] = recent
             # User team's haul so far.
             status["my_picks"] = [{
-                "overall": _safe(lambda: int(
-                    getattr(pk, "overall_pick", 0) or 0), 0),
-                "player": _safe(lambda: getattr(pk.player, "full_name",
-                                                "?"), "?"),
+                "overall": safe_call(lambda: int(
+                    getattr(pk, "overall_pick", 0) or 0), 0, context="fantasy_draft/get_fantasy_status"),
+                "player": safe_call(lambda: getattr(pk.player, "full_name",
+                                                "?"), "?", context="fantasy_draft/get_fantasy_status"),
                 "ovr": _player_ovr(pk.player),
             } for pk in done
-                if _safe(lambda: getattr(
-                    getattr(pk, "team", None), "team_name", ""), "") == uname]
+                if safe_call(lambda: getattr(
+                    getattr(pk, "team", None), "team_name", ""), "", context="fantasy_draft/get_fantasy_status") == uname]
         except Exception:
             status["recent_picks"] = []
             status["my_picks"] = []

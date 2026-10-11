@@ -18,13 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 class SeasonMeetingScreen(BaseScreen):
@@ -56,8 +50,8 @@ class SeasonMeetingScreen(BaseScreen):
 
     def _user_team(self):
         gm = self._gm()
-        return (_safe(lambda: getattr(gm, "user_team", None))
-                or _safe(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: getattr(gm, "user_team", None), context="season_meeting/_user_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None), context="season_meeting/_user_team"))
 
     # ------------------------------------------------------------------
     # layout
@@ -126,22 +120,22 @@ class SeasonMeetingScreen(BaseScreen):
             self._show_degraded("No team loaded.")
             return
 
-        self.coach = _safe(lambda: _get_head_coach(self.team))
+        self.coach = safe_call(lambda: _get_head_coach(self.team), context="season_meeting/_init_meeting")
         if self.coach is None:
             self._show_degraded("No head coach found.")
             return
 
-        self._board_exp = _safe(lambda: _board_expectation(self._gm()))
+        self._board_exp = safe_call(lambda: _board_expectation(self._gm()), context="season_meeting/_init_meeting")
 
         # Coach assessment
         if "coach_assessment" not in self.draft:
-            self.draft["coach_assessment"] = _safe(
-                lambda: coach_assessment(self.team, self.coach), "")
+            self.draft["coach_assessment"] = safe_call(
+                lambda: coach_assessment(self.team, self.coach), "", context="season_meeting/_init_meeting")
             self._persist()
 
         # Check if already done
         if not self.draft.get("opened"):
-            if not _safe(lambda: is_meeting_pending(self.team), True):
+            if not safe_call(lambda: is_meeting_pending(self.team), True, context="season_meeting/_init_meeting"):
                 mandate = getattr(self.team, "season_mandate", None)
                 if isinstance(mandate, dict) and mandate.get("meeting_done"):
                     self.draft["opened"] = True
@@ -149,11 +143,11 @@ class SeasonMeetingScreen(BaseScreen):
                     self._persist()
                     self._render_all()
                     return
-            self._log("coach", _safe(
+            self._log("coach", safe_call(
                 lambda: _opening_line(
                     self.coach, self._rng,
-                    reason=_safe(lambda: _meeting_reason(self.team), "")),
-                "Let's talk about the season."))
+                    reason=safe_call(lambda: _meeting_reason(self.team), "", context="season_meeting/_init_meeting")),
+                "Let's talk about the season.", context="season_meeting/_init_meeting"))
             self.draft["opened"] = True
             self.draft["stage"] = "opening"
             self._persist()
@@ -207,7 +201,7 @@ class SeasonMeetingScreen(BaseScreen):
             if item.widget():
                 item.widget().deleteLater()
 
-        coach_name = _safe(lambda: self._coach_name(), "Coach")
+        coach_name = safe_call(lambda: self._coach_name(), "Coach", context="season_meeting/_render_transcript")
         for entry in self.draft.get("log", []):
             speaker = entry.get("speaker", "")
             text = entry.get("text", "")
@@ -375,16 +369,16 @@ class SeasonMeetingScreen(BaseScreen):
             self._set_prompt("Error loading mandate builder.")
             return
 
-        mandate = _safe(
+        mandate = safe_call(
             lambda: build_mandate(
                 self.team, self.draft,
-                _safe(lambda: _season_label(self._gm()), "")))
+                safe_call(lambda: _season_label(self._gm()), "", context="season_meeting/_stage_closing")), context="season_meeting/_stage_closing")
         if not self.draft.get("closing_logged"):
-            self._log("coach", _safe(
+            self._log("coach", safe_call(
                 lambda: _closing_line(
                     self.coach,
                     not self.draft.get("misaligned", False), self._rng),
-                "Let's get to work."))
+                "Let's get to work.", context="season_meeting/_stage_closing"))
             self.draft["closing_logged"] = True
             self._persist()
             self._render_transcript()
@@ -494,43 +488,43 @@ class SeasonMeetingScreen(BaseScreen):
         if stage == "opening":
             nxt = "expectations"
         elif stage == "expectations":
-            assessed = self.draft.get("coach_assessment") or _safe(
-                lambda: coach_assessment(self.team, self.coach), "")
+            assessed = self.draft.get("coach_assessment") or safe_call(
+                lambda: coach_assessment(self.team, self.coach), "", context="season_meeting/_choose")
             self.draft["coach_assessment"] = assessed
             self.draft["choices"]["expectation"] = key
-            text, delta, note, misaligned = _safe(
+            text, delta, note, misaligned = safe_call(
                 lambda: _expectation_reaction(
                     self.team, self.coach, key, assessed, self._rng),
-                ("", 0, "", False))
+                ("", 0, "", False), context="season_meeting/_choose")
             nxt = "rookies"
         elif stage == "rookies":
             self.draft["choices"]["rookie_stance"] = key
             exp = self.draft["choices"].get("expectation", "playoffs")
-            text, delta, note = _safe(
+            text, delta, note = safe_call(
                 lambda: _rookie_reaction(
                     self.team, self.coach, key, exp, self._rng)[:3],
-                ("", 0, ""))
+                ("", 0, ""), context="season_meeting/_choose")
             nxt = "tactics"
         elif stage == "tactics":
             self.draft["choices"]["tactical_approach"] = key
-            text, delta, note = _safe(
+            text, delta, note = safe_call(
                 lambda: _tactics_reaction(
                     self.team, self.coach, key, self._rng)[:3],
-                ("", 0, ""))
+                ("", 0, ""), context="season_meeting/_choose")
             nxt = "lines"
         elif stage == "lines":
             self.draft["choices"]["lines_owner"] = key
-            text, delta, note = _safe(
+            text, delta, note = safe_call(
                 lambda: _lines_reaction(
                     self.team, self.coach, key, self._rng)[:3],
-                ("", 0, ""))
+                ("", 0, ""), context="season_meeting/_choose")
             nxt = "tactics_own"
         elif stage == "tactics_own":
             self.draft["choices"]["tactics_owner"] = key
-            text, delta, note = _safe(
+            text, delta, note = safe_call(
                 lambda: _tactics_owner_reaction(
                     self.team, self.coach, key, self._rng)[:3],
-                ("", 0, ""))
+                ("", 0, ""), context="season_meeting/_choose")
             ch = self.draft["choices"]
             if ch.get("lines_owner") == "gm" and ch.get("tactics_owner") == "gm":
                 nxt = "deployer"
@@ -538,10 +532,10 @@ class SeasonMeetingScreen(BaseScreen):
                 nxt = "closing"
         elif stage == "deployer":
             self.draft["deployer_choice"] = key
-            res = _safe(
+            res = safe_call(
                 lambda: _deployer_reaction(
                     self.team, self.coach, key, self._rng),
-                ("", 0, "", "", False))
+                ("", 0, "", "", False), context="season_meeting/_choose")
             text, delta, note, deployer_note, misaligned = res
             self.draft["deployer_note"] = deployer_note
             nxt = "closing"
@@ -563,14 +557,14 @@ class SeasonMeetingScreen(BaseScreen):
     def _seal(self, mandate):
         try:
             from coach_meeting_window import _finalize_meeting
-            ok = _safe(lambda: _finalize_meeting(self.team, mandate), False)
+            ok = safe_call(lambda: _finalize_meeting(self.team, mandate), False, context="season_meeting/_seal")
         except ImportError:
             ok = False
             # Fallback: store mandate directly
             try:
                 from coach_season_meeting import store_mandate
-                ok = bool(_safe(lambda: store_mandate(
-                    self.team, mandate or {}), False))
+                ok = bool(safe_call(lambda: store_mandate(
+                    self.team, mandate or {}), False, context="season_meeting/_seal"))
             except ImportError:
                 pass
 

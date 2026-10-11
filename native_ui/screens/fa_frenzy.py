@@ -30,13 +30,6 @@ from PySide6.QtCore import Qt, QTimer
 from .base import BaseScreen
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _fmt_money(v):
     try:
         v = int(v or 0)

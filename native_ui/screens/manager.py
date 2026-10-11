@@ -13,13 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 # Rough full-season point targets per expectation (estimates, labeled as
@@ -128,21 +122,21 @@ class ManagerScreen(BaseScreen):
 
     def _league(self):
         gm = self._gm()
-        return (_safe(lambda: getattr(gm, "league", None))
-                or _safe(lambda: getattr(self.game, "league", None)))
+        return (safe_call(lambda: getattr(gm, "league", None), context="manager/_league")
+                or safe_call(lambda: getattr(self.game, "league", None), context="manager/_league"))
 
     def _user_team(self):
         gm = self._gm()
-        return (_safe(lambda: getattr(gm, "user_team", None))
-                or _safe(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: getattr(gm, "user_team", None), context="manager/_user_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None), context="manager/_user_team"))
 
     def _career(self):
-        return (_safe(lambda: getattr(self._gm(), "career", None))
-                or _safe(lambda: getattr(self.game, "career", None)))
+        return (safe_call(lambda: getattr(self._gm(), "career", None), context="manager/_career")
+                or safe_call(lambda: getattr(self.game, "career", None), context="manager/_career"))
 
     def _board(self):
         career = self._career()
-        return _safe(lambda: getattr(career, "board", None))
+        return safe_call(lambda: getattr(career, "board", None), context="manager/_board")
 
     # ------------------------------------------------------------------
     # layout
@@ -214,23 +208,23 @@ class ManagerScreen(BaseScreen):
         if board is None:
             return None
         league = self._league()
-        cd = _safe(lambda: getattr(self.game, "current_date", None))
+        cd = safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_board_data")
         today = cd.isoformat() if cd is not None and hasattr(
             cd, "isoformat") else ""
 
         expectations = [{"key": k, "label": v["label"],
                          "description": v["description"]}
                         for k, v in mc.EXPECTATIONS.items()]
-        exp = _safe(lambda: getattr(board, "expectation", None)) or "playoffs"
+        exp = safe_call(lambda: getattr(board, "expectation", None), context="manager/_board_data") or "playoffs"
         exp_info = mc.EXPECTATIONS.get(exp, mc.EXPECTATIONS["playoffs"])
 
-        w = _safe(lambda: int(getattr(board, "season_wins", 0) or 0), 0)
-        l = _safe(lambda: int(getattr(board, "season_losses", 0) or 0), 0)
-        otl = _safe(lambda: int(getattr(board, "season_otl", 0) or 0), 0)
+        w = safe_call(lambda: int(getattr(board, "season_wins", 0) or 0), 0, context="manager/_board_data")
+        l = safe_call(lambda: int(getattr(board, "season_losses", 0) or 0), 0, context="manager/_board_data")
+        otl = safe_call(lambda: int(getattr(board, "season_otl", 0) or 0), 0, context="manager/_board_data")
         gp = w + l + otl
         pts = w * 2 + otl
-        slate = _safe(lambda: int(
-            getattr(league, "season_games_count", 82) or 82), 82)
+        slate = safe_call(lambda: int(
+            getattr(league, "season_games_count", 82) or 82), 82, context="manager/_board_data")
         target, note = _EXPECTATION_TARGETS.get(exp, (94, ""))
 
         pace = round(pts / gp * slate, 1) if gp else None
@@ -245,12 +239,12 @@ class ManagerScreen(BaseScreen):
                        else "off_the_pace")
 
         return {
-            "confidence": _safe(lambda: int(
-                getattr(board, "confidence", 60) or 0), 60),
-            "job_status": _safe(lambda: str(
-                getattr(board, "job_status", "Stable")), "Stable"),
-            "sacked": bool(_safe(lambda: getattr(board, "sacked", False),
-                                 False)),
+            "confidence": safe_call(lambda: int(
+                getattr(board, "confidence", 60) or 0), 60, context="manager/_board_data"),
+            "job_status": safe_call(lambda: str(
+                getattr(board, "job_status", "Stable")), "Stable", context="manager/_board_data"),
+            "sacked": bool(safe_call(lambda: getattr(board, "sacked", False),
+                                 False, context="manager/_board_data")),
             "expectation": exp,
             "expectation_label": exp_info["label"],
             "expectation_description": exp_info["description"],
@@ -260,15 +254,15 @@ class ManagerScreen(BaseScreen):
             "verdict": verdict,
             "verdict_gap": gap,
             "target_note": note,
-            "last_review": _safe(lambda: str(
-                getattr(board, "last_review", "") or ""), ""),
-            "patience_status": _safe(lambda: str(
-                board.patience_status(today)), ""),
-            "owner_archetype": _safe(lambda: str(
+            "last_review": safe_call(lambda: str(
+                getattr(board, "last_review", "") or ""), "", context="manager/_board_data"),
+            "patience_status": safe_call(lambda: str(
+                board.patience_status(today)), "", context="manager/_board_data"),
+            "owner_archetype": safe_call(lambda: str(
                 getattr(getattr(board, "owner", None), "archetype", "")),
-                ""),
-            "consequences": _safe(lambda: list(
-                board.current_consequences()), []) or [],
+                "", context="manager/_board_data"),
+            "consequences": safe_call(lambda: list(
+                board.current_consequences()), [], context="manager/_board_data") or [],
             "cutoff_pace": self._playoff_cutoff_pace(league, slate),
         }
 
@@ -278,8 +272,8 @@ class ManagerScreen(BaseScreen):
             if league is None:
                 return None
             gm = self._gm()
-            standings = (_safe(lambda: getattr(league, "standings", None))
-                         or _safe(lambda: getattr(gm, "standings", None)))
+            standings = (safe_call(lambda: getattr(league, "standings", None), context="manager/_playoff_cutoff_pace")
+                         or safe_call(lambda: getattr(gm, "standings", None), context="manager/_playoff_cutoff_pace"))
             if not standings or len(standings) < 16:
                 return None
             paces = []
@@ -294,7 +288,7 @@ class ManagerScreen(BaseScreen):
             return None
 
     def _build_board(self, lay):
-        d = _safe(self._board_data)
+        d = safe_call(self._board_data, context="manager/_build_board")
         if not d:
             lay.addWidget(QLabel("Board data unavailable — no career "
                                  "loaded."))
@@ -389,7 +383,7 @@ class ManagerScreen(BaseScreen):
     def _update_exp_desc(self):
         if self._exp_combo is None:
             return
-        d = _safe(self._board_data)
+        d = safe_call(self._board_data, context="manager/_update_exp_desc")
         if not d:
             return
         key = self._exp_combo.currentData()
@@ -418,7 +412,7 @@ class ManagerScreen(BaseScreen):
         board = self._board()
         if board is None:
             return
-        cd = _safe(lambda: getattr(self.game, "current_date", None))
+        cd = safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_on_request_patience")
         today = cd.isoformat() if cd is not None and hasattr(
             cd, "isoformat") else ""
         try:
@@ -431,8 +425,8 @@ class ManagerScreen(BaseScreen):
             # Mirror the Tk hub: the room settles knowing the manager
             # is safe.
             team = self._user_team()
-            for p in (_safe(lambda: list(getattr(team, "roster", [])
-                                         or []), []) or []):
+            for p in (safe_call(lambda: list(getattr(team, "roster", [])
+                                         or []), [], context="manager/_on_request_patience") or []):
                 try:
                     m = float(getattr(p, "morale", 70) or 70)
                     p.morale = min(100.0, m + 2)
@@ -447,7 +441,7 @@ class ManagerScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _training(self):
         career = self._career()
-        return _safe(lambda: getattr(career, "training", None))
+        return safe_call(lambda: getattr(career, "training", None), context="manager/_training")
 
     def _build_training(self, lay):
         import manager_career as mc
@@ -490,9 +484,9 @@ class ManagerScreen(BaseScreen):
         for i, unit in enumerate(mc.TRAINING_UNITS, start=1):
             ul = QLabel(unit)
             grid.addWidget(ul, i, 0)
-            cur_int, cur_foc = _safe(
+            cur_int, cur_foc = safe_call(
                 lambda u=unit: training.schedule.get(u, ("Normal", "Balanced")),
-                ("Normal", "Balanced"))
+                ("Normal", "Balanced"), context="manager/_build_training")
             icombo = QComboBox()
             icombo.addItems(list(mc.TRAINING_INTENSITIES))
             icombo.setCurrentText(cur_int)
@@ -508,7 +502,7 @@ class ManagerScreen(BaseScreen):
         apply_btn.clicked.connect(self._on_apply_custom_training)
         lay.addWidget(apply_btn, alignment=Qt.AlignLeft)
 
-        fx = _safe(lambda: training.weekly_effects(), None) or {}
+        fx = safe_call(lambda: training.weekly_effects(), None, context="manager/_build_training") or {}
         lines = []
         dev = fx.get("development_mult", 1.0)
         inj = fx.get("injury_risk_mult", 1.0)
@@ -564,20 +558,20 @@ class ManagerScreen(BaseScreen):
         if team is None:
             return []
         board = self._board()
-        w = _safe(lambda: int(getattr(board, "season_wins", 0) or 0), 0)
-        l = _safe(lambda: int(getattr(board, "season_losses", 0) or 0), 0)
-        otl = _safe(lambda: int(getattr(board, "season_otl", 0) or 0), 0)
+        w = safe_call(lambda: int(getattr(board, "season_wins", 0) or 0), 0, context="manager/_goals_data")
+        l = safe_call(lambda: int(getattr(board, "season_losses", 0) or 0), 0, context="manager/_goals_data")
+        otl = safe_call(lambda: int(getattr(board, "season_otl", 0) or 0), 0, context="manager/_goals_data")
         gp = w + l + otl
         league = self._league()
-        slate = _safe(lambda: int(
-            getattr(league, "season_games_count", 82) or 82), 82)
+        slate = safe_call(lambda: int(
+            getattr(league, "season_games_count", 82) or 82), 82, context="manager/_goals_data")
         expected_pct = (gp / slate * 100) if gp and slate else 0
 
-        roster = _safe(lambda: list(getattr(team, "roster", []) or []),
-                       []) or []
+        roster = safe_call(lambda: list(getattr(team, "roster", []) or []),
+                       [], context="manager/_goals_data") or []
         goals = []
         for p in roster:
-            prog = _safe(lambda: sg.goal_progress(p))
+            prog = safe_call(lambda: sg.goal_progress(p), context="manager/_goals_data")
             if not prog:
                 continue
             pct = prog.get("pct", 0) or 0
@@ -592,7 +586,7 @@ class ManagerScreen(BaseScreen):
             else:
                 status = "behind"
             goals.append({
-                "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                "name": safe_call(lambda: getattr(p, "full_name", "?"), "?", context="manager/_goals_data"),
                 "label": prog["label"],
                 "current": prog["current"],
                 "target": prog["target"],
@@ -610,7 +604,7 @@ class ManagerScreen(BaseScreen):
         head.addWidget(open_btn)
         lay.addLayout(head)
 
-        goals = _safe(self._goals_data, [])
+        goals = safe_call(self._goals_data, [], context="manager/_build_goals")
         if not goals:
             lay.addWidget(QLabel("No season goals set yet. Open Season "
                                  "Goals to set per-player targets."))
@@ -650,34 +644,34 @@ class ManagerScreen(BaseScreen):
             return None
         gm = self._gm()
         team = self._user_team()
-        prof = _safe(lambda: getattr(career, "profile", None))
-        gmp = _safe(lambda: getattr(team, "gm_profile", None)) if team else None
+        prof = safe_call(lambda: getattr(career, "profile", None), context="manager/_profile_data")
+        gmp = safe_call(lambda: getattr(team, "gm_profile", None), context="manager/_profile_data") if team else None
         board = self._board()
         profile = {}
         if prof is not None:
             profile = {
-                "reputation": _safe(lambda: int(
-                    getattr(prof, "reputation", 0) or 0), 0),
-                "level": _safe(lambda: str(getattr(prof, "level", "")), ""),
-                "career_wins": _safe(lambda: int(
-                    getattr(prof, "career_wins", 0) or 0), 0),
-                "career_losses": _safe(lambda: int(
-                    getattr(prof, "career_losses", 0) or 0), 0),
-                "career_otl": _safe(lambda: int(
-                    getattr(prof, "career_otl", 0) or 0), 0),
-                "titles_won": _safe(lambda: int(
-                    getattr(prof, "titles_won", 0) or 0), 0),
-                "playoff_appearances": _safe(lambda: int(
-                    getattr(prof, "playoff_appearances", 0) or 0), 0),
-                "seasons_managed": _safe(lambda: int(
-                    getattr(prof, "seasons_managed", 0) or 0), 0),
+                "reputation": safe_call(lambda: int(
+                    getattr(prof, "reputation", 0) or 0), 0, context="manager/_profile_data"),
+                "level": safe_call(lambda: str(getattr(prof, "level", "")), "", context="manager/_profile_data"),
+                "career_wins": safe_call(lambda: int(
+                    getattr(prof, "career_wins", 0) or 0), 0, context="manager/_profile_data"),
+                "career_losses": safe_call(lambda: int(
+                    getattr(prof, "career_losses", 0) or 0), 0, context="manager/_profile_data"),
+                "career_otl": safe_call(lambda: int(
+                    getattr(prof, "career_otl", 0) or 0), 0, context="manager/_profile_data"),
+                "titles_won": safe_call(lambda: int(
+                    getattr(prof, "titles_won", 0) or 0), 0, context="manager/_profile_data"),
+                "playoff_appearances": safe_call(lambda: int(
+                    getattr(prof, "playoff_appearances", 0) or 0), 0, context="manager/_profile_data"),
+                "seasons_managed": safe_call(lambda: int(
+                    getattr(prof, "seasons_managed", 0) or 0), 0, context="manager/_profile_data"),
             }
         bio = []
         if gmp is not None:
             for label, attr in (("Age", "age"), ("Birthplace", "birthplace"),
                                 ("Nationality", "nationality"),
                                 ("Education", "education_level")):
-                v = _safe(lambda: getattr(gmp, attr, None))
+                v = safe_call(lambda: getattr(gmp, attr, None), context="manager/_profile_data")
                 if v:
                     bio.append(f"{label}: {v}")
             if bio:
@@ -686,45 +680,45 @@ class ManagerScreen(BaseScreen):
                                 ("Risk tolerance", "risk_tolerance"),
                                 ("Loyalty to players", "loyalty_to_players"),
                                 ("Media savvy", "media_savvy")):
-                v = _safe(lambda: getattr(gmp, attr, None))
+                v = safe_call(lambda: getattr(gmp, attr, None), context="manager/_profile_data")
                 if v:
                     bio.append(f"{label}: {v}")
-            if _safe(lambda: getattr(gmp, "former_player", False), False):
+            if safe_call(lambda: getattr(gmp, "former_player", False), False, context="manager/_profile_data"):
                 bio.append("")
                 bio.append(
-                    f"Former {_safe(lambda: getattr(gmp, 'playing_position', 'player'), 'player')}: "
-                    f"{_safe(lambda: getattr(gmp, 'nhl_games_played', 0), 0)} NHL games, "
-                    f"{_safe(lambda: getattr(gmp, 'career_points', 0), 0)} career points.")
-            if _safe(lambda: getattr(gmp, "coaching_experience", False),
-                     False):
+                    f"Former {safe_call(lambda: getattr(gmp, 'playing_position', 'player'), 'player', context="manager/_profile_data")}: "
+                    f"{safe_call(lambda: getattr(gmp, 'nhl_games_played', 0), 0, context="manager/_profile_data")} NHL games, "
+                    f"{safe_call(lambda: getattr(gmp, 'career_points', 0), 0, context="manager/_profile_data")} career points.")
+            if safe_call(lambda: getattr(gmp, "coaching_experience", False),
+                     False, context="manager/_profile_data"):
                 bio.append(
-                    f"{_safe(lambda: getattr(gmp, 'years_coaching', 0), 0)} "
+                    f"{safe_call(lambda: getattr(gmp, 'years_coaching', 0), 0, context="manager/_profile_data")} "
                     f"years coaching experience.")
-            if _safe(lambda: getattr(gmp, "assistant_gm_experience", False),
-                     False):
+            if safe_call(lambda: getattr(gmp, "assistant_gm_experience", False),
+                     False, context="manager/_profile_data"):
                 bio.append(
-                    f"{_safe(lambda: getattr(gmp, 'years_as_assistant', 0), 0)} "
+                    f"{safe_call(lambda: getattr(gmp, 'years_as_assistant', 0), 0, context="manager/_profile_data")} "
                     f"years as an assistant GM.")
         appt = {}
         if team is not None:
-            appt["club"] = _safe(lambda: str(getattr(team, "team_name", "")),
-                                 "")
-        start = _safe(lambda: getattr(career, "career_start_date", ""),
-                      "") or ""
+            appt["club"] = safe_call(lambda: str(getattr(team, "team_name", "")),
+                                 "", context="manager/_profile_data")
+        start = safe_call(lambda: getattr(career, "career_start_date", ""),
+                      "", context="manager/_profile_data") or ""
         if start:
             appt["since"] = str(start)
         return {"profile": profile, "bio": bio, "appointment": appt,
                 "season_record": None if board is None else {
-                    "w": _safe(lambda: int(
-                        getattr(board, "season_wins", 0) or 0), 0),
-                    "l": _safe(lambda: int(
-                        getattr(board, "season_losses", 0) or 0), 0),
-                    "otl": _safe(lambda: int(
-                        getattr(board, "season_otl", 0) or 0), 0),
+                    "w": safe_call(lambda: int(
+                        getattr(board, "season_wins", 0) or 0), 0, context="manager/_profile_data"),
+                    "l": safe_call(lambda: int(
+                        getattr(board, "season_losses", 0) or 0), 0, context="manager/_profile_data"),
+                    "otl": safe_call(lambda: int(
+                        getattr(board, "season_otl", 0) or 0), 0, context="manager/_profile_data"),
                 }}
 
     def _build_profile(self, lay):
-        d = _safe(self._profile_data)
+        d = safe_call(self._profile_data, context="manager/_build_profile")
         if not d:
             lay.addWidget(QLabel("Profile unavailable — no career loaded."))
             return
@@ -780,8 +774,8 @@ class ManagerScreen(BaseScreen):
             except Exception:
                 return {"available": False,
                         "message": "Analytics module unavailable."}
-        name = _safe(lambda: str(getattr(team, "team_name", "")), "")
-        games = _safe(lambda: ah.team_games(team), []) or []
+        name = safe_call(lambda: str(getattr(team, "team_name", "")), "", context="manager/_analytics_data")
+        games = safe_call(lambda: ah.team_games(team), [], context="manager/_analytics_data") or []
         recent = games[-5:]
         if not recent:
             return {"available": False,
@@ -790,7 +784,7 @@ class ManagerScreen(BaseScreen):
 
         per_game, all_shots, all_entries = [], [], []
         for rec in recent:
-            shots = _safe(lambda: ah.shots_for(rec, name), []) or []
+            shots = safe_call(lambda: ah.shots_for(rec, name), [], context="manager/_analytics_data") or []
             try:
                 home, away = str(rec.get("home", "")), str(rec.get("away",
                                                                    ""))
@@ -804,13 +798,13 @@ class ManagerScreen(BaseScreen):
             xga = round(sum(float(s.get("xg", 0) or 0)
                             for s in opp_shots), 2)
             per_game.append({
-                "label": _safe(lambda: ah.game_label(rec, name), "game"),
+                "label": safe_call(lambda: ah.game_label(rec, name), "game", context="manager/_analytics_data"),
                 "xg_for": xg, "goals_for": gf, "xg_against": xga,
                 "shots": len(shots),
             })
             all_shots.extend(shots)
             all_entries.extend(
-                _safe(lambda: ah.entries_for(rec, name), []) or [])
+                safe_call(lambda: ah.entries_for(rec, name), [], context="manager/_analytics_data") or [])
 
         xg_for = round(sum(g["xg_for"] for g in per_game), 2)
         goals_for = sum(g["goals_for"] for g in per_game)
@@ -819,10 +813,10 @@ class ManagerScreen(BaseScreen):
         diff = round(goals_for - xg_for, 2)
         hd = sum(1 for s in all_shots
                  if float(s.get("xg", 0) or 0) >= 0.12)
-        eb = _safe(lambda: ah.entry_breakdown(all_entries),
+        eb = safe_call(lambda: ah.entry_breakdown(all_entries),
                    {"controlled": 0, "total": 0,
-                    "controlled_pct": 0.0}) or {}
-        shooters = _safe(lambda: ah.player_xg_rows(all_shots), []) or []
+                    "controlled_pct": 0.0}, context="manager/_analytics_data") or {}
+        shooters = safe_call(lambda: ah.player_xg_rows(all_shots), [], context="manager/_analytics_data") or []
         mpts = []
         try:
             mpts = ah.momentum_points(recent[-1], name) or []
@@ -849,8 +843,8 @@ class ManagerScreen(BaseScreen):
         }
 
     def _build_analytics(self, lay):
-        d = _safe(self._analytics_data,
-                  {"available": False, "message": "Unavailable."})
+        d = safe_call(self._analytics_data,
+                  {"available": False, "message": "Unavailable."}, context="manager/_build_analytics")
         if not d.get("available"):
             lay.addWidget(QLabel(d.get("message", "Unavailable.")))
             return
@@ -907,31 +901,31 @@ class ManagerScreen(BaseScreen):
         league = self._league()
         if team is None or league is None:
             return {"available": False}
-        teams = _safe(lambda: list(getattr(league, "teams", []) or []),
-                      []) or []
-        uid = _safe(lambda: getattr(team, "id", None))
+        teams = safe_call(lambda: list(getattr(league, "teams", []) or []),
+                      [], context="manager/_relationships_data") or []
+        uid = safe_call(lambda: getattr(team, "id", None), context="manager/_relationships_data")
         rows = []
         for t in teams:
             try:
-                tid = _safe(lambda: getattr(t, "id", None))
+                tid = safe_call(lambda: getattr(t, "id", None), context="manager/_relationships_data")
                 if uid is not None and tid == uid:
                     continue
-                stature = _safe(lambda: int(rs.gm_stature(t)), 50)
-                respect = _safe(lambda: int(
-                    rs.gm_gm_respect(league, team, t)), 50)
-                heat = _safe(lambda: int(
-                    rs.gm_gm_heat(league, team, t)), 0)
-                tier = _safe(lambda: str(
-                    rs.respect_tier_label(respect)), "wary")
-                trend = _safe(lambda: str(
-                    rs.respect_trend(league, team, t)), "steady")
-                staff = _safe(lambda: rs._team_gm_staff(t))
-                gm_name = (_safe(lambda: getattr(staff, "full_name", None))
-                           or _safe(lambda: getattr(staff, "name", None))
-                           or f"{_safe(lambda: getattr(t, 'team_name', 'Unknown'), 'Unknown')} GM")
+                stature = safe_call(lambda: int(rs.gm_stature(t)), 50, context="manager/_relationships_data")
+                respect = safe_call(lambda: int(
+                    rs.gm_gm_respect(league, team, t)), 50, context="manager/_relationships_data")
+                heat = safe_call(lambda: int(
+                    rs.gm_gm_heat(league, team, t)), 0, context="manager/_relationships_data")
+                tier = safe_call(lambda: str(
+                    rs.respect_tier_label(respect)), "wary", context="manager/_relationships_data")
+                trend = safe_call(lambda: str(
+                    rs.respect_trend(league, team, t)), "steady", context="manager/_relationships_data")
+                staff = safe_call(lambda: rs._team_gm_staff(t), context="manager/_relationships_data")
+                gm_name = (safe_call(lambda: getattr(staff, "full_name", None), context="manager/_relationships_data")
+                           or safe_call(lambda: getattr(staff, "name", None), context="manager/_relationships_data")
+                           or f"{safe_call(lambda: getattr(t, 'team_name', 'Unknown'), 'Unknown', context="manager/_relationships_data")} GM")
                 rows.append({
-                    "team": _safe(lambda: str(
-                        getattr(t, "team_name", "Unknown")), "Unknown"),
+                    "team": safe_call(lambda: str(
+                        getattr(t, "team_name", "Unknown")), "Unknown", context="manager/_relationships_data"),
                     "team_key": "" if tid is None else str(tid),
                     "gm": str(gm_name),
                     "stature": stature,
@@ -945,8 +939,8 @@ class ManagerScreen(BaseScreen):
                 continue
         rows.sort(key=lambda r: -r["respect"])
         own = {
-            "stature": _safe(lambda: int(rs.gm_stature(team)), 50),
-            "team": _safe(lambda: str(getattr(team, "team_name", "")), ""),
+            "stature": safe_call(lambda: int(rs.gm_stature(team)), 50, context="manager/_relationships_data"),
+            "team": safe_call(lambda: str(getattr(team, "team_name", "")), "", context="manager/_relationships_data"),
         }
         return {"available": True, "own": own, "rows": rows}
 
@@ -960,7 +954,7 @@ class ManagerScreen(BaseScreen):
         head.addWidget(open_btn)
         lay.addLayout(head)
 
-        d = _safe(self._relationships_data, {"available": False})
+        d = safe_call(self._relationships_data, {"available": False}, context="manager/_build_relationships")
         if not d.get("available"):
             lay.addWidget(QLabel("Relationship data unavailable."))
             return
@@ -1038,32 +1032,32 @@ class ManagerScreen(BaseScreen):
             return None
         key = (row.get("team_key") or row.get("team") or "").strip().lower()
         target = None
-        for t in (_safe(lambda: list(getattr(league, "teams", []) or []),
-                        []) or []):
-            tn = _safe(lambda: str(getattr(t, "team_name", "")).strip().lower(),
-                       "")
-            tid = _safe(lambda: str(getattr(t, "id", "")), "")
+        for t in (safe_call(lambda: list(getattr(league, "teams", []) or []),
+                        [], context="manager/_rel_detail_data") or []):
+            tn = safe_call(lambda: str(getattr(t, "team_name", "")).strip().lower(),
+                       "", context="manager/_rel_detail_data")
+            tid = safe_call(lambda: str(getattr(t, "id", "")), "", context="manager/_rel_detail_data")
             if tn == key or tid == key:
                 target = t
                 break
         if target is None:
             return None
-        stature = _safe(lambda: int(rs.gm_stature(target)), 50)
-        respect = _safe(lambda: int(rs.gm_gm_respect(league, team, target)),
-                        50)
-        heat = _safe(lambda: int(rs.gm_gm_heat(league, team, target)), 0)
-        tier = _safe(lambda: str(rs.respect_tier_label(respect)), "wary")
-        trend = _safe(lambda: str(rs.respect_trend(league, team, target)),
-                      "steady")
-        baseline = _safe(lambda: float(rs.respect_baseline_for(target)),
-                         None)
-        staff = _safe(lambda: rs._team_gm_staff(target))
-        gm_name = (_safe(lambda: getattr(staff, "full_name", None))
-                   or _safe(lambda: getattr(staff, "name", None))
-                   or f"{_safe(lambda: getattr(target, 'team_name', 'Unknown'), 'Unknown')} GM")
+        stature = safe_call(lambda: int(rs.gm_stature(target)), 50, context="manager/_rel_detail_data")
+        respect = safe_call(lambda: int(rs.gm_gm_respect(league, team, target)),
+                        50, context="manager/_rel_detail_data")
+        heat = safe_call(lambda: int(rs.gm_gm_heat(league, team, target)), 0, context="manager/_rel_detail_data")
+        tier = safe_call(lambda: str(rs.respect_tier_label(respect)), "wary", context="manager/_rel_detail_data")
+        trend = safe_call(lambda: str(rs.respect_trend(league, team, target)),
+                      "steady", context="manager/_rel_detail_data")
+        baseline = safe_call(lambda: float(rs.respect_baseline_for(target)),
+                         None, context="manager/_rel_detail_data")
+        staff = safe_call(lambda: rs._team_gm_staff(target), context="manager/_rel_detail_data")
+        gm_name = (safe_call(lambda: getattr(staff, "full_name", None), context="manager/_rel_detail_data")
+                   or safe_call(lambda: getattr(staff, "name", None), context="manager/_rel_detail_data")
+                   or f"{safe_call(lambda: getattr(target, 'team_name', 'Unknown'), 'Unknown', context="manager/_rel_detail_data")} GM")
         return {
-            "team": _safe(lambda: str(
-                getattr(target, "team_name", "Unknown")), "Unknown"),
+            "team": safe_call(lambda: str(
+                getattr(target, "team_name", "Unknown")), "Unknown", context="manager/_rel_detail_data"),
             "gm": str(gm_name),
             "stature": stature, "respect": respect, "tier": tier,
             "heat": heat, "trend": trend, "respect_baseline": baseline,
@@ -1170,8 +1164,8 @@ class ManagerScreen(BaseScreen):
 
     def _build_press_history(self, lay):
         career = self._career()
-        hist = _safe(lambda: list(getattr(career, "press_history", [])
-                                  or []), []) or []
+        hist = safe_call(lambda: list(getattr(career, "press_history", [])
+                                  or []), [], context="manager/_build_press_history") or []
         entries = list(reversed(hist[-20:]))
         if not entries:
             lay.addWidget(QLabel("No press conferences on record yet."))
@@ -1199,9 +1193,9 @@ class ManagerScreen(BaseScreen):
     def _presser_form_word(self):
         """Recent-form word, mirroring mainline _career_form_word."""
         board = self._board()
-        w = _safe(lambda: int(getattr(board, "season_wins", 0) or 0), 0)
-        l = _safe(lambda: int(getattr(board, "season_losses", 0) or 0), 0)
-        otl = _safe(lambda: int(getattr(board, "season_otl", 0) or 0), 0)
+        w = safe_call(lambda: int(getattr(board, "season_wins", 0) or 0), 0, context="manager/_presser_form_word")
+        l = safe_call(lambda: int(getattr(board, "season_losses", 0) or 0), 0, context="manager/_presser_form_word")
+        otl = safe_call(lambda: int(getattr(board, "season_otl", 0) or 0), 0, context="manager/_presser_form_word")
         games = w + l + otl
         if games < 3:
             return "mixed"
@@ -1232,23 +1226,23 @@ class ManagerScreen(BaseScreen):
         opp, _gdate = self._next_opponent()
         if team is None or opp is None:
             return []
-        standings = _safe(
-            lambda: getattr(self._league(), "standings", None), {}) or {}
-        report = _safe(
-            lambda: mc.generate_opposition_report(opp, standings), {}) or {}
+        standings = safe_call(
+            lambda: getattr(self._league(), "standings", None), {}, context="manager/_presser_game_questions") or {}
+        report = safe_call(
+            lambda: mc.generate_opposition_report(opp, standings), {}, context="manager/_presser_game_questions") or {}
         ctx = {
             "form_word": self._presser_form_word(),
             "opp": report.get("team") or getattr(opp, "team_name", "them"),
             "opp_word": str(report.get("danger_level", "dangerous")).lower(),
         }
-        return _safe(
-            lambda: mc.build_prematch_presser(team, opp, ctx), []) or []
+        return safe_call(
+            lambda: mc.build_prematch_presser(team, opp, ctx), [], context="manager/_presser_game_questions") or []
 
     def _presser_player_questions(self):
         """Player-performance focus: questions built from real roster stats."""
         team = self._user_team()
-        roster = [p for p in (_safe(
-            lambda: list(getattr(team, "roster", []) or []), []) or [])
+        roster = [p for p in (safe_call(
+            lambda: list(getattr(team, "roster", []) or []), [], context="manager/_presser_player_questions") or [])
             if str(getattr(p, "primary_position", "") or "").upper()
             != "GOALIE"]
         if not roster:
@@ -1265,7 +1259,7 @@ class ManagerScreen(BaseScreen):
         star, slump = sk[0], sk[-1]
         star_nm, slump_nm = _nm(star), _nm(slump)
         star_pts, slump_pts = int(_pts(star)), int(_pts(slump))
-        star_gp = int(_safe(lambda: getattr(star, "games_played", 0), 0) or 0)
+        star_gp = int(safe_call(lambda: getattr(star, "games_played", 0), 0, context="manager/_presser_player_questions") or 0)
         journalists = self._PRESSER_JOURNALISTS
         return [
             {
@@ -1320,8 +1314,8 @@ class ManagerScreen(BaseScreen):
     def _presser_rumor_questions(self):
         """Trade-rumor focus: questions built from real roster names."""
         team = self._user_team()
-        roster = [p for p in (_safe(
-            lambda: list(getattr(team, "roster", []) or []), []) or [])
+        roster = [p for p in (safe_call(
+            lambda: list(getattr(team, "roster", []) or []), [], context="manager/_presser_rumor_questions") or [])
             if str(getattr(p, "primary_position", "") or "").upper()
             != "GOALIE"]
         if not roster:
@@ -1332,7 +1326,7 @@ class ManagerScreen(BaseScreen):
                     f"{getattr(p, 'last_name', '?')}").strip()
 
         def _age(p):
-            return int(_safe(lambda: getattr(p, "age", 99), 99) or 99)
+            return int(safe_call(lambda: getattr(p, "age", 99), 99, context="manager/_age") or 99)
 
         young = min(roster, key=_age)
         young_nm, young_age = _nm(young), _age(young)
@@ -1457,12 +1451,12 @@ class ManagerScreen(BaseScreen):
 
     def _record_presser_history(self, kind, summary):
         career = self._career()
-        hist = _safe(lambda: getattr(career, "press_history", None))
+        hist = safe_call(lambda: getattr(career, "press_history", None), context="manager/_record_presser_history")
         if not isinstance(hist, list):
             return
         gm = self._gm()
-        cd = (_safe(lambda: getattr(gm, "current_date", None))
-              or _safe(lambda: getattr(self.game, "current_date", None)))
+        cd = (safe_call(lambda: getattr(gm, "current_date", None), context="manager/_record_presser_history")
+              or safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_record_presser_history"))
         iso = cd.isoformat() if cd is not None and hasattr(
             cd, "isoformat") else ""
         try:
@@ -1482,8 +1476,8 @@ class ManagerScreen(BaseScreen):
             return ""
         team = self._user_team()
         gm = self._gm()
-        cd = (_safe(lambda: getattr(gm, "current_date", None))
-              or _safe(lambda: getattr(self.game, "current_date", None)))
+        cd = (safe_call(lambda: getattr(gm, "current_date", None), context="manager/_apply_press_answers")
+              or safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_apply_press_answers"))
         iso = cd.isoformat() if cd is not None and hasattr(
             cd, "isoformat") else ""
         total_morale = sum(int(a.get("morale_effect", 0) or 0)
@@ -1502,15 +1496,15 @@ class ManagerScreen(BaseScreen):
         if total_board:
             board = self._board()
             if board is not None:
-                _safe(lambda: board.apply_press_board_effect(
-                    total_board, iso))
+                safe_call(lambda: board.apply_press_board_effect(
+                    total_board, iso), context="manager/_apply_press_answers")
         if total_fan and team is not None:
             try:
                 from fan_sentiment import nudge_fan_sentiment
-                _safe(lambda: nudge_fan_sentiment(
+                safe_call(lambda: nudge_fan_sentiment(
                     team, total_fan * 2.5,
                     reason=f"presser ({kind}): {total_fan:+d}",
-                    current_date=cd))
+                    current_date=cd), context="manager/_apply_press_answers")
             except Exception:
                 pass
         summary = self._presser_summary(answers, kind)
@@ -1536,11 +1530,11 @@ class ManagerScreen(BaseScreen):
         except Exception:
             return None, None
         gm = self._gm()
-        today = (_safe(lambda: getattr(gm, "current_date", None))
-                 or _safe(lambda: getattr(self.game, "current_date", None)))
-        today_k = _safe(lambda: _date_key(today))
-        by_date = _safe(lambda: _results_by_date(self.game), {}) or {}
-        my_name = _safe(lambda: str(getattr(team, "team_name", "")), "") \
+        today = (safe_call(lambda: getattr(gm, "current_date", None), context="manager/_next_opponent")
+                 or safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_next_opponent"))
+        today_k = safe_call(lambda: _date_key(today), context="manager/_next_opponent")
+        by_date = safe_call(lambda: _results_by_date(self.game), {}, context="manager/_next_opponent") or {}
+        my_name = safe_call(lambda: str(getattr(team, "team_name", "")), "", context="manager/_next_opponent") \
             or ""
 
         def _is_mine(x):
@@ -1552,25 +1546,25 @@ class ManagerScreen(BaseScreen):
             if getattr(x, "team_name", None) is not None:
                 return x
             want = str(x or "")
-            for t in (_safe(lambda: list(getattr(league, "teams", [])
-                                         or []), []) or []):
+            for t in (safe_call(lambda: list(getattr(league, "teams", [])
+                                         or []), [], context="manager/_resolve") or []):
                 if str(getattr(t, "team_name", "") or "") == want:
                     return t
             return None
 
         cands = []
-        for entry in (_safe(lambda: list(_schedule_entries(self.game)), [])
+        for entry in (safe_call(lambda: list(_schedule_entries(self.game)), [], context="manager/_next_opponent")
                       or []):
             try:
                 home, away = (entry.get("home_team"),
                               entry.get("away_team"))
                 if not (_is_mine(home) or _is_mine(away)):
                     continue
-                played = _safe(lambda: _game_played_state(
-                    entry, self.game, by_date)[0], True)
+                played = safe_call(lambda: _game_played_state(
+                    entry, self.game, by_date)[0], True, context="manager/_next_opponent")
                 if played:
                     continue
-                dk = _safe(lambda: _date_key(entry.get("date")))
+                dk = safe_call(lambda: _date_key(entry.get("date")), context="manager/_next_opponent")
                 if dk is None:
                     continue
                 if today_k is not None and dk < today_k:
@@ -1589,8 +1583,8 @@ class ManagerScreen(BaseScreen):
     @staticmethod
     def _team_facet_avgs(team):
         """Average shooting/defense/physicality/skating/goaltending."""
-        roster = [p for p in (_safe(
-            lambda: list(getattr(team, "roster", []) or []), []) or [])
+        roster = [p for p in (safe_call(
+            lambda: list(getattr(team, "roster", []) or []), [], context="manager/_team_facet_avgs") or [])
             if not getattr(p, "is_injured", False)]
         if not roster:
             return None
@@ -1662,9 +1656,9 @@ class ManagerScreen(BaseScreen):
             return None
         import manager_career as mc
         league = self._league()
-        standings = _safe(
-            lambda: getattr(league, "standings", None), {}) or {}
-        report = _safe(lambda: mc.generate_opposition_report(opp, standings))
+        standings = safe_call(
+            lambda: getattr(league, "standings", None), {}, context="manager/_opposition_report_data") or {}
+        report = safe_call(lambda: mc.generate_opposition_report(opp, standings), context="manager/_opposition_report_data")
         if not report:
             return None
         advice = [a for a in (report.get("tactical_advice") or []) if a]
@@ -1690,13 +1684,13 @@ class ManagerScreen(BaseScreen):
             advice.append("Play our game: manage the puck, finish checks, "
                           "and stay out of the box.")
         report["tactical_advice"] = advice
-        report["game_date_str"] = _safe(
+        report["game_date_str"] = safe_call(
             lambda: gdate.isoformat()
-            if hasattr(gdate, "isoformat") else str(gdate), "") or ""
+            if hasattr(gdate, "isoformat") else str(gdate), "", context="manager/_opposition_report_data") or ""
         return report
 
     def _build_opposition(self, lay):
-        data = _safe(self._opposition_report_data)
+        data = safe_call(self._opposition_report_data, context="manager/_build_opposition")
         if not data:
             lay.addWidget(QLabel("No upcoming game on the schedule — "
                                  "no opposition report."))
@@ -1805,7 +1799,7 @@ class ManagerScreen(BaseScreen):
             letter = getattr(p, "captaincy", None)
             if letter:
                 name = f"{name} ({letter})"
-            pos = _safe(lambda: _pl(p)) if _pl else "?"
+            pos = safe_call(lambda: _pl(p), context="manager/_refresh_squad_table") if _pl else "?"
             morale = getattr(p, "morale", 70) or 70
             happiness = getattr(p, "happiness", 70) or 70
             t.setItem(r, 0, QTableWidgetItem(name))
@@ -1813,9 +1807,9 @@ class ManagerScreen(BaseScreen):
             t.setItem(r, 2, _NumericItem(str(getattr(p, "age", "") or ""),
                                          getattr(p, "age", 0) or 0))
             t.setItem(r, 3, QTableWidgetItem(
-                _safe(lambda: mc.morale_label(morale)) or str(morale)))
+                safe_call(lambda: mc.morale_label(morale), context="manager/_refresh_squad_table") or str(morale)))
             t.setItem(r, 4, QTableWidgetItem(
-                _safe(lambda: mc.happiness_label(happiness))
+                safe_call(lambda: mc.happiness_label(happiness), context="manager/_refresh_squad_table")
                 or str(happiness)))
             t.setItem(r, 5, QTableWidgetItem(
                 str(getattr(p, "squad_status", "Rotation") or "Rotation")))
@@ -1843,8 +1837,8 @@ class ManagerScreen(BaseScreen):
             return
         import manager_career as mc
         gm = self._gm()
-        today = (_safe(lambda: getattr(gm, "current_date", None))
-                 or _safe(lambda: getattr(self.game, "current_date", None)))
+        today = (safe_call(lambda: getattr(gm, "current_date", None), context="manager/_do_chat")
+                 or safe_call(lambda: getattr(self.game, "current_date", None), context="manager/_do_chat"))
         try:
             text, _effects = mc.chat_with_player(p, action, today=today)
         except Exception as exc:

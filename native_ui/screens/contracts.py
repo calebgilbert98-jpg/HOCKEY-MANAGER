@@ -32,6 +32,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QIntValidator, QFont
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 from ..widgets.player_table import PlayerTable
 from .contract_negotiation import offer_outcome_text
 
@@ -39,12 +40,6 @@ from .contract_negotiation import offer_outcome_text
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
 
 
 def _fmt_money(v):
@@ -60,7 +55,7 @@ def _fmt_money(v):
 
 
 def _pid(p):
-    return str(_safe(lambda: getattr(p, "id", id(p)), ""))
+    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context="contracts/_pid"))
 
 
 _POSITION_ABBR = {
@@ -82,7 +77,7 @@ def _clean_position(pos):
 
 
 def _pos_str(p):
-    pos = _safe(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="contracts/_pos_str")
     return _clean_position(getattr(pos, "value", pos))
 
 
@@ -102,7 +97,7 @@ def _player_ovr(p):
 
 
 def _player_name(p):
-    return _safe(lambda: getattr(p, "full_name", "?"), "?")
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context="contracts/_player_name")
 
 
 def _parse_money(text):
@@ -118,58 +113,58 @@ def _parse_money(text):
 # ---------------------------------------------------------------------------
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="contracts/_resolve_gm") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="contracts/_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="contracts/_user_team"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="contracts/_user_league")
+            or safe_call(lambda: getattr(game, "league", None), context="contracts/_user_league"))
 
 
 def _contract_years(p):
-    c = _safe(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None), context="contracts/_contract_years")
     if c is not None:
-        y = _safe(lambda: getattr(c, "years_remaining", None))
+        y = safe_call(lambda: getattr(c, "years_remaining", None), context="contracts/_contract_years")
         if y is None:
-            y = _safe(lambda: getattr(c, "term", None))
-        return _safe(lambda: int(y), 0) or 0
-    return _safe(lambda: int(getattr(p, "contract_years", 0) or 0), 0) or 0
+            y = safe_call(lambda: getattr(c, "term", None), context="contracts/_contract_years")
+        return safe_call(lambda: int(y), 0, context="contracts/_contract_years") or 0
+    return safe_call(lambda: int(getattr(p, "contract_years", 0) or 0), 0, context="contracts/_contract_years") or 0
 
 
 def _contract_salary(p):
-    c = _safe(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None), context="contracts/_contract_salary")
     if c is not None:
-        s = _safe(lambda: int(getattr(c, "salary", 0) or 0), 0)
+        s = safe_call(lambda: int(getattr(c, "salary", 0) or 0), 0, context="contracts/_contract_salary")
         if s:
             return s
-    return _safe(lambda: int(getattr(p, "salary", 0) or 0), 0) or 0
+    return safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0, context="contracts/_contract_salary") or 0
 
 
 def _contract_row(p):
     """Row data for the contracts table. Never raises."""
     years = _contract_years(p)
     salary = _contract_salary(p)
-    c = _safe(lambda: getattr(p, "contract", None))
+    c = safe_call(lambda: getattr(p, "contract", None), context="contracts/_contract_row")
     clauses = []
-    if _safe(lambda: bool(getattr(c, "no_movement_clause", False)), False):
+    if safe_call(lambda: bool(getattr(c, "no_movement_clause", False)), False, context="contracts/_contract_row"):
         clauses.append("NMC")
-    if _safe(lambda: bool(getattr(c, "no_trade_clause", False)), False):
+    if safe_call(lambda: bool(getattr(c, "no_trade_clause", False)), False, context="contracts/_contract_row"):
         clauses.append("NTC")
-    if _safe(lambda: bool(getattr(c, "two_way", False)), False):
+    if safe_call(lambda: bool(getattr(c, "two_way", False)), False, context="contracts/_contract_row"):
         clauses.append("2-way")
     return {
         "player": p,
         "id": _pid(p),
         "name": _player_name(p),
         "position": _pos_str(p),
-        "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+        "age": safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="contracts/_contract_row"),
         "overall": _player_ovr(p),
         "salary": salary,
         "cap_hit": salary,
@@ -204,7 +199,7 @@ def _salary_bounds(game):
     cap = _live_cap(game)
     try:
         from salary_cap_system import league_minimum_salary
-        sy = _safe(lambda: getattr(_user_league(game), "season_year", None))
+        sy = safe_call(lambda: getattr(_user_league(game), "season_year", None), context="contracts/_salary_bounds")
         min_sal = int(league_minimum_salary(sy))
     except Exception:
         min_sal = 775_000
@@ -221,7 +216,7 @@ def _cap_state(game, offer_salary=0, extension=False, current_hit=0):
         from salary_cap_system import total_cap_charge
         cap = _live_cap(game)
         team = _user_team(game)
-        charge = int(_safe(lambda: total_cap_charge(team), 0))
+        charge = int(safe_call(lambda: total_cap_charge(team), 0, context="contracts/_cap_state"))
         proj = charge + int(offer_salary or 0)
         if extension:
             proj -= int(current_hit or 0)
@@ -250,7 +245,7 @@ def _extension_window(game, p):
     (transaction_windows.check_window). Returns (ok, reason)."""
     try:
         import transaction_windows as _tw
-        d = _safe(lambda: getattr(game, "current_date", None))
+        d = safe_call(lambda: getattr(game, "current_date", None), context="contracts/_extension_window")
         ok, why = _tw.check_window("extension", d, ctx={"player": p})
         return bool(ok), (why or "")
     except Exception:
@@ -268,8 +263,8 @@ def _extension_estimate(p, live_cap):
         from salary_cap_system import DEFAULT_CAP
     except Exception:
         DEFAULT_CAP = 104_000_000
-    ovr = _safe(lambda: float(p.overall_rating()), 75.0) or 75.0
-    age = _safe(lambda: int(getattr(p, "age", 27) or 27), 27)
+    ovr = safe_call(lambda: float(p.overall_rating()), 75.0, context="contracts/_extension_estimate") or 75.0
+    age = safe_call(lambda: int(getattr(p, "age", 27) or 27), 27, context="contracts/_extension_estimate")
     base = ovr * 100_000 * (live_cap / DEFAULT_CAP)
     age_mod = 1.2 if 23 <= age <= 29 else (
         max(0.5, 1.0 - ((age - 30) * 0.05)) if age >= 30 else 1.0)
@@ -280,7 +275,7 @@ def _extension_estimate(p, live_cap):
     pot_mod = 1.0
     if age <= 25:
         pot_mod = {"A": 1.5, "B": 1.3, "C": 1.1, "D": 1.0, "F": 0.9}.get(
-            _safe(lambda: getattr(p, "potential_grade", "C"), "C"), 1.0)
+            safe_call(lambda: getattr(p, "potential_grade", "C"), "C", context="contracts/_extension_estimate"), 1.0)
     perf = 0
     try:
         perf = int(p.stats.goals) * 50_000 + int(p.stats.assists) * 30_000
@@ -335,18 +330,18 @@ def _clause_info(game, p):
         return out
     team = _user_team(game)
     league = _user_league(game)
-    eligible = bool(_safe(lambda: te.clause_eligible(p), False))
+    eligible = bool(safe_call(lambda: te.clause_eligible(p), False, context="contracts/_clause_info"))
     out["eligible"] = eligible
     if not eligible:
         out["eligibility_note"] = ("Trade protection isn't available here "
                                    "-- the NHL only allows it for players "
                                    "27+ or with 7 pro seasons.")
-    demand = float(_safe(lambda: te.clause_demand_score(p, team, league),
-                         0.0) or 0.0)
+    demand = float(safe_call(lambda: te.clause_demand_score(p, team, league),
+                         0.0, context="contracts/_clause_info") or 0.0)
     out["demand"] = round(demand, 2)
     for kind in ("none", "nmc", "ntc", "mntc"):
-        label = _safe(lambda k=kind: te.clause_offer_label(k, 10), kind)
-        val = int(_safe(lambda k=kind: te.clause_annual_value(p, k), 0) or 0)
+        label = safe_call(lambda k=kind: te.clause_offer_label(k, 10), kind, context="contracts/_clause_info")
+        val = int(safe_call(lambda k=kind: te.clause_annual_value(p, k), 0, context="contracts/_clause_info") or 0)
         out["options"].append({
             "kind": kind, "label": str(label or kind),
             "annual_value": val,
@@ -369,40 +364,40 @@ def _comparables(game, p):
         my_ovr = float(p.overall_rating())
     except Exception:
         my_ovr = 75.0
-    my_pos = _safe(lambda: getattr(getattr(p, "primary_position", ""),
-                                   "value", ""), "")
+    my_pos = safe_call(lambda: getattr(getattr(p, "primary_position", ""),
+                                   "value", ""), "", context="contracts/_comparables")
     try:
         from attribute_composites import talent_tier as _tt
     except Exception:
         _tt = None
     league = _user_league(game)
-    teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+    teams = safe_call(lambda: list(getattr(league, "teams", None) or []), [], context="contracts/_comparables") or []
     comps = []
     for t in teams:
-        for q in _safe(lambda: list(getattr(t, "roster", None) or []),
-                       []) or []:
+        for q in safe_call(lambda: list(getattr(t, "roster", None) or []),
+                       [], context="contracts/_comparables") or []:
             try:
                 if q is p:
                     continue
                 ovr = float(q.overall_rating())
                 if abs(ovr - my_ovr) > 4:
                     continue
-                qpos = _safe(lambda: getattr(
-                    getattr(q, "primary_position", ""), "value", ""), "")
+                qpos = safe_call(lambda: getattr(
+                    getattr(q, "primary_position", ""), "value", ""), "", context="contracts/_comparables")
                 if qpos != my_pos:
                     continue
-                qc = _safe(lambda: getattr(q, "contract", None))
-                sal = int(_safe(lambda: getattr(qc, "salary", 0)
-                                or getattr(q, "salary", 0) or 0, 0) or 0)
-                yrs = int(_safe(lambda: getattr(qc, "years_remaining", 0)
+                qc = safe_call(lambda: getattr(q, "contract", None), context="contracts/_comparables")
+                sal = int(safe_call(lambda: getattr(qc, "salary", 0)
+                                or getattr(q, "salary", 0) or 0, 0, context="contracts/_comparables") or 0)
+                yrs = int(safe_call(lambda: getattr(qc, "years_remaining", 0)
                                 or getattr(q, "contract_years", 0) or 0,
-                                0) or 0)
+                                0, context="contracts/_comparables") or 0)
                 comps.append({
                     "name": _player_name(q),
-                    "team": _safe(lambda: getattr(t, "team_name", ""), ""),
+                    "team": safe_call(lambda: getattr(t, "team_name", ""), "", context="contracts/_comparables"),
                     "position": qpos,
                     "overall": round(ovr, 1),
-                    "tier": _safe(lambda: _tt(ovr), "") if _tt else "",
+                    "tier": safe_call(lambda: _tt(ovr), "", context="contracts/_comparables") if _tt else "",
                     "salary": sal,
                     "years_remaining": yrs,
                     "ovr_gap": round(abs(ovr - my_ovr), 1),
@@ -442,9 +437,9 @@ def _elc_eligible_prospect(game, pid):
     team = _user_team(game)
     if team is None:
         return None
-    tname = _safe(lambda: getattr(team, "team_name", ""), "")
-    pool = _safe(lambda: list(getattr(team, "prospects", None) or []),
-                 []) or []
+    tname = safe_call(lambda: getattr(team, "team_name", ""), "", context="contracts/_elc_eligible_prospect")
+    pool = safe_call(lambda: list(getattr(team, "prospects", None) or []),
+                 [], context="contracts/_elc_eligible_prospect") or []
     for p in pool:
         try:
             if _pid(p) != pid_s:
@@ -465,16 +460,16 @@ def _elc_band_info(game, p):
     try:
         import salary_cap_system as _scs
         league = _user_league(game)
-        season = _safe(lambda: getattr(league, "season_year", None))
-        age = int(_safe(lambda: getattr(p, "age", 20), 20) or 20)
+        season = safe_call(lambda: getattr(league, "season_year", None), context="contracts/_elc_band_info")
+        age = int(safe_call(lambda: getattr(p, "age", 20), 20, context="contracts/_elc_band_info") or 20)
         floor, ceil, years = _scs.elc_band(age, season)
-        max_sb_pct = float(_safe(lambda: _scs.ELC_SIGNING_BONUS_PCT, 0.10)
+        max_sb_pct = float(safe_call(lambda: _scs.ELC_SIGNING_BONUS_PCT, 0.10, context="contracts/_elc_band_info")
                            or 0.10)
-        max_pb = int(_safe(lambda: _scs.ELC_PERF_BONUS_MAX, 1_000_000)
+        max_pb = int(safe_call(lambda: _scs.ELC_PERF_BONUS_MAX, 1_000_000, context="contracts/_elc_band_info")
                      or 1_000_000)
-        max_comp = int(_safe(
-            lambda: _scs.elc_max_annual_comp(season), ceil) or ceil)
-        ask = _safe(lambda: _scs.elc_prospect_ask(p, season), {}) or {}
+        max_comp = int(safe_call(
+            lambda: _scs.elc_max_annual_comp(season), ceil, context="contracts/_elc_band_info") or ceil)
+        ask = safe_call(lambda: _scs.elc_prospect_ask(p, season), {}, context="contracts/_elc_band_info") or {}
         return {
             "ok": years > 0,
             "floor": int(floor), "ceiling": int(ceil), "years": int(years),
@@ -503,7 +498,7 @@ def _elc_band_info(game, p):
 # mirrored the agent's contract_counter inbox messages into it so the
 # in-page modal could show the offer thread. The native port does the same
 # directly on the game object. All state mutations run on the Qt thread;
-# every call is _safe-wrapped and uses real game methods only.
+# every call is safe_call-wrapped and uses real game methods only.
 # ---------------------------------------------------------------------------
 
 _NEG_STATUSES = ("awaiting_agent", "countered", "accepted", "refused",
@@ -564,11 +559,11 @@ def _apply_offer_verdict(game, st, result):
     counter = _pending_counter_message(game, st.get("player_id"))
     if counter is not None:
         data = getattr(counter, "action_data", None) or {}
-        st["agent_ask"] = _safe(lambda: int(data.get("asking_price", 0)
-                                            or 0), 0)
+        st["agent_ask"] = safe_call(lambda: int(data.get("asking_price", 0)
+                                            or 0), 0, context="contracts/_apply_offer_verdict")
         st["counter_terms"] = {
-            "years": _safe(lambda: int(data.get("years", 1) or 1), 1),
-            "aav": _safe(lambda: int(data.get("asking_price", 0) or 0), 0),
+            "years": safe_call(lambda: int(data.get("years", 1) or 1), 1, context="contracts/_apply_offer_verdict"),
+            "aav": safe_call(lambda: int(data.get("asking_price", 0) or 0), 0, context="contracts/_apply_offer_verdict"),
         }
         st["status"] = "countered"
     else:
@@ -736,7 +731,7 @@ def submit_offer(game, player, kind, years, aav, extras=None):
         return st
     if not _offer_result_accepted(result):
         _restore_attrs(player, _orig)
-    _safe(lambda: _apply_offer_verdict(game, st, result))
+    safe_call(lambda: _apply_offer_verdict(game, st, result), context="contracts/submit_offer")
     return st
 
 
@@ -766,10 +761,10 @@ def negotiate_counter(game, pid, years, aav, extras=None):
         return False, "No open negotiation for this player."
     # Re-validate through the game's own gate (the desktop counter path
     # gates accept too: main.py:22456).
-    ok, reason = _safe(
+    ok, reason = safe_call(
         lambda: game._validate_contract_terms(player, aav, years,
                                               extension=extension),
-        (False, "Could not validate contract terms."))
+        (False, "Could not validate contract terms."), context="contracts/negotiate_counter")
     if not ok:
         st["note"] = str(reason or "")
         st["status"] = "countered"  # talks stay open
@@ -781,7 +776,7 @@ def negotiate_counter(game, pid, years, aav, extras=None):
             return False, wmsg
     old = _pending_counter_message(game, pid_s)
     if old is not None:
-        _safe(lambda: setattr(old, "action_done", True))
+        safe_call(lambda: setattr(old, "action_done", True), context="contracts/negotiate_counter")
     submit_offer(game, player, kind, years, aav, extras)
     return True, ""
 
@@ -829,7 +824,7 @@ def negotiate_walk(game, pid):
     try:
         counter = _pending_counter_message(game, pid_s)
         if counter is not None:
-            _safe(lambda: setattr(counter, "action_done", True))
+            safe_call(lambda: setattr(counter, "action_done", True), context="contracts/negotiate_walk")
         st = _negotiations(game).get(pid_s)
         if st is not None:
             st["status"] = "walked"
@@ -1054,12 +1049,12 @@ class ExtensionDialog(QDialog):
                     band.get("error") or "Not ELC-eligible.")
             self._player_lbl.setText(
                 f"{_player_name(p)} · {_pos_str(p)} · Age "
-                f"{_safe(lambda: int(getattr(p, 'age', 0) or 0), 0)} · "
-                f"POT {_safe(lambda: getattr(p, 'potential_grade', '?'), '?')}")
+                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context="contracts/_load_static")} · "
+                f"POT {safe_call(lambda: getattr(p, 'potential_grade', '?'), '?', context="contracts/_load_static")}")
         else:
             self._player_lbl.setText(
                 f"{_player_name(p)} · {_pos_str(p)} · Age "
-                f"{_safe(lambda: int(getattr(p, 'age', 0) or 0), 0)} · "
+                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context="contracts/_load_static")} · "
                 f"{_player_ovr(p)} OVR")
             self._clause_opts = _clause_info(game, p)
             self._fill_clause_combo()
@@ -1599,10 +1594,10 @@ class NegotiationDialog(QDialog):
                 if counter is not None:
                     data = getattr(counter, "action_data", None) or {}
                     terms = {
-                        "years": _safe(
-                            lambda: int(data.get("years", 1) or 1), 1),
-                        "aav": _safe(
-                            lambda: int(data.get("asking_price", 0) or 0), 0),
+                        "years": safe_call(
+                            lambda: int(data.get("years", 1) or 1), 1, context="contracts/_live_sync"),
+                        "aav": safe_call(
+                            lambda: int(data.get("asking_price", 0) or 0), 0, context="contracts/_live_sync"),
                     }
                     if st.get("status") != "countered" or \
                             st.get("counter_terms") != terms:
@@ -1910,8 +1905,8 @@ class ContractsScreen(BaseScreen):
         players = []
         for lst in ("roster", "ahl_roster"):
             players.extend(
-                _safe(lambda: list(getattr(team, lst, None) or []),
-                      []) or [])
+                safe_call(lambda: list(getattr(team, lst, None) or []),
+                      [], context="contracts/_load") or [])
         rows = [_contract_row(p) for p in players]
         for r in rows:
             st = _negotiations(self.game).get(r["id"])
@@ -1983,14 +1978,14 @@ class ContractsScreen(BaseScreen):
         players = []
         for lst in ("roster", "ahl_roster"):
             players.extend(
-                _safe(lambda: list(getattr(team, lst, None) or []),
-                      []) or [])
+                safe_call(lambda: list(getattr(team, lst, None) or []),
+                      [], context="contracts/_auto_negotiate") or [])
         expiring_players = [p for p in players if _contract_years(p) == 1]
         expiring_staff = [
-            s for s in _safe(lambda: list(getattr(team, "staff", None)
-                                          or []), []) or []
-            if _safe(lambda: int(getattr(s, "contract_years", 0) or 0),
-                     0) == 1]
+            s for s in safe_call(lambda: list(getattr(team, "staff", None)
+                                          or []), [], context="contracts/_auto_negotiate") or []
+            if safe_call(lambda: int(getattr(s, "contract_years", 0) or 0),
+                     0, context="contracts/_auto_negotiate") == 1]
         n = len(expiring_players) + len(expiring_staff)
         if n == 0:
             QMessageBox.information(
@@ -2004,21 +1999,21 @@ class ContractsScreen(BaseScreen):
             return
         results = []
         for person in expiring_players + expiring_staff:
-            name = _safe(lambda: getattr(person, "full_name", None),
-                         None) or _safe(
+            name = safe_call(lambda: getattr(person, "full_name", None),
+                         None, context="contracts/_auto_negotiate") or safe_call(
                              lambda: getattr(person, "name", "Unknown"),
-                             "Unknown")
-            salary = _contract_salary(person) or _safe(
+                             "Unknown", context="contracts/_auto_negotiate")
+            salary = _contract_salary(person) or safe_call(
                 lambda: int(getattr(person, "salary", 750_000)
-                            or 750_000), 750_000)
-            years = _contract_years(person) or _safe(
-                lambda: int(getattr(person, "contract_years", 1) or 1), 1)
+                            or 750_000), 750_000, context="contracts/_auto_negotiate")
+            years = _contract_years(person) or safe_call(
+                lambda: int(getattr(person, "contract_years", 1) or 1), 1, context="contracts/_auto_negotiate")
             # Pre-validate through the game's own gate so the offer path
             # never reaches its Tk messagebox fallback.
-            ok, reason = _safe(
+            ok, reason = safe_call(
                 lambda: game._validate_contract_terms(
                     person, salary, years, extension=True),
-                (False, "validation failed"))
+                (False, "validation failed"), context="contracts/_auto_negotiate")
             if not ok:
                 results.append(f"{name}: Skipped ({reason})")
                 continue

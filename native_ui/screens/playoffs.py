@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
 # ----------------------------------------------------------------------
@@ -32,13 +33,6 @@ ROUND_ORDER = ["wild_card", "division_semifinals", "division_finals",
                "conference_finals", "stanley_cup_final"]
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _resolve_gm(game):
     return getattr(game, "game_manager", None) or game
 
@@ -47,7 +41,7 @@ def _abbr(team):
     try:
         from web_ui.bridge import to_web_team
         t = to_web_team(team)
-        return _safe(lambda: t.get("abbr") or t.get("name"), "?") or "?"
+        return safe_call(lambda: t.get("abbr") or t.get("name"), "?", context="playoffs/_abbr") or "?"
     except Exception:
         pass
     try:
@@ -59,20 +53,20 @@ def _abbr(team):
 
 def _series_to_web(s):
     """PlayoffSeries -> plain dict."""
-    t1 = _safe(lambda: s.team1)
-    t2 = _safe(lambda: s.team2)
-    t1_wins = _safe(lambda: int(s.team1_wins or 0), 0)
-    t2_wins = _safe(lambda: int(s.team2_wins or 0), 0)
-    complete = _safe(lambda: bool(s.is_complete), False)
-    winner = _safe(lambda: s.winner)
+    t1 = safe_call(lambda: s.team1, context="playoffs/_series_to_web")
+    t2 = safe_call(lambda: s.team2, context="playoffs/_series_to_web")
+    t1_wins = safe_call(lambda: int(s.team1_wins or 0), 0, context="playoffs/_series_to_web")
+    t2_wins = safe_call(lambda: int(s.team2_wins or 0), 0, context="playoffs/_series_to_web")
+    complete = safe_call(lambda: bool(s.is_complete), False, context="playoffs/_series_to_web")
+    winner = safe_call(lambda: s.winner, context="playoffs/_series_to_web")
     winner_name = _abbr(winner) if winner else None
     return {
-        "id": _safe(lambda: str(getattr(s, "series_id", "") or ""), ""),
-        "round": _safe(lambda: getattr(s, "round_name", "") or ""),
+        "id": safe_call(lambda: str(getattr(s, "series_id", "") or ""), "", context="playoffs/_series_to_web"),
+        "round": safe_call(lambda: getattr(s, "round_name", "") or "", context="playoffs/_series_to_web"),
         "team1": _abbr(t1),
-        "team1_name": _safe(lambda: getattr(t1, "team_name", "") or ""),
+        "team1_name": safe_call(lambda: getattr(t1, "team_name", "") or "", context="playoffs/_series_to_web"),
         "team2": _abbr(t2),
-        "team2_name": _safe(lambda: getattr(t2, "team_name", "") or ""),
+        "team2_name": safe_call(lambda: getattr(t2, "team_name", "") or "", context="playoffs/_series_to_web"),
         "team1_wins": t1_wins,
         "team2_wins": t2_wins,
         "score": f"{t1_wins}-{t2_wins}",
@@ -85,10 +79,10 @@ def _series_to_web(s):
 
 def _bracket(game):
     gm = _resolve_gm(game)
-    league = _safe(lambda: getattr(gm, "league", None))
+    league = safe_call(lambda: getattr(gm, "league", None), context="playoffs/_bracket")
     if league is None:
-        league = _safe(lambda: getattr(game, "league", None))
-    return _safe(lambda: getattr(league, "playoff_bracket", None))
+        league = safe_call(lambda: getattr(game, "league", None), context="playoffs/_bracket")
+    return safe_call(lambda: getattr(league, "playoff_bracket", None), context="playoffs/_bracket")
 
 
 def _bracket_payload(game):
@@ -97,23 +91,23 @@ def _bracket_payload(game):
     if bracket is None:
         return {"started": False, "champion": None, "current_round": None,
                 "rounds": [], "is_projection": True}
-    series_map = _safe(lambda: dict(getattr(bracket, "playoff_series", None)
-                                    or {}), {})
+    series_map = safe_call(lambda: dict(getattr(bracket, "playoff_series", None)
+                                    or {}), {}, context="playoffs/_bracket_payload")
     rounds = []
     for key in ROUND_ORDER:
-        series_list = _safe(lambda: list(series_map.get(key, []) or []), [])
+        series_list = safe_call(lambda: list(series_map.get(key, []) or []), [], context="playoffs/_bracket_payload")
         rounds.append({
             "key": key,
             "label": ROUND_LABELS.get(key, key.replace("_", " ").title()),
             "series": [_series_to_web(s) for s in series_list],
         })
     started = any(r["series"] for r in rounds)
-    current_key = _safe(lambda: getattr(bracket, "current_round", ""), "")
-    champion = _safe(lambda: getattr(bracket, "stanley_cup_champion", None))
+    current_key = safe_call(lambda: getattr(bracket, "current_round", ""), "", context="playoffs/_bracket_payload")
+    champion = safe_call(lambda: getattr(bracket, "stanley_cup_champion", None), context="playoffs/_bracket_payload")
     return {
         "started": started,
         "champion": _abbr(champion) if champion else None,
-        "champion_name": _safe(lambda: getattr(champion, "team_name", ""), "")
+        "champion_name": safe_call(lambda: getattr(champion, "team_name", ""), "", context="playoffs/_bracket_payload")
         if champion else "",
         "current_round": ROUND_LABELS.get(current_key, current_key)
         if current_key else None,
@@ -139,10 +133,10 @@ def _projection_payload(game):
         proj.build_projection()
     except Exception:
         return {"available": False, "rounds": []}
-    sm = _safe(lambda: dict(getattr(proj, "playoff_series", None) or {}), {})
+    sm = safe_call(lambda: dict(getattr(proj, "playoff_series", None) or {}), {}, context="playoffs/_projection_payload")
     rounds = []
     for key in ROUND_ORDER:
-        series_list = _safe(lambda: list(sm.get(key, []) or []), [])
+        series_list = safe_call(lambda: list(sm.get(key, []) or []), [], context="playoffs/_projection_payload")
         rounds.append({
             "key": key,
             "label": ROUND_LABELS.get(key, key.replace("_", " ").title()),
@@ -157,11 +151,11 @@ def _series_index(game):
     bracket = _bracket(game)
     if bracket is None:
         return idx
-    sm = _safe(lambda: dict(getattr(bracket, "playoff_series", None) or {}),
-               {}) or {}
+    sm = safe_call(lambda: dict(getattr(bracket, "playoff_series", None) or {}),
+               {}, context="playoffs/_series_index") or {}
     for series_list in sm.values():
-        for s in _safe(lambda: list(series_list or []), []) or []:
-            sid = _safe(lambda: str(getattr(s, "series_id", "") or ""))
+        for s in safe_call(lambda: list(series_list or []), [], context="playoffs/_series_index") or []:
+            sid = safe_call(lambda: str(getattr(s, "series_id", "") or ""), context="playoffs/_series_index")
             if sid:
                 idx[sid] = (s, bracket)
     return idx
@@ -186,12 +180,12 @@ def _series_detail(game, series_id):
                 pbr = ps2.PlayoffBracket()
                 pbr.build_projection()
                 pbr.is_projection = True
-                sm = _safe(lambda: dict(getattr(pbr, "playoff_series", None)
-                                        or {}), {}) or {}
+                sm = safe_call(lambda: dict(getattr(pbr, "playoff_series", None)
+                                        or {}), {}, context="playoffs/_series_detail") or {}
                 for series_list in sm.values():
-                    for s in _safe(lambda: list(series_list or []), []) or []:
-                        if _safe(lambda: str(getattr(s, "series_id", "")
-                                             or "")) == series_id:
+                    for s in safe_call(lambda: list(series_list or []), [], context="playoffs/_series_detail") or []:
+                        if safe_call(lambda: str(getattr(s, "series_id", "")
+                                             or ""), context="playoffs/_series_detail") == series_id:
                             found = (s, pbr)
                             break
                     if found:
@@ -201,45 +195,45 @@ def _series_detail(game, series_id):
     if found is None:
         return {"found": False}
     series, bracket = found
-    projected = bool(_safe(lambda: getattr(bracket, "is_projection", False),
-                           False))
+    projected = bool(safe_call(lambda: getattr(bracket, "is_projection", False),
+                           False, context="playoffs/_series_detail"))
     try:
-        t1 = _safe(lambda: series.team1)
-        t2 = _safe(lambda: series.team2)
+        t1 = safe_call(lambda: series.team1, context="playoffs/_series_detail")
+        t2 = safe_call(lambda: series.team2, context="playoffs/_series_detail")
         status, _dec = ps.series_status_text(series)
 
         def _team_card(t):
-            nm = _safe(lambda: getattr(t, "team_name", "") or "", "")
-            pos = _safe(lambda: getattr(t, "standings_position", ""), "")
+            nm = safe_call(lambda: getattr(t, "team_name", "") or "", "", context="playoffs/_team_card")
+            pos = safe_call(lambda: getattr(t, "standings_position", ""), "", context="playoffs/_team_card")
             return {
                 "name": nm, "abbr": _abbr(t), "seed": pos,
                 "record": {
-                    "w": _safe(lambda: int(getattr(t, "wins", 0) or 0), 0),
-                    "l": _safe(lambda: int(getattr(t, "losses", 0) or 0), 0),
-                    "otl": _safe(lambda: int(getattr(t, "ot_losses", 0)
-                                             or getattr(t, "otl", 0) or 0), 0),
+                    "w": safe_call(lambda: int(getattr(t, "wins", 0) or 0), 0, context="playoffs/_team_card"),
+                    "l": safe_call(lambda: int(getattr(t, "losses", 0) or 0), 0, context="playoffs/_team_card"),
+                    "otl": safe_call(lambda: int(getattr(t, "ot_losses", 0)
+                                             or getattr(t, "otl", 0) or 0), 0, context="playoffs/_team_card"),
                 },
-                "gf": _safe(lambda: int(getattr(t, "goals_for", 0) or 0), 0),
-                "ga": _safe(lambda: int(getattr(t, "goals_against", 0) or 0),
-                            0),
+                "gf": safe_call(lambda: int(getattr(t, "goals_for", 0) or 0), 0, context="playoffs/_team_card"),
+                "ga": safe_call(lambda: int(getattr(t, "goals_against", 0) or 0),
+                            0, context="playoffs/_team_card"),
             }
 
         detail = {
             "found": True,
             "id": series_id,
             "projected": projected,
-            "round": _safe(lambda: getattr(series, "round_name", "") or ""),
+            "round": safe_call(lambda: getattr(series, "round_name", "") or "", context="playoffs/_series_detail"),
             "teams": [_team_card(t1), _team_card(t2)],
             "score": _series_to_web(series),
             "status": status or "Not started",
-            "storylines": _safe(
-                lambda: list(ps._series_storylines(series)), []) or [],
+            "storylines": safe_call(
+                lambda: list(ps._series_storylines(series)), [], context="playoffs/_series_detail") or [],
             "players_to_watch": [],
             "games": [],
             "road_ahead": None,
         }
-        for g in _safe(lambda: list(getattr(series, "game_results", None)
-                                    or []), []) or []:
+        for g in safe_call(lambda: list(getattr(series, "game_results", None)
+                                    or []), [], context="playoffs/_series_detail") or []:
             try:
                 detail["games"].append({
                     "game": g.get("game_number", len(detail["games"]) + 1),

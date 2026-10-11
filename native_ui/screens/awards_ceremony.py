@@ -21,32 +21,26 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="awards_ceremony/_gm") or game
 
 
 def _league(game):
-    return _safe(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league, context="awards_ceremony/_league")
 
 
 def _season_label(league):
-    y = _safe(lambda: int(getattr(league, "season_year", 0) or 0), 0)
+    y = safe_call(lambda: int(getattr(league, "season_year", 0) or 0), 0, context="awards_ceremony/_season_label")
     return f"{y}-{y + 1}" if y else ""
 
 
 def _players(league):
     out = []
-    for t in (_safe(lambda: list(league.teams), []) or []):
-        out.extend(_safe(lambda: list(t.roster), []) or [])
+    for t in (safe_call(lambda: list(league.teams), [], context="awards_ceremony/_players") or []):
+        out.extend(safe_call(lambda: list(t.roster), [], context="awards_ceremony/_players") or [])
     return out
 
 
@@ -54,7 +48,7 @@ def _roster_map(league):
     try:
         import awards_race as ar
         return ar.roster_team_map(
-            _safe(lambda: list(league.teams), []) or [])
+            safe_call(lambda: list(league.teams), [], context="awards_ceremony/_roster_map") or [])
     except Exception:
         return {}
 
@@ -64,7 +58,7 @@ def _calc_season_awards_impl(game, league):
     decide the trophies (no display-vs-reality split)."""
     import awards_race as ar
     players = _players(league)
-    teams = _safe(lambda: list(league.teams), []) or []
+    teams = safe_call(lambda: list(league.teams), [], context="awards_ceremony/_calc_season_awards_impl") or []
     team_pct = {}
     for t in teams:
         gp = getattr(t, "games_played", 0) or 0
@@ -138,9 +132,9 @@ def _ceremony_script(game, league):
 
     p = _Proxy()
     p.league = league
-    p.current_date = _safe(lambda: getattr(gm, "current_date", None))
-    p._playoff_bracket = _safe(
-        lambda: getattr(league, "playoff_bracket", None))
+    p.current_date = safe_call(lambda: getattr(gm, "current_date", None), context="awards_ceremony/_ceremony_script")
+    p._playoff_bracket = safe_call(
+        lambda: getattr(league, "playoff_bracket", None), context="awards_ceremony/_ceremony_script")
 
     def _calc(players):
         return _calc_season_awards_impl(game, league)

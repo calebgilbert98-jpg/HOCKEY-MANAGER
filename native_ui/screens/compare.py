@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 from ..widgets.attribute_bar import AttributeBar
 
 try:
@@ -21,16 +22,9 @@ except Exception:
     _gc = None
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _to100(v):
     if _gc is not None:
-        return _safe(lambda: _gc.to_100_scale(v), 50) or 50
+        return safe_call(lambda: _gc.to_100_scale(v), 50, context="compare/_to100") or 50
     try:
         return int(v)
     except Exception:
@@ -175,59 +169,59 @@ class CompareScreen(BaseScreen):
 
     def _league(self):
         gm = self._gm()
-        return (_safe(lambda: getattr(gm, "league", None))
-                or _safe(lambda: getattr(self.game, "league", None)))
+        return (safe_call(lambda: getattr(gm, "league", None), context="compare/_league")
+                or safe_call(lambda: getattr(self.game, "league", None), context="compare/_league"))
 
     def _user_team(self):
         gm = self._gm()
-        return (_safe(lambda: getattr(gm, "user_team", None))
-                or _safe(lambda: getattr(self.game, "user_team", None)))
+        return (safe_call(lambda: getattr(gm, "user_team", None), context="compare/_user_team")
+                or safe_call(lambda: getattr(self.game, "user_team", None), context="compare/_user_team"))
 
     def _is_goalie(self, p):
         return "GOALIE" in str(
-            _safe(lambda: getattr(p, "primary_position", ""), "")).upper()
+            safe_call(lambda: getattr(p, "primary_position", ""), "", context="compare/_is_goalie")).upper()
 
     def _overall(self, p):
-        raw = _safe(lambda: getattr(p, "overall", 50), 50)
+        raw = safe_call(lambda: getattr(p, "overall", 50), 50, context="compare/_overall")
         return int(_to100(raw))
 
     def _pos_str(self, p):
-        pos = _safe(lambda: getattr(p, "primary_position", None))
+        pos = safe_call(lambda: getattr(p, "primary_position", None), context="compare/_pos_str")
         if pos:
             return str(pos)
-        pos = _safe(lambda: getattr(p, "position", "?"))
+        pos = safe_call(lambda: getattr(p, "position", "?"), context="compare/_pos_str")
         return getattr(pos, "value", str(pos))
 
     def _find_player(self, pid):
         league = self._league()
-        teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
+        teams = safe_call(lambda: list(getattr(league, "teams", []) or []), [], context="compare/_find_player") or []
         user_team = self._user_team()
         if user_team is not None and all(t is not user_team for t in teams):
             teams = [user_team] + teams
         for team in teams:
             for lname in ("roster", "ahl_roster", "prospects"):
-                lst = _safe(lambda: list(getattr(team, lname, []) or []),
-                            []) or []
+                lst = safe_call(lambda: list(getattr(team, lname, []) or []),
+                            [], context="compare/_find_player") or []
                 for p in lst:
-                    if str(_safe(lambda: getattr(p, "id", ""), "")) == str(pid):
+                    if str(safe_call(lambda: getattr(p, "id", ""), "", context="compare/_find_player")) == str(pid):
                         return p, team
         return None, None
 
     def _all_players(self):
         """Search index: every rostered/AHL/prospect player in the league."""
         league = self._league()
-        teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
+        teams = safe_call(lambda: list(getattr(league, "teams", []) or []), [], context="compare/_all_players") or []
         user_team = self._user_team()
         if user_team is not None and all(t is not user_team for t in teams):
             teams = [user_team] + teams
         out, seen = [], set()
         for team in teams:
-            tname = _safe(lambda: str(getattr(team, "team_name", "")), "")
+            tname = safe_call(lambda: str(getattr(team, "team_name", "")), "", context="compare/_all_players")
             for lname in ("roster", "ahl_roster", "prospects"):
-                lst = _safe(lambda: list(getattr(team, lname, []) or []),
-                            []) or []
+                lst = safe_call(lambda: list(getattr(team, lname, []) or []),
+                            [], context="compare/_all_players") or []
                 for p in lst:
-                    pid = str(_safe(lambda: getattr(p, "id", ""), ""))
+                    pid = str(safe_call(lambda: getattr(p, "id", ""), "", context="compare/_all_players"))
                     if not pid or pid in seen:
                         continue
                     seen.add(pid)
@@ -299,8 +293,8 @@ class CompareScreen(BaseScreen):
                     child.deleteLater()
             if i < len(self._players):
                 p = self._players[i]
-                name = _safe(lambda: getattr(p, "full_name", "?"), "?")
-                meta = (f"{_safe(lambda: str(getattr(p, 'team_name', '')), '')} · "
+                name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context="compare/_render_slots")
+                meta = (f"{safe_call(lambda: str(getattr(p, 'team_name', '')), '', context="compare/_render_slots")} · "
                         f"{self._pos_str(p)} · {self._overall(p)} OVR")
                 name_l = QLabel(str(name))
                 name_l.setStyleSheet("font-weight: 700; font-size: 14px;")
@@ -360,16 +354,16 @@ class CompareScreen(BaseScreen):
         if len(q) < 2:
             self._results.hide()
             return
-        added_ids = {str(_safe(lambda: getattr(p, "id", ""), ""))
+        added_ids = {str(safe_call(lambda: getattr(p, "id", ""), "", context="compare/_run_search"))
                      for p in self._players}
         shown = 0
         for p, tname in self._all_players():
             if shown >= 25:
                 break
-            name = _safe(lambda: getattr(p, "full_name", ""), "") or ""
+            name = safe_call(lambda: getattr(p, "full_name", ""), "", context="compare/_run_search") or ""
             if q not in name.lower():
                 continue
-            pid = str(_safe(lambda: getattr(p, "id", ""), ""))
+            pid = str(safe_call(lambda: getattr(p, "id", ""), "", context="compare/_run_search"))
             item = QListWidgetItem(
                 f"{name}  ·  {tname or 'Free Agent'}  ·  {self._pos_str(p)}"
                 f"  ·  {self._overall(p)} OVR")
@@ -390,9 +384,9 @@ class CompareScreen(BaseScreen):
             QMessageBox.information(self, "Compare",
                                     "You can compare at most 4 players.")
             return
-        ids = {str(_safe(lambda: getattr(q, "id", ""), ""))
+        ids = {str(safe_call(lambda: getattr(q, "id", ""), "", context="compare/_on_result_chosen"))
                for q in self._players}
-        if str(_safe(lambda: getattr(p, "id", ""), "")) in ids:
+        if str(safe_call(lambda: getattr(p, "id", ""), "", context="compare/_on_result_chosen")) in ids:
             return
         slot = self._active_slot
         if 0 <= slot < self.MAX_PLAYERS:
@@ -425,7 +419,7 @@ class CompareScreen(BaseScreen):
                 obj = entry
             if obj is None:
                 continue
-            pid = str(_safe(lambda: getattr(obj, "id", ""), ""))
+            pid = str(safe_call(lambda: getattr(obj, "id", ""), "", context="compare/set_players"))
             if pid and pid in seen:
                 continue
             seen.add(pid)
@@ -444,18 +438,18 @@ class CompareScreen(BaseScreen):
     # ------------------------------------------------------------------
     def _player_data(self, p):
         goalie = self._is_goalie(p)
-        name = _safe(lambda: getattr(p, "full_name", "?"), "?")
-        team_name = (_safe(lambda: str(getattr(p, "team_name", "")), "")
+        name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context="compare/_player_data")
+        team_name = (safe_call(lambda: str(getattr(p, "team_name", "")), "", context="compare/_player_data")
                      or "Free Agent")
         pos = self._pos_str(p)
-        age = _safe(lambda: int(getattr(p, "age", 0) or 0), 0)
+        age = safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="compare/_player_data")
 
         # stats
-        st = _safe(lambda: getattr(p, "stats", None))
+        st = safe_call(lambda: getattr(p, "stats", None), context="compare/_player_data")
         stats = []
         if goalie:
             for key, label, field, hb in _STAT_DEFS_GOALIE:
-                raw = _safe(lambda: getattr(st, field, 0) or 0, 0)
+                raw = safe_call(lambda: getattr(st, field, 0) or 0, 0, context="compare/_player_data")
                 if key == "SV%":
                     disp, num = f"{float(raw):.3f}", float(raw)
                 elif key == "GAA":
@@ -466,25 +460,25 @@ class CompareScreen(BaseScreen):
                               "numval": num, "higher_better": hb,
                               "bar": False})
         else:
-            g = _safe(lambda: int(getattr(st, "goals", 0) or 0), 0)
-            a = _safe(lambda: int(getattr(st, "assists", 0) or 0), 0)
-            pm = _safe(lambda: int(getattr(p, "plus_minus", 0) or 0), 0)
+            g = safe_call(lambda: int(getattr(st, "goals", 0) or 0), 0, context="compare/_player_data")
+            a = safe_call(lambda: int(getattr(st, "assists", 0) or 0), 0, context="compare/_player_data")
+            pm = safe_call(lambda: int(getattr(p, "plus_minus", 0) or 0), 0, context="compare/_player_data")
             vals = {"G": g, "A": a, "PTS": g + a, "+/-": pm}
             for key, label, field, hb in _STAT_DEFS_SKATER:
                 if key in vals:
                     num = vals[key]
                 else:
-                    num = _safe(lambda: int(getattr(st, field, 0) or 0), 0)
+                    num = safe_call(lambda: int(getattr(st, field, 0) or 0), 0, context="compare/_player_data")
                 stats.append({"key": key, "label": label,
                               "display": str(num), "numval": num,
                               "higher_better": hb, "bar": False})
 
         # contract
-        c = _safe(lambda: getattr(p, "contract", None))
-        sal = _safe(lambda: int(getattr(c, "salary", 0) or 0),
-                    0) if c is not None else 0
-        yrs = _safe(lambda: getattr(c, "years_remaining", None),
-                    None) if c is not None else None
+        c = safe_call(lambda: getattr(p, "contract", None), context="compare/_player_data")
+        sal = safe_call(lambda: int(getattr(c, "salary", 0) or 0),
+                    0, context="compare/_player_data") if c is not None else 0
+        yrs = safe_call(lambda: getattr(c, "years_remaining", None),
+                    None, context="compare/_player_data") if c is not None else None
         contract = [
             {"key": "CAPHIT", "label": "Cap Hit",
              "display": _fmt_money(sal) if sal else "--",
@@ -507,10 +501,10 @@ class CompareScreen(BaseScreen):
         for gname, fields in lists:
             rows = []
             for label, field in fields:
-                val = _safe(lambda: getattr(p, field, None))
+                val = safe_call(lambda: getattr(p, field, None), context="compare/_player_data")
                 if val is None and field in ("offensive_positioning",
                                              "defensive_positioning"):
-                    val = _safe(lambda: getattr(p, "positioning", None))
+                    val = safe_call(lambda: getattr(p, "positioning", None), context="compare/_player_data")
                 if val is None:
                     continue
                 rows.append((label, int(_to100(val))))

@@ -22,24 +22,18 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 from ..widgets.player_table import PlayerTable
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="dressing_room/_resolve_gm") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="dressing_room/_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="dressing_room/_user_team"))
 
 
 class DressingRoomScreen(BaseScreen):
@@ -137,7 +131,7 @@ class DressingRoomScreen(BaseScreen):
         team = _user_team(self.game)
         if not team:
             return
-        roster = _safe(lambda: list(getattr(team, "roster", None) or []), [])
+        roster = safe_call(lambda: list(getattr(team, "roster", None) or []), [], context="dressing_room/refresh")
 
         # Hierarchy: sort by influence (captaincy + tenure + age)
         def _influence(p):
@@ -180,9 +174,9 @@ class DressingRoomScreen(BaseScreen):
 
         # Room feed
         self._feed_list.clear()
-        feed = _safe(lambda: list(
+        feed = safe_call(lambda: list(
             getattr(team, "room_feed", None)
-            or getattr(team, "dressing_room_feed", None) or []), [])
+            or getattr(team, "dressing_room_feed", None) or []), [], context="dressing_room/refresh")
         # Also try the module
         if not feed:
             try:
