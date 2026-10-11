@@ -207,7 +207,7 @@ def run_season_validation():
         ranked = sorted(standings.items(),
                         key=lambda x: (2*x[1]['W'] + x[1]['OTL'], x[1]['GF'] - x[1]['GA']),
                         reverse=True)
-        print(f"\nTop 5: {', '.join(f'{n} ({2*s['W']+s['OTL']}pts)' for n, s in ranked[:5])}")
+        print("\nTop 5: " + ', '.join(f"{n} ({2*s['W']+s['OTL']}pts)" for n, s in ranked[:5]))
         return True
 
 

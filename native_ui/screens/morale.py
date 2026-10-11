@@ -82,7 +82,7 @@ TIER_LABEL = {
 
 CRISIS_CHOICES = [
     ("keep", "Back him publicly",
-     "The C stays. The room steadies, barely \u2014 he is on notice, not exonerated."),
+     "The C stays. The room steadies, barely — he is on notice, not exonerated."),
     ("challenge", "Challenge him privately",
      "Behind closed doors. He responds (leadership +3) or resents it (trade-request risk up)."),
     ("strip", "Strip the C",
@@ -93,11 +93,11 @@ CRISIS_CHOICES = [
 
 TALK_TONES = [
     ("calm", "Calm",
-     "Steadies nerves. Best when tied or protecting a lead \u2014 and the tone losing streaks crave."),
+     "Steadies nerves. Best when tied or protecting a lead — and the tone losing streaks crave."),
     ("fired-up", "Fired Up",
      "Chases a deficit. Electric when trailing or in rivalry games; reads as panic when comfortably ahead."),
     ("cautious", "Cautious",
-     "Protects a lead. Locks in structure \u2014 the intermission talk of a coach sitting on two goals."),
+     "Protects a lead. Locks in structure — the intermission talk of a coach sitting on two goals."),
 ]
 
 
@@ -161,8 +161,8 @@ class AdviseCoachDialog(QDialog):
 
         sub = QLabel(
             f"{safe_call(lambda: getattr(coach, 'full_name', 'Coach'), 'Coach')} "
-            f"\u00b7 GM trust {safe_call(lambda: int(getattr(coach, 'gm_trust', 70) or 70), 70)}/100 "
-            "\u2014 whether he listens depends on personality; brash coaches take advice as an insult.")
+            f"· GM trust {safe_call(lambda: int(getattr(coach, 'gm_trust', 70) or 70), 70)}/100 "
+            "— whether he listens depends on personality; brash coaches take advice as an insult.")
         sub.setWordWrap(True)
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         layout.addWidget(sub)
@@ -197,7 +197,7 @@ class AdviseCoachDialog(QDialog):
             types_layout.addLayout(row)
         layout.addWidget(types_box)
 
-        feat_box = QGroupBox("Feature a player \u2014 more ice time, bigger role")
+        feat_box = QGroupBox("Feature a player — more ice time, bigger role")
         feat_layout = QHBoxLayout(feat_box)
         self._feature_pick = QComboBox()
         self._feature_pick.setMinimumWidth(200)
@@ -649,7 +649,7 @@ class MoraleScreen(BaseScreen):
             lines = []
             for r in receipts:
                 head = (f"<b>{r.get('title', '')}</b> "
-                        f"<span style='color:#9aa4b8'>{r.get('date', '')} \u00b7 "
+                        f"<span style='color:#9aa4b8'>{r.get('date', '')} · "
                         f"choice: {r.get('choice', '')}</span>")
                 gained = r.get("gained") or []
                 paid = r.get("paid") or []
@@ -661,7 +661,7 @@ class MoraleScreen(BaseScreen):
                     body += "<br><span style='color:#F44336'>Paid: " + ", ".join(
                         f"{g[0]} {g[1]}" for g in paid) + "</span>"
                 for x in (r.get("relationships") or []):
-                    body += f"<br><span style='color:#9aa4b8'>\u2022 {x}</span>"
+                    body += f"<br><span style='color:#9aa4b8'>• {x}</span>"
                 lines.append(head + body)
             self._receipts_body.setText("<br><br>".join(lines))
         else:
@@ -718,7 +718,7 @@ class MoraleScreen(BaseScreen):
             resp_item.setForeground(QColor(color))
             for col, item in (
                     (0, name_item),
-                    (1, QTableWidgetItem(p["engagement"] or "\u2014")),
+                    (1, QTableWidgetItem(p["engagement"] or "—")),
                     (2, resp_item),
                     (3, QTableWidgetItem(f"{p['happiness']}/100")),
                     (4, QTableWidgetItem(str(p["morale"]))),
@@ -735,7 +735,7 @@ class MoraleScreen(BaseScreen):
         if feed:
             icons = {"up": "\u25b2", "down": "\u25bc"}
             self._feed_body.setText("\n".join(
-                f"{icons.get(e.get('tone'), '\u2022')} {e.get('date', '')} {e.get('text', '')}"
+                f"{icons.get(e.get('tone'), '•')} {e.get('date', '')} {e.get('text', '')}"
                 for e in feed))
         else:
             self._feed_body.setText("No dynamics yet this season.")
@@ -788,7 +788,7 @@ class MoraleScreen(BaseScreen):
         ft = QLabel("FLOATERS")
         ft.setObjectName("section-header")
         fl_layout.addWidget(ft)
-        sub = QLabel("No circle of their own \u2014 higher integration risk, lower cascade pull.")
+        sub = QLabel("No circle of their own — higher integration risk, lower cascade pull.")
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         sub.setWordWrap(True)
         fl_layout.addWidget(sub)
@@ -818,7 +818,7 @@ class MoraleScreen(BaseScreen):
             self._atmosphere_body.setText(
                 f"<b>{atmo.get('label', '')}</b> "
                 f"<b style='color:{color}'>{atmo.get('score', '?')}/100</b><br>"
-                f"Mood: {atmo.get('mood', '?')} \u00b7 "
+                f"Mood: {atmo.get('mood', '?')} · "
                 f"Cohesion: {atmo.get('cohesion', '?')}<br>"
                 f"<span style='color:#9aa4b8'>Mood is the room's mean morale; "
                 f"cohesion is how much of the roster sits inside bonded groups.</span>")
@@ -866,13 +866,13 @@ class MoraleScreen(BaseScreen):
                     f"<span style='color:#9aa4b8'>{c.get('kind', '')}</span>")
                 head.setWordWrap(True)
                 card_layout.addWidget(head)
-                meta = (f"{c.get('size', len(members))} members \u00b7 "
-                        f"bond {round((c.get('bond', 0) or 0) * 100)}% \u00b7 "
-                        f"voice: <b>{c.get('leader', '\u2014')}</b>")
+                meta = (f"{c.get('size', len(members))} members · "
+                        f"bond {round((c.get('bond', 0) or 0) * 100)}% · "
+                        f"voice: <b>{c.get('leader', '—')}</b>")
                 if c.get("mean_age") is not None:
-                    meta += f" \u00b7 avg age {c.get('mean_age')}"
+                    meta += f" · avg age {c.get('mean_age')}"
                 if c.get("nationality"):
-                    meta += f" \u00b7 {c.get('nationality')}"
+                    meta += f" · {c.get('nationality')}"
                 meta_lbl = QLabel(meta)
                 meta_lbl.setWordWrap(True)
                 meta_lbl.setStyleSheet("color: #9aa4b8; font-size: 12px;")
@@ -887,7 +887,7 @@ class MoraleScreen(BaseScreen):
                 card_layout.addWidget(mem_lbl)
                 self._clique_container.addWidget(card)
         else:
-            empty = QLabel("No circles formed yet \u2014 the room is all floaters.")
+            empty = QLabel("No circles formed yet — the room is all floaters.")
             empty.setStyleSheet("color: #9aa4b8;")
             self._clique_container.addWidget(empty)
         if floaters:
@@ -915,7 +915,7 @@ class MoraleScreen(BaseScreen):
         lt = QLabel("ROOM LOG")
         lt.setObjectName("section-header")
         log_layout.addWidget(lt)
-        sub = QLabel("Every arrival, departure, talk, and press moment \u2014 and how the room absorbed it.")
+        sub = QLabel("Every arrival, departure, talk, and press moment — and how the room absorbed it.")
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         sub.setWordWrap(True)
         log_layout.addWidget(sub)
@@ -961,7 +961,7 @@ class MoraleScreen(BaseScreen):
             log, dr = [], {}
         if log:
             self._cascade_log.setText(
-                "\n".join(f"\u2022 {l}" for l in reversed(log)))
+                "\n".join(f"• {l}" for l in reversed(log)))
         else:
             self._cascade_log.setText(
                 "Nothing has shaken the room yet this season.")
@@ -987,7 +987,7 @@ class MoraleScreen(BaseScreen):
             arrivals = []
         if arrivals:
             self._arrivals_body.setText("\n".join(
-                f"<b>{a['name']}</b> \u2014 settled "
+                f"<b>{a['name']}</b> — settled "
                 f"<b style='color:{_bar_color(a['integration'])}'>"
                 f"{a['integration']}%</b>" for a in arrivals))
         else:
@@ -1008,7 +1008,7 @@ class MoraleScreen(BaseScreen):
         layout.addWidget(t)
         sub = QLabel(
             "Address the room before the game or between periods. Tone, speaker, "
-            "and moment all matter \u2014 the wrong words at the wrong time backfire. "
+            "and moment all matter — the wrong words at the wrong time backfire. "
             "Repeats in the same situation get tuned out.")
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         sub.setWordWrap(True)
@@ -1070,7 +1070,7 @@ class MoraleScreen(BaseScreen):
         layout.addWidget(self._talk_tones)
         self._tone_blurbs = {}
         for key, _lab, blurb in TALK_TONES:
-            lbl = QLabel(f"\u2022 {blurb}")
+            lbl = QLabel(f"• {blurb}")
             lbl.setStyleSheet("color: #9aa4b8; font-size: 11px;")
             lbl.setWordWrap(True)
             self._tone_blurbs[key] = lbl
@@ -1356,12 +1356,12 @@ class MoraleScreen(BaseScreen):
                 f"Likely outcome: {chips}")
             if repeat:
                 html += ("<br><span style='color:#FFC107'>\u26a0 The room has "
-                         "already heard today's words for this situation \u2014 "
+                         "already heard today's words for this situation — "
                          "delivering again replaces the pending talk but grants "
                          "no further lift.</span>")
             if inp["situation"] == "intermission" and inp["score_state"] is None:
                 html += ("<br><span style='color:#FF6B6B'>\u26a0 No live game "
-                         "in progress \u2014 score unavailable. Start watching "
+                         "in progress — score unavailable. Start watching "
                          "a game for an intermission talk, or switch to "
                          "Pregame.</span>")
             self._talk_preview.setText(html)
@@ -1381,12 +1381,12 @@ class MoraleScreen(BaseScreen):
                 if isinstance(rec, dict):
                     pend_lines.append(
                         f"<b>{label}:</b> {rec.get('speaker', '')} gave a "
-                        f"<b>{rec.get('tone', '')}</b> talk \u2014 "
+                        f"<b>{rec.get('tone', '')}</b> talk — "
                         f"{rec.get('outcome', '')}. "
                         f"<span style='color:#9aa4b8'>{rec.get('note', '')}</span>")
             self._talk_pending.setText(
                 "<br>".join(pend_lines) if pend_lines
-                else "No talk pending \u2014 the room is waiting to hear something.")
+                else "No talk pending — the room is waiting to hear something.")
         except Exception:
             pass
         self._update_talk_preview()
@@ -1486,7 +1486,7 @@ class MoraleScreen(BaseScreen):
         ch = QLabel("PERSONAL BEEF")
         ch.setObjectName("section-header")
         decl_layout.addWidget(ch)
-        csub = QLabel("A personal feud with an opposing head coach \u2014 declared through their team.")
+        csub = QLabel("A personal feud with an opposing head coach — declared through their team.")
         csub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         csub.setWordWrap(True)
         decl_layout.addWidget(csub)
@@ -1606,14 +1606,14 @@ class MoraleScreen(BaseScreen):
         except Exception:
             pass
 
-        icons = {"coach": "\U0001F525", "team": "\U0001F3D2",
+        icons = {"coach": "\U0001F525", "team": "🏒",
                  "player": "\U0001F94A"}
         if entries:
             self._rivalries_body.setText("<br>".join(
-                f"{icons.get(x['category'], '\u2022')} "
-                f"{'\U0001F512 ' if x['solidified'] else ''}"
+                f"{icons.get(x['category'], '•')} "
+                f"{'🔒 ' if x['solidified'] else ''}"
                 f"<b>{x['label']}</b> "
-                f"<span style='color:#9aa4b8'>\u2014 heat {x['intensity']} "
+                f"<span style='color:#9aa4b8'>— heat {x['intensity']} "
                 f"({x['origin'] or 'bad blood'})</span>"
                 for x in entries))
         else:
@@ -1786,10 +1786,10 @@ class MoraleScreen(BaseScreen):
                 f"{safe_call(lambda: style.get('label', ''), '')}"
                 f"{f' ({ax})' if ax else ''}<br>"
                 f"<span style='color:#9aa4b8'>GM trust: {gm_trust}/100"
-                f"{f' \u00b7 message age {shelf} wks' if shelf else ''}</span>")
+                f"{f' · message age {shelf} wks' if shelf else ''}</span>")
         else:
             self._carousel_current.setText(
-                "No head coach. The carousel is your friend \u2014 pick below.")
+                "No head coach. The carousel is your friend — pick below.")
 
         # Hot seat: read-only. Never run coach_hot_seat_check() from a
         # read path -- it can apply trust drift (a write).
@@ -1990,7 +1990,7 @@ class MoraleScreen(BaseScreen):
         self._crisis_head.setText(
             f"{sev} <b>Captaincy crisis:</b> {detail.get('captain_name', '')} "
             f"is losing the room. Challengers: {challengers}. "
-            f"No decision fixes this instantly \u2014 choose the politics you can live with.")
+            f"No decision fixes this instantly — choose the politics you can live with.")
         while self._crisis_choices.count():
             item = self._crisis_choices.takeAt(0)
             w = item.widget()
@@ -2039,7 +2039,7 @@ class MoraleScreen(BaseScreen):
                     continue
         if choice == "reassign" and new_c is None:
             self._crisis_result.setText(
-                "Reassign needs a named successor \u2014 no auto-strip.")
+                "Reassign needs a named successor — no auto-strip.")
             return
         try:
             lines = _dr.resolve_captaincy_crisis(
@@ -2090,7 +2090,7 @@ class MoraleScreen(BaseScreen):
             return
         if coach is None:
             self._coach_body.setText(
-                "No head coach on staff \u2014 this action needs a coach.")
+                "No head coach on staff — this action needs a coach.")
             return
         try:
             if action == "bag_skate":

@@ -1377,9 +1377,9 @@ class ScoutDialog(QDialog):
         layout = QVBoxLayout(self)
 
         head = QLabel(f"<b>{report.get('name', '?')}</b>  "
-                      f"{report.get('position', '')} \u00b7 "
-                      f"Age {report.get('age', 0)} \u00b7 "
-                      f"{report.get('overall', 0)} OVR \u00b7 "
+                      f"{report.get('position', '')} · "
+                      f"Age {report.get('age', 0)} · "
+                      f"{report.get('overall', 0)} OVR · "
                       f"Potential {report.get('potential', '?')}")
         head.setWordWrap(True)
         layout.addWidget(head)
@@ -1395,7 +1395,7 @@ class ScoutDialog(QDialog):
             if vals:
                 layout.addWidget(QLabel(f"<b>{title}</b>"))
                 for s in vals:
-                    lab = QLabel("\u2022 " + str(s))
+                    lab = QLabel("• " + str(s))
                     lab.setWordWrap(True)
                     layout.addWidget(lab)
 
@@ -1442,8 +1442,8 @@ class ProspectRow(QWidget):
             name_btn.clicked.connect(
                 lambda _=False: on_name(prospect))
         info.addWidget(name_btn)
-        sub = QLabel(f"{prospect.get('position', '')} \u00b7 "
-                     f"Age {prospect.get('age', 0)} \u00b7 "
+        sub = QLabel(f"{prospect.get('position', '')} · "
+                     f"Age {prospect.get('age', 0)} · "
                      f"Potential {prospect.get('potential', '?')}")
         sub.setStyleSheet("color: #9aa4b8; font-size: 12px;")
         info.addWidget(sub)
@@ -1471,7 +1471,7 @@ class TradePickDialog(QDialog):
         layout = QVBoxLayout(self)
 
         sub = QLabel(f"Your pick: #{info['overall']} "
-                     f"(Round {info['round']}) \u00b7 slot value "
+                     f"(Round {info['round']}) · slot value "
                      f"{info['my_value']}")
         sub.setObjectName("section-header")
         layout.addWidget(sub)
@@ -1593,16 +1593,16 @@ class IncomingCallDialog(QDialog):
         if bullets:
             layout.addWidget(QLabel("<b>Why they're calling</b>"))
             for b in bullets:
-                lab = QLabel("\u2022 " + str(b))
+                lab = QLabel("• " + str(b))
                 lab.setWordWrap(True)
                 layout.addWidget(lab)
 
         t = call.get("target") or {}
         layout.addWidget(QLabel("<b>Their target</b>"))
-        tlab = QLabel(f"<b>{t.get('name', '?')}</b> \u00b7 "
-                      f"{t.get('position', '')} \u00b7 "
+        tlab = QLabel(f"<b>{t.get('name', '?')}</b> · "
+                      f"{t.get('position', '')} · "
                       f"Age {t.get('age', '')}"
-                      + (f" \u00b7 Consensus potential: "
+                      + (f" · Consensus potential: "
                          f"{t.get('potential', '')}"
                          if t.get("potential") else ""))
         tlab.setWordWrap(True)
@@ -1612,14 +1612,14 @@ class IncomingCallDialog(QDialog):
         send_box = QGroupBox("You send")
         sl = QVBoxLayout(send_box)
         for a in call.get("you_send") or []:
-            lab = QLabel("\u2022 " + str(a.get("label", "?")))
+            lab = QLabel("• " + str(a.get("label", "?")))
             lab.setWordWrap(True)
             sl.addWidget(lab)
         cols.addWidget(send_box)
         recv_box = QGroupBox("You receive")
         rl = QVBoxLayout(recv_box)
         for a in call.get("you_receive") or []:
-            lab = QLabel("\u2022 " + str(a.get("label", "?")))
+            lab = QLabel("• " + str(a.get("label", "?")))
             lab.setWordWrap(True)
             rl.addWidget(lab)
         cols.addWidget(recv_box)
@@ -1880,7 +1880,7 @@ class DraftScreen(BaseScreen):
             mine = "No remaining picks"
         self._summary.setText(
             f"Pick {state['current_overall']} of {state['total_slots']} "
-            f"({state['made_count']} made)  \u00b7  {mine}")
+            f"({state['made_count']} made)  ·  {mine}")
 
     def _refresh_clock(self, state):
         active = bool(state.get("active"))
@@ -1962,8 +1962,8 @@ class DraftScreen(BaseScreen):
                 pl = QLabel(f"{pr.get('name', '?')}  "
                             f"<span style='color:#9aa4b8'>"
                             f"{pr.get('position', '')}"
-                            f"{' \u00b7 ' + str(pr['age']) + ' yrs' if pr.get('age') else ''}"
-                            f"{' \u00b7 OVR ' + str(pr['overall']) if pr.get('overall') else ''}"
+                            f"{' · ' + str(pr['age']) + ' yrs' if pr.get('age') else ''}"
+                            f"{' · OVR ' + str(pr['overall']) if pr.get('overall') else ''}"
                             f"</span>")
             else:
                 pl = QLabel("<i>To be selected...</i>")

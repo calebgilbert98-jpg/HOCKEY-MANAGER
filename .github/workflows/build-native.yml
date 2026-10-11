@@ -32,6 +32,31 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Check Python 3.11 syntax compatibility
+        # Guards against the v0.26.38-v0.26.41 mystery: modules using
+        # Python 3.12-only syntax (PEP 701 backslashes/nested quotes in
+        # f-strings) fail to compile on the runner's 3.11, so PyInstaller's
+        # modulegraph marks them "invalid" and silently drops them from the
+        # bundle. This fails fast with the exact file and line instead.
+        shell: bash
+        run: |
+          python - << 'PYEOF'
+          import ast, glob, sys
+          bad = []
+          for path in glob.glob('native_ui/**/*.py', recursive=True) + glob.glob('*.py'):
+              src = open(path, encoding='utf-8').read()
+              try:
+                  compile(src, path, 'exec', ast.PyCF_ONLY_AST, True)
+              except SyntaxError as e:
+                  bad.append(f"{path}:{e.lineno}: {e.msg}")
+          if bad:
+              print("::error::Python 3.11 syntax check FAILED:")
+              for b in bad:
+                  print(f"::error::  {b}")
+              sys.exit(1)
+          print(f"Python 3.11 syntax check passed.")
+          PYEOF
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

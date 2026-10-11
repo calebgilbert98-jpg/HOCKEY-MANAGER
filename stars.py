@@ -368,7 +368,7 @@ def signature_game_rows(moments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if len(first_stars) == 1:
                 rows.append({
                     "emoji": _MOMENT_EMOJI["first_star"],
-                    "line1": "\u2b50 1st Star of the Game \u2014 "
+                    "line1": "\u2b50 1st Star of the Game — "
                              + _fmt_moment_date(m.get("date", "")),
                     "detail": m.get("detail", ""),
                     "consumed": 1,
@@ -384,13 +384,13 @@ def signature_game_rows(moments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "consumed": len(first_stars),
                 })
         else:
-            line1 = (f"{_MOMENT_EMOJI.get(kind, '\U0001f3d2')} "
-                     f"{m.get('label', 'Big night')} \u2014 "
+            line1 = (f"{_MOMENT_EMOJI.get(kind, '🏒')} "
+                     f"{m.get('label', 'Big night')} — "
                      f"{_fmt_moment_date(m.get('date', ''))}")
             if m.get("playoff"):
                 line1 += " (playoffs)"
             rows.append({
-                "emoji": _MOMENT_EMOJI.get(kind, "\U0001f3d2"),
+                "emoji": _MOMENT_EMOJI.get(kind, "🏒"),
                 "line1": line1,
                 "detail": m.get("detail", ""),
                 "consumed": 1,

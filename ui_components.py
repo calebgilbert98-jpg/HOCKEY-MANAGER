@@ -1049,7 +1049,7 @@ class PlayerProfileView(ctk.CTkFrame):
                 pass
             ttk.Label(row, text=detail, style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
             if descriptor:
-                ttk.Label(row, text=f"\u2022 {descriptor}",
+                ttk.Label(row, text=f"• {descriptor}",
                           style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
 
         def _empty(text):
@@ -1061,7 +1061,7 @@ class PlayerProfileView(ctk.CTkFrame):
             for fp in data["family"]:
                 pos = getattr(getattr(fp, 'primary_position', ''), 'value', '')
                 _row(fp.full_name,
-                     f"{getattr(fp, 'team_name', '')} {('\u2022 ' + pos) if pos else ''}".strip(),
+                     f"{getattr(fp, 'team_name', '')} {('• ' + pos) if pos else ''}".strip(),
                      "Family", obj=fp)
         else:
             _empty("No family in the league.")
@@ -1074,7 +1074,7 @@ class PlayerProfileView(ctk.CTkFrame):
                 _row(p.full_name, getattr(p, 'team_name', ''),
                      self._bond_label(s), obj=p)
         else:
-            _empty("No close friendships yet \u2014 bonds form as the season unfolds.")
+            _empty("No close friendships yet — bonds form as the season unfolds.")
 
         # Favourite teammate
         _subsection("Favourite Teammate")
