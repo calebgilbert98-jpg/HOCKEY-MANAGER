@@ -644,19 +644,19 @@ class AnalyticsScreen(BaseScreen):
         return name.lower().replace(" & ", "_").replace(" ", "_")
 
     def _team(self):
-        return safe_call(lambda: self.game.user_team)
+        return safe_call(lambda: self.game.user_team, context="analytics/resolve_team")
 
     def _games(self):
         team = self._team()
         if team is None:
             return []
-        return safe_call(lambda: _team_games(team), []) or []
+        return safe_call(lambda: _team_games(team), [], context="analytics/team_games") or []
 
     # -- refresh -------------------------------------------------------------
     def refresh(self):
         team = self._team()
         games = self._games()
-        name = safe_call(lambda: team.team_name, "?") if team else "?"
+        name = safe_call(lambda: team.team_name, "?", context="analytics/team_name") if team else "?"
 
         # Populate game selector
         self._game_combo.blockSignals(True)
@@ -874,10 +874,10 @@ class AnalyticsScreen(BaseScreen):
         # Assist pairs (line-combination effectiveness)
         name_lookup = {}
         if team is not None:
-            for t in safe_call(lambda: self.game.league.teams, []) or []:
-                for p in safe_call(lambda: t.roster, []) or []:
-                    pid = safe_call(lambda: p.player_id)
-                    pname = safe_call(lambda: p.name)
+            for t in safe_call(lambda: self.game.league.teams, [], context="analytics/assist_pairs_teams") or []:
+                for p in safe_call(lambda: t.roster, [], context="analytics/assist_pairs_roster") or []:
+                    pid = safe_call(lambda: p.player_id, context="analytics/assist_pairs_player_id")
+                    pname = safe_call(lambda: p.name, context="analytics/assist_pairs_player_name")
                     if pid and pname:
                         name_lookup[str(pid)] = pname
         pairs = _assist_pair_rows(self._games(), name_lookup)
