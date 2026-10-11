@@ -1167,7 +1167,11 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- the prematch ctx carries no
         # captain-production state, so the ask no longer asserts he has
         # been quiet.
-        "ask": "What do you need from your leaders against {opp} with the club playing {form_word}?",
+        # REV-A3/F-4: "with the club playing {form_word}" rendered
+        # "with the club playing poor" -- adjective where an adverb is
+        # needed. Reworked to "in {form_word} form", grammatical for all
+        # form_word values (excellent/decent/poor/mixed).
+        "ask": "What do you need from your leaders against {opp} with the club in {form_word} form?",
         "answers": [
             ("They lead in ways you don't always see", "defensive", 1, 0, 0,
              "The captain appreciates the shield."),
@@ -1215,7 +1219,9 @@ PREMATCH_QUESTIONS = [
         # DEV-B4: reworded premise-safe -- no assertion that a prospect is
         # knocking; the question is now hypothetical, which the answers
         # already were.
-        "ask": "When does a prospect get his chance? With a {opp_word}-danger {opp} in town, could it be tonight?",
+        # REV-A3/F-3: "in town" asserted a home game but the prematch ctx
+        # carries no home/away state -- dropped so the ask is venue-neutral.
+        "ask": "When does a prospect get his chance? With a {opp_word}-danger {opp} on the schedule, could it be tonight?",
         "answers": [
             ("If he's ready, he plays", "confident", 1, 1, 1,
              "The kids in the system are buzzing."),
@@ -1244,7 +1250,9 @@ PREMATCH_QUESTIONS = [
         # DEV-B5: reworded premise-safe -- no home/away state in the
         # prematch ctx and poor form can mean quiet or booing fans, so the
         # ask no longer asserts the fans will be loud.
-        "ask": "What's your message to the fans before puck drop against {opp}, with the club playing {form_word}?",
+        # REV-A3/F-4: "with the club playing {form_word}" rendered
+        # "with the club playing poor" -- reworked to "in {form_word} form".
+        "ask": "What's your message to the fans before puck drop against {opp}, with the club in {form_word} form?",
         "answers": [
             ("Stick with us -- we'll give you a show", "passionate", 1, 0, 2,
              "The faithful roar their approval."),
@@ -1336,7 +1344,9 @@ PREMATCH_QUESTIONS = [
         "id": "veterans",
         # DEV-B4: reworded premise-safe -- no assertion that the veterans
         # have carried the load (not in the prematch ctx).
-        "ask": "Veterans set the standard. With the club playing {form_word}, do the young guys need to step up against {opp}?",
+        # REV-A3/F-4: "With the club playing {form_word}" rendered
+        # "With the club playing poor" -- reworked to "in {form_word} form".
+        "ask": "Veterans set the standard. With the club in {form_word} form, do the young guys need to step up against {opp}?",
         "answers": [
             ("Everyone pulls the rope", "demanding", 1, 0, 0,
              "The kids heard that loud and clear."),
@@ -1844,9 +1854,19 @@ def _fill(template: str, ctx: dict) -> str:
     Fail-SAFE (was fail-open): a missing slot substitutes an empty string
     instead of returning the raw template -- a literal "{slot}" must never
     render in-game. Missing slots also can't re-trigger on a second pass
-    because there is nothing left to fill."""
+    because there is nothing left to fill.
+
+    REV-A3 (prematch None-coercion gap): a key PRESENT with value None
+    rendered the literal word "None" ("With them a None-danger side",
+    "form None") because only missing keys were blanked. None values are
+    now coerced to "" up front, in the render copy only -- 'when'
+    predicates and builders still see the original ctx, and the postmatch
+    builder's full_ctx fallbacks ("your star"/"them") are applied before
+    _fill, so the postmatch path's expectations are unchanged."""
     if not isinstance(ctx, dict):
         ctx = {}
+    else:
+        ctx = {k: ("" if v is None else v) for k, v in ctx.items()}
     try:
         return template.format(**ctx)
     except KeyError:
@@ -2267,7 +2287,7 @@ def _situational_postmatch(team, ctx, rng) -> List[dict]:
                 controversy_fired = True
                 _add("sit_goalie", "Lisa Park (Sportsnet)",
                      f"{bnm} is stopping everything at {svp_txt} while {snm} "
-                     f"scuffles. Is there a goalie controversy brewing?",
+                     f"struggles. Is there a goalie controversy brewing?",
                      [
                          ("No controversy -- we trust both", "calm", 1, 1, 0,
                           "The goalies stay united. The room moves on."),
@@ -2627,7 +2647,7 @@ def generate_opposition_report(opponent, standings: dict) -> dict:
         "Medium" if (offense + goaltending) / 2 >= 11.5 else "Low")
 
     return {
-        "team": getattr(opponent, "team_name", "Opponent"),
+        "team": getattr(opponent, "team_name", None) or "Opponent",
         "record": record,
         "danger_level": danger,
         "strengths": strengths,
