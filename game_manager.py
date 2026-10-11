@@ -7809,7 +7809,13 @@ NHL League Office""",
             try:
                 _nl = getattr(self, 'news_log', None)
                 if isinstance(_nl, list):
-                    _newslog_snap = (_nl, len(_nl))
+                    # Full copy, not just a length: add_news front-trims the
+                    # log at NEWS_LOG_CAP, so a length alone cannot restore
+                    # the evicted head on rollback (same shape as the
+                    # news_stories mirror hole this backstop already fixed).
+                    _newslog_snap = (True, _nl, list(_nl))
+                else:
+                    _newslog_snap = (False, None, None)
             except Exception:
                 _newslog_snap = None
             _newsstories_snap = None
@@ -7864,7 +7870,12 @@ NHL League Office""",
                         _rr = getattr(_st, 'recent_results', None)
                         _recent_snap[getattr(_st, 'team_name', None)] = (
                             _st, _rr if isinstance(_rr, list) else None,
-                            len(_rr) if isinstance(_rr, list) else 0)
+                            # Full copy, not just a length:
+                            # _record_game_result front-trims at 30 entries
+                            # (del rr[:-30]), so a length alone cannot
+                            # restore the evicted head on rollback once a
+                            # team has 30 entries.
+                            list(_rr) if isinstance(_rr, list) else None)
                     except Exception:
                         pass
             except Exception:
@@ -8420,11 +8431,25 @@ NHL League Office""",
                             pass
                     if _newslog_snap is not None:
                         try:
-                            _nl, _nllen = _newslog_snap
+                            _nl_had, _nl, _nl_copy = _newslog_snap
                             _nl_live = getattr(self, 'news_log', None)
-                            if not isinstance(_nl_live, list):
-                                _nl_live = _nl
-                            del _nl_live[_nllen:]
+                            if _nl_had and isinstance(_nl_live, list):
+                                # Slice-restore, not length-truncate: the
+                                # failed body may have front-trimmed the log
+                                # at NEWS_LOG_CAP, so a length alone cannot
+                                # restore the evicted head. Slice assignment
+                                # keeps the list's object identity for
+                                # aliases.
+                                _nl_live[:] = _nl_copy
+                            elif not _nl_had:
+                                # The failed body created the log: remove it
+                                # so no phantom list survives.
+                                try:
+                                    if isinstance(getattr(
+                                            self, 'news_log', None), list):
+                                        delattr(self, 'news_log')
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                     if _newsstories_snap is not None:
@@ -8486,7 +8511,7 @@ NHL League Office""",
                             pass
                     for _tn, _rrt in _recent_snap.items():
                         try:
-                            _tm, _rr, _rrlen = _rrt
+                            _tm, _rr, _rrcopy = _rrt
                             _rr_live = getattr(_tm, 'recent_results', None)
                             if _rr is None:
                                 # No list pre-call: drop any list the body made.
@@ -8496,7 +8521,12 @@ NHL League Office""",
                                     except Exception:
                                         pass
                             elif isinstance(_rr_live, list):
-                                del _rr_live[_rrlen:]
+                                # Slice-restore, not length-truncate: the
+                                # failed body may have front-trimmed at 30
+                                # entries, so a length alone cannot restore
+                                # the evicted head. Slice assignment keeps
+                                # the list's object identity for aliases.
+                                _rr_live[:] = _rrcopy
                         except Exception:
                             pass
                     if _grudge_snap is not None:
