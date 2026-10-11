@@ -33,11 +33,11 @@ _safe = safe_call
 # ----------------------------------------------------------------------
 
 def _staff_name(s):
-    name = safe_call(lambda: getattr(s, "full_name", None), None, context="staff full_name")
+    name = safe_call(lambda: getattr(s, "full_name", None), None, context='staff full_name')
     if name:
         return name
-    fn = safe_call(lambda: getattr(s, "first_name", ""), "", context="staff first_name") or ""
-    ln = safe_call(lambda: getattr(s, "last_name", ""), "", context="staff last_name") or ""
+    fn = safe_call(lambda: getattr(s, "first_name", ""), "", context='staff first_name') or ""
+    ln = safe_call(lambda: getattr(s, "last_name", ""), "", context='staff last_name') or ""
     return f"{fn} {ln}".strip() or "?"
 
 
@@ -46,13 +46,13 @@ def _staff_role_value(s):
     role = getattr(s, "role", None)
     if role is None:
         return "Staff"
-    return safe_call(lambda: getattr(role, "value", None) or str(role), "Staff", context="staff role value")
+    return safe_call(lambda: getattr(role, "value", None) or str(role), "Staff", context='staff role value')
 
 
 def _staff_role_name(s):
     """Enum name of the role, e.g. 'HEAD_COACH'."""
     return str(safe_call(lambda: getattr(getattr(s, "role", None), "name", ""),
-                     "", context="staff role name") or "")
+                     "", context='staff role name') or "")
 
 
 def _fmt_salary(sal):
@@ -439,7 +439,7 @@ def _start_chain_session(game, staff_list):
         names = {}
         for s in staff_list or []:
             sid = str(safe_call(lambda: getattr(s, "id", ""),
-                                "", context="chain staff id") or "")
+                                "", context='chain staff id') or "")
             if not sid:
                 continue
             ids.append(sid)
@@ -575,10 +575,10 @@ class StaffScreen(BaseScreen):
             if team is None:
                 return
             self._team_name = safe_call(
-                lambda: getattr(team, "team_name", ""), "", context="load team_name") or ""
+                lambda: getattr(team, "team_name", ""), "", context='load team_name') or ""
             self._staff = [s for s in
                            safe_call(lambda: list(getattr(team, "staff", []) or []),
-                                 [], context="load team staff list")]
+                                 [], context='load team staff list')]
         except Exception as e:
             print(f"[staff] load failed: {e}")
 
@@ -646,7 +646,7 @@ class StaffScreen(BaseScreen):
 
         for role, members in groups.items():
             members.sort(key=lambda m: int(
-                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="list sort overall_rating") or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context='list sort overall_rating') or 0),
                          reverse=True)
             header = QLabel(
                 f"{role.upper()}  ({len(members)})")
@@ -667,7 +667,7 @@ class StaffScreen(BaseScreen):
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
 
-        rating = int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="card overall_rating") or 0)
+        rating = int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context='card overall_rating') or 0)
         color = _rating_color(rating)
 
         # Header: rating badge + name/sub
@@ -690,8 +690,8 @@ class StaffScreen(BaseScreen):
         name_lbl.mousePressEvent = \
             lambda e, staff=s: self._open_staff_detail(staff)
         name_col.addWidget(name_lbl)
-        age = safe_call(lambda: getattr(s, "age", 0), 0, context="card age") or 0
-        nat = safe_call(lambda: getattr(s, "nationality", ""), "", context="card nationality") or ""
+        age = safe_call(lambda: getattr(s, "age", 0), 0, context='card age') or 0
+        nat = safe_call(lambda: getattr(s, "nationality", ""), "", context='card nationality') or ""
         sub = " · ".join(x for x in
                          ([f"Age {age}"] if age else []) + ([nat] if nat
                                                            else []))
@@ -715,9 +715,9 @@ class StaffScreen(BaseScreen):
         v.addWidget(bar)
 
         # Meta
-        morale = safe_call(lambda: getattr(s, "morale", "—"), "—", context="card morale")
-        exp = safe_call(lambda: getattr(s, "experience", "—"), "—", context="card experience")
-        sal = _fmt_salary(safe_call(lambda: getattr(s, "salary", 0), 0, context="card salary"))
+        morale = safe_call(lambda: getattr(s, "morale", "—"), "—", context='card morale')
+        exp = safe_call(lambda: getattr(s, "experience", "—"), "—", context='card experience')
+        sal = _fmt_salary(safe_call(lambda: getattr(s, "salary", 0), 0, context='card salary'))
         meta = QLabel(
             f"<span style='color:#8b95ab'>Morale</span> <b>{morale}</b>"
             f" &nbsp; <span style='color:#8b95ab'>Exp</span> <b>{exp}y</b>"
@@ -766,7 +766,7 @@ class StaffScreen(BaseScreen):
             cats.setdefault(_staff_cat(s), []).append(s)
         for members in cats.values():
             members.sort(key=lambda m: int(
-                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="org/report sort overall_rating") or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context='org/report sort overall_rating') or 0),
                 reverse=True)
 
         def has_role(s, *names):
@@ -777,7 +777,7 @@ class StaffScreen(BaseScreen):
             return sorted(
                 members,
                 key=lambda m: 0 if str(safe_call(
-                    lambda: getattr(m, "assignment", ""), "", context="org assignment sort") or ""
+                    lambda: getattr(m, "assignment", ""), "", context='org assignment sort') or ""
                 ).lower() != "ahl" else 1)
 
         tree = []
@@ -820,8 +820,8 @@ class StaffScreen(BaseScreen):
         name_lbl.mousePressEvent = \
             lambda e, staff=s: self._open_staff_detail(staff)
         box.addWidget(name_lbl)
-        rating = safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="org person overall_rating") or 0
-        sal = int(safe_call(lambda: getattr(s, "salary", 0), 0, context="org person salary") or 0)
+        rating = safe_call(lambda: getattr(s, "overall_rating", 0), 0, context='org person overall_rating') or 0
+        sal = int(safe_call(lambda: getattr(s, "salary", 0), 0, context='org person salary') or 0)
         money = f" · {_fmt_salary(sal)}" if sal else ""
         dim = QLabel(
             f"{_staff_role_value(s)} · {rating} OVR{money}")
@@ -885,11 +885,11 @@ class StaffScreen(BaseScreen):
 
         staff = self._staff
         total = len(staff)
-        exp = sum(int(safe_call(lambda: getattr(s, "experience", 0), 0, context="report total experience") or 0)
+        exp = sum(int(safe_call(lambda: getattr(s, "experience", 0), 0, context='report total experience') or 0)
                   for s in staff)
-        rat = sum(int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context="report total rating") or 0)
+        rat = sum(int(safe_call(lambda: getattr(s, "overall_rating", 0), 0, context='report total rating') or 0)
                   for s in staff)
-        tot_sal = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context="report total salary") or 0)
+        tot_sal = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context='report total salary') or 0)
                       for s in staff)
         avg_exp = round(exp / total, 1) if total else 0
         avg_rat = round(rat / total, 1) if total else 0
@@ -920,12 +920,12 @@ class StaffScreen(BaseScreen):
             if not members:
                 continue
             members.sort(key=lambda m: int(
-                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context="org/report sort overall_rating") or 0),
+                safe_call(lambda: getattr(m, "overall_rating", 0), 0, context='org/report sort overall_rating') or 0),
                 reverse=True)
-            sal_sum = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context="report dept salary sum") or 0)
+            sal_sum = sum(int(safe_call(lambda: getattr(s, "salary", 0), 0, context='report dept salary sum') or 0)
                           for s in members)
             rat_sum = sum(int(safe_call(lambda: getattr(s, "overall_rating", 0),
-                                    0, context="report dept rating sum") or 0) for s in members)
+                                    0, context='report dept rating sum') or 0) for s in members)
             avg = round(rat_sum / len(members), 1) if members else 0
             header = QLabel(
                 f"{cat.upper()} DEPARTMENT  ({len(members)})"
@@ -934,7 +934,7 @@ class StaffScreen(BaseScreen):
             lay.addWidget(header)
             for s in members:
                 years = int(safe_call(lambda: getattr(s, "contract_years", 0),
-                                  0, context="report row contract_years") or 0)
+                                  0, context='report row contract_years') or 0)
                 row = QWidget()
                 rl = QHBoxLayout(row)
                 rl.setContentsMargins(0, 2, 0, 2)
@@ -947,10 +947,10 @@ class StaffScreen(BaseScreen):
                 rl.addWidget(nm)
                 detail = QLabel(
                     f"{_staff_role_value(s)} · "
-                    f"{safe_call(lambda: getattr(s, 'overall_rating', '?'), '?', context="report row overall_rating")} "
+                    f"{safe_call(lambda: getattr(s, 'overall_rating', '?'), '?', context='report row overall_rating')} "
                     f"OVR · "
-                    f"{safe_call(lambda: getattr(s, 'experience', '?'), '?', context="report row experience")}y · "
-                    f"{_fmt_money(safe_call(lambda: getattr(s, 'salary', 0), 0, context="report row salary"))} "
+                    f"{safe_call(lambda: getattr(s, 'experience', '?'), '?', context='report row experience')}y · "
+                    f"{_fmt_money(safe_call(lambda: getattr(s, 'salary', 0), 0, context='report row salary'))} "
                     f"· {years}y left · {_staff_status(s)}")
                 detail.setStyleSheet("color: #8b95ab; font-size: 12px;")
                 rl.addWidget(detail, 1)
@@ -958,14 +958,14 @@ class StaffScreen(BaseScreen):
 
         expiring = [s for s in staff
                     if int(safe_call(lambda: getattr(s, "contract_years", 99),
-                                 99, context="report expiring filter") or 99) <= 1]
+                                 99, context='report expiring filter') or 99) <= 1]
         if expiring:
             header = QLabel("CONTRACT EXPIRATIONS")
             header.setObjectName("section-header")
             lay.addWidget(header)
             for s in expiring:
                 years = int(safe_call(lambda: getattr(s, "contract_years", 0),
-                                  0, context="report row contract_years") or 0)
+                                  0, context='report row contract_years') or 0)
                 row = QLabel(
                     f"• <b>{_staff_name(s)}</b> "
                     f"<span style='color:#8b95ab'>{_staff_role_value(s)} — "
@@ -1065,7 +1065,7 @@ class StaffScreen(BaseScreen):
             if team is None:
                 return False, "No team loaded."
             # Unique-role guard (GM / Head Coach)
-            if safe_call(lambda: _Staff.is_unique_role(new_role), False, context="reassign unique-role check"):
+            if safe_call(lambda: _Staff.is_unique_role(new_role), False, context='reassign unique-role check'):
                 conflict = [s for s in
                             list(getattr(team, "staff", []) or [])
                             if s is not staff
@@ -1183,9 +1183,9 @@ class StaffScreen(BaseScreen):
             except Exception:
                 continue
             pname = safe_call(
-                lambda: getattr(p, "full_name", None), None, context="assistant player full_name") or \
-                f"{safe_call(lambda: getattr(p, 'first_name', ''), '', context="assistant player first_name")} " \
-                f"{safe_call(lambda: getattr(p, 'last_name', ''), '', context="assistant player last_name")}".strip() \
+                lambda: getattr(p, "full_name", None), None, context='assistant player full_name') or \
+                f"{safe_call(lambda: getattr(p, 'first_name', ''), '', context='assistant player first_name')} " \
+                f"{safe_call(lambda: getattr(p, 'last_name', ''), '', context='assistant player last_name')}".strip() \
                 or "?"
             for label, pts in terms:
                 # Labels are "<Spec> assistant: <Name>" or
@@ -1376,7 +1376,7 @@ class StaffScreen(BaseScreen):
     @staticmethod
     def _staff_id(staff):
         return str(safe_call(lambda: getattr(staff, "id", ""), "",
-                             context="negotiate staff id") or "")
+                             context='negotiate staff id') or "")
 
     def _live_staff_by_id(self):
         team = self._user_team()
@@ -1384,7 +1384,7 @@ class StaffScreen(BaseScreen):
         try:
             for s in (safe_call(
                     lambda: list(getattr(team, "staff", []) or []), [],
-                    context="chain live staff") or []):
+                    context='chain live staff') or []):
                 sid = self._staff_id(s)
                 if sid:
                     out[sid] = s
@@ -1395,12 +1395,12 @@ class StaffScreen(BaseScreen):
     def _fresh_step(self, staff):
         try:
             sal = int(safe_call(lambda: getattr(staff, "salary", 0), 0,
-                                context="fresh step salary") or 0)
+                                context='fresh step salary') or 0)
         except Exception:
             sal = 0
         try:
             yrs = int(safe_call(lambda: getattr(staff, "contract_years", 2),
-                                2, context="fresh step years") or 2)
+                                2, context='fresh step years') or 2)
         except Exception:
             yrs = 2
         return {
@@ -1558,10 +1558,10 @@ class StaffScreen(BaseScreen):
             try:
                 team = self._user_team()
                 inbox = safe_call(lambda: getattr(team, "inbox", None),
-                                  None, context="chain digest inbox")
+                                  None, context='chain digest inbox')
                 msgs = safe_call(
                     lambda: list(getattr(inbox, "messages", []) or []),
-                    [], context="chain digest scan") or []
+                    [], context='chain digest scan') or []
                 already = any(
                     getattr(m, "subject", "")
                     == "Staff Negotiation Results"
@@ -1573,7 +1573,7 @@ class StaffScreen(BaseScreen):
                     gm = _chain_owner(self.game)
                     send = safe_call(
                         lambda: getattr(gm, "send_email_to_user", None),
-                        None, context="chain digest sender")
+                        None, context='chain digest sender')
                     if callable(send):
                         send(EmailMessage(
                             sender="System", sender_type="System",
@@ -1609,7 +1609,7 @@ class StaffScreen(BaseScreen):
             gm = _chain_owner(self.game)
             send = safe_call(
                 lambda: getattr(gm, "send_email_to_user", None), None,
-                context="park notice sender")
+                context='park notice sender')
             if not callable(send):
                 return
             msg = EmailMessage(
@@ -1632,10 +1632,10 @@ class StaffScreen(BaseScreen):
                 return
             team = self._user_team()
             inbox = safe_call(lambda: getattr(team, "inbox", None),
-                              None, context="clear notice inbox")
+                              None, context='clear notice inbox')
             deleter = safe_call(
                 lambda: getattr(inbox, "delete_message", None), None,
-                context="clear notice deleter")
+                context='clear notice deleter')
             if callable(deleter):
                 deleter(mid)
         except Exception:
@@ -1757,7 +1757,7 @@ class StaffScreen(BaseScreen):
         try:
             gm = _chain_owner(self.game)
             league = safe_call(lambda: getattr(gm, "league", None), None,
-                               context="declare rival league")
+                               context='declare rival league')
             team = self._user_team()
             name = _staff_name(staff)
             if league is None or team is None:
@@ -1801,23 +1801,23 @@ class StaffScreen(BaseScreen):
                 from datetime import date
                 team_name = str(safe_call(
                     lambda: getattr(team, "team_name", "?"), "?",
-                    context="declare rival team name") or "?")
+                    context='declare rival team name') or "?")
                 target_team_name = "?"
                 for t in (safe_call(
                         lambda: list(getattr(league, "teams", []) or []),
-                        [], context="declare rival league teams") or []):
+                        [], context='declare rival league teams') or []):
                     tids = {self._staff_id(s) for s in
                             (safe_call(lambda: list(
                                 getattr(t, "staff", []) or []), [],
-                                context="declare rival team staff") or [])}
+                                context='declare rival team staff') or [])}
                     if self._staff_id(staff) in tids:
                         target_team_name = str(safe_call(
                             lambda: getattr(t, "team_name", "?"), "?",
-                            context="declare rival target team") or "?")
+                            context='declare rival target team') or "?")
                         break
                 game_date = safe_call(
                     lambda: getattr(gm, "current_date", None), None,
-                    context="declare rival game date") or date.today()
+                    context='declare rival game date') or date.today()
                 msg = hl.make_headline(
                     "rivalry_declared", game_date,
                     declarer_name=team_name, target_name=name,
@@ -1829,15 +1829,15 @@ class StaffScreen(BaseScreen):
                     feed_fn = safe_call(
                         lambda: getattr(self.main_window, "add_news",
                                         None), None,
-                        context="declare rival feed mw") or safe_call(
+                        context='declare rival feed mw') or safe_call(
                         lambda: getattr(self.game, "add_news", None),
-                        None, context="declare rival feed game")
+                        None, context='declare rival feed game')
                     if callable(feed_fn):
                         feed_fn(story)
                     else:
                         log = safe_call(
                             lambda: getattr(gm, "news_log", None), None,
-                            context="declare rival news_log")
+                            context='declare rival news_log')
                         if isinstance(log, list):
                             log.append({"date": game_date,
                                         "story": story})

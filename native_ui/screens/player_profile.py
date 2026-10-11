@@ -106,12 +106,12 @@ _REPO_ROOT = os.path.dirname(
 
 def _to100(v):
     return safe_call(lambda: __import__("game_classes").to_100_scale(v),
-                 50, context="player_profile/_to100") or 50
+                 50, context='player_profile/_to100') or 50
 
 
 def _is_goalie(p):
     return "GOALIE" in str(
-        safe_call(lambda: getattr(p, "primary_position", ""), "", context="player_profile/_is_goalie")).upper()
+        safe_call(lambda: getattr(p, "primary_position", ""), "", context='player_profile/_is_goalie')).upper()
 
 
 def _portrait_path(player_id):
@@ -261,25 +261,25 @@ class PlayerProfileScreen(BaseScreen):
     # -- context ---------------------------------------------------------------
 
     def _resolve_gm(self):
-        return safe_call(lambda: getattr(self.game, "game_manager", None), context="player_profile/_resolve_gm") or self.game
+        return safe_call(lambda: getattr(self.game, "game_manager", None), context='player_profile/_resolve_gm') or self.game
 
     def _user_team(self):
         gm = self._resolve_gm()
-        return (safe_call(lambda: gm.user_team, context="player_profile/_user_team")
-                or safe_call(lambda: getattr(self.game, "user_team", None), context="player_profile/_user_team"))
+        return (safe_call(lambda: gm.user_team, context='player_profile/_user_team')
+                or safe_call(lambda: getattr(self.game, "user_team", None), context='player_profile/_user_team'))
 
     def _find_team(self, p):
         gm = self._resolve_gm()
-        league = (safe_call(lambda: getattr(gm, "league", None), context="player_profile/_find_team")
-                  or safe_call(lambda: getattr(self.game, "league", None), context="player_profile/_find_team"))
-        teams = safe_call(lambda: list(getattr(league, "teams", []) or []), [], context="player_profile/_find_team") or []
+        league = (safe_call(lambda: getattr(gm, "league", None), context='player_profile/_find_team')
+                  or safe_call(lambda: getattr(self.game, "league", None), context='player_profile/_find_team'))
+        teams = safe_call(lambda: list(getattr(league, "teams", []) or []), [], context='player_profile/_find_team') or []
         user_team = self._user_team()
         if user_team is not None and all(t is not user_team for t in teams):
             teams = [user_team] + teams
         for team in teams:
             for attr in ("roster", "ahl_roster", "prospects"):
                 for q in (safe_call(lambda: list(getattr(team, attr, []) or []),
-                                [], context="player_profile/_find_team") or []):
+                                [], context='player_profile/_find_team') or []):
                     if q is p:
                         return team
         return user_team
@@ -365,12 +365,12 @@ class PlayerProfileScreen(BaseScreen):
         self._portrait.setText(initials)
 
     def _build_header(self, p, team):
-        pid = str(safe_call(lambda: getattr(p, "id", ""), "", context="player_profile/_build_header"))
+        pid = str(safe_call(lambda: getattr(p, "id", ""), "", context='player_profile/_build_header'))
         try:
             name = f"{p.first_name} {p.last_name}"
         except Exception:
             name = str(safe_call(lambda: getattr(p, "full_name", "Unknown Player"),
-                             "Unknown Player", context="player_profile/_build_header"))
+                             "Unknown Player", context='player_profile/_build_header'))
         self._name.setText(name)
 
         # portrait
@@ -383,7 +383,7 @@ class PlayerProfileScreen(BaseScreen):
             self._portrait.setText("")
         else:
             initials = safe_call(
-                lambda: f"{p.first_name[0]}{p.last_name[0]}".upper(), "?", context="player_profile/_build_header")
+                lambda: f"{p.first_name[0]}{p.last_name[0]}".upper(), "?", context='player_profile/_build_header')
             self._set_portrait_fallback(initials)
 
         # pills
@@ -397,34 +397,34 @@ class PlayerProfileScreen(BaseScreen):
                                      _PillLabel(text, fg))
 
         pos = _clean_position(safe_call(lambda: getattr(p, "primary_position",
-                                                    ""), "", context="player_profile/_build_header"))
+                                                    ""), "", context='player_profile/_build_header'))
         add_pill(pos)
-        arch = safe_call(lambda: getattr(p, "archetype", None), context="player_profile/_build_header")
+        arch = safe_call(lambda: getattr(p, "archetype", None), context='player_profile/_build_header')
         if arch:
             add_pill(str(arch))
-        add_pill(f"Age {safe_call(lambda: getattr(p, 'age', '?'), '?', context="player_profile/_build_header")}")
+        add_pill(f"Age {safe_call(lambda: getattr(p, 'age', '?'), '?', context='player_profile/_build_header')}")
         tier = None
         try:
             from attribute_composites import talent_tier_for_player, \
                 talent_tier_color
-            tier = safe_call(lambda: talent_tier_for_player(p), context="player_profile/_build_header")
+            tier = safe_call(lambda: talent_tier_for_player(p), context='player_profile/_build_header')
             if tier:
                 add_pill(str(tier),
-                         safe_call(lambda: talent_tier_color(tier), "#9aa3b2", context="player_profile/_build_header"))
+                         safe_call(lambda: talent_tier_color(tier), "#9aa3b2", context='player_profile/_build_header'))
         except Exception:
             pass
         try:
             import condition_ui as _cu
-            cond = safe_call(lambda: _cu.get_condition(p), None, context="player_profile/_build_header")
+            cond = safe_call(lambda: _cu.get_condition(p), None, context='player_profile/_build_header')
             if cond is not None:
                 add_pill(f"{cond} {_cu.condition_label(cond)}",
-                         safe_call(lambda: _cu.condition_color(cond), "#8fd14f", context="player_profile/_build_header"))
-            inj = safe_call(lambda: _cu.injury_status(p), context="player_profile/_build_header")
+                         safe_call(lambda: _cu.condition_color(cond), "#8fd14f", context='player_profile/_build_header'))
+            inj = safe_call(lambda: _cu.injury_status(p), context='player_profile/_build_header')
             if inj:
                 add_pill(inj, "#f85149")
         except Exception:
             pass
-        form = safe_call(lambda: float(getattr(p, "mesh_form", 0) or 0), 0.0, context="player_profile/_build_header")
+        form = safe_call(lambda: float(getattr(p, "mesh_form", 0) or 0), 0.0, context='player_profile/_build_header')
         if abs(form) > 1.0:
             form = form / 100.0
         if form >= 0.5:
@@ -432,12 +432,12 @@ class PlayerProfileScreen(BaseScreen):
         elif form <= -0.5:
             add_pill("\u2744 Cold", "#7aa2f7")
 
-        jersey = safe_call(lambda: int(getattr(p, "jersey_number", 0) or 0), 0, context="player_profile/_build_header")
+        jersey = safe_call(lambda: int(getattr(p, "jersey_number", 0) or 0), 0, context='player_profile/_build_header')
         user_team = self._user_team()
         editable = safe_call(lambda: any(
             p is q
             for attr in ("roster", "ahl_roster")
-            for q in (getattr(user_team, attr, None) or [])), False, context="player_profile/_build_header")
+            for q in (getattr(user_team, attr, None) or [])), False, context='player_profile/_build_header')
         if jersey:
             if editable:
                 btn = QPushButton(f"#{jersey}")
@@ -453,14 +453,14 @@ class PlayerProfileScreen(BaseScreen):
                 add_pill(f"#{jersey}")
 
         # strips
-        team_name = (safe_call(lambda: getattr(team, "team_name", None), context="player_profile/_build_header")
+        team_name = (safe_call(lambda: getattr(team, "team_name", None), context='player_profile/_build_header')
                      or str(safe_call(lambda: getattr(p, "team_name", ""),
-                                  "", context="player_profile/_build_header") or "Free Agent"))
-        contract = safe_call(lambda: getattr(p, "contract", None), context="player_profile/_build_header")
-        salary = (safe_call(lambda: getattr(p, "salary", None), context="player_profile/_build_header")
-                  or safe_call(lambda: getattr(contract, "salary", None), context="player_profile/_build_header"))
-        years = (safe_call(lambda: getattr(p, "contract_years", None), context="player_profile/_build_header")
-                 or safe_call(lambda: getattr(contract, "years_remaining", None), context="player_profile/_build_header"))
+                                  "", context='player_profile/_build_header') or "Free Agent"))
+        contract = safe_call(lambda: getattr(p, "contract", None), context='player_profile/_build_header')
+        salary = (safe_call(lambda: getattr(p, "salary", None), context='player_profile/_build_header')
+                  or safe_call(lambda: getattr(contract, "salary", None), context='player_profile/_build_header'))
+        years = (safe_call(lambda: getattr(p, "contract_years", None), context='player_profile/_build_header')
+                 or safe_call(lambda: getattr(contract, "years_remaining", None), context='player_profile/_build_header'))
         strip = [team_name]
         if salary:
             strip.append(f"${int(salary):,} / yr")
@@ -476,11 +476,11 @@ class PlayerProfileScreen(BaseScreen):
         if lg:
             rights_bits.append(f"League: {lg}")
         rt_team = str(safe_call(lambda: getattr(p, "rights_team", ""),
-                            "", context="player_profile/_build_header") or "").strip()
+                            "", context='player_profile/_build_header') or "").strip()
         if rt_team:
             rt_type = str(safe_call(lambda: getattr(p, "rights_type", ""),
-                                "", context="player_profile/_build_header") or "").strip()
-            rt_exp = safe_call(lambda: getattr(p, "rights_expiry_year", 0), 0, context="player_profile/_build_header") or 0
+                                "", context='player_profile/_build_header') or "").strip()
+            rt_exp = safe_call(lambda: getattr(p, "rights_expiry_year", 0), 0, context='player_profile/_build_header') or 0
             r = f"Rights: {rt_team}"
             if rt_type:
                 r += f" ({rt_type})"
@@ -490,8 +490,8 @@ class PlayerProfileScreen(BaseScreen):
         self._rights_strip.setText("   \u2022   ".join(rights_bits))
 
     def _edit_jersey(self, p, user_team):
-        cur = safe_call(lambda: int(getattr(p, "jersey_number", 0) or 0), 0, context="player_profile/_edit_jersey")
-        name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context="player_profile/_edit_jersey")
+        cur = safe_call(lambda: int(getattr(p, "jersey_number", 0) or 0), 0, context='player_profile/_edit_jersey')
+        name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context='player_profile/_edit_jersey')
         n, ok = QInputDialog.getInt(
             self, "Jersey Number",
             f"Number for {name} (current #{cur}).\n"
@@ -517,21 +517,21 @@ class PlayerProfileScreen(BaseScreen):
     def _tab_overview(self, p, team, lay):
         goalie = _is_goalie(p)
         # season stats cards
-        st = safe_call(lambda: getattr(p, "stats", None), context="player_profile/_tab_overview")
+        st = safe_call(lambda: getattr(p, "stats", None), context='player_profile/_tab_overview')
         if goalie:
             items = [
-                ("GP", safe_call(lambda: getattr(st, "games_played", 0), 0, context="player_profile/_tab_overview")),
-                ("W", safe_call(lambda: getattr(st, "wins", 0), 0, context="player_profile/_tab_overview")),
+                ("GP", safe_call(lambda: getattr(st, "games_played", 0), 0, context='player_profile/_tab_overview')),
+                ("W", safe_call(lambda: getattr(st, "wins", 0), 0, context='player_profile/_tab_overview')),
                 ("SV%", safe_call(lambda: f"{getattr(st, 'save_percentage', 0):.3f}",
-                              ".000", context="player_profile/_tab_overview")),
+                              ".000", context='player_profile/_tab_overview')),
                 ("GAA", safe_call(lambda: f"{getattr(st, 'goals_against_average', 0):.2f}",
-                              "0.00", context="player_profile/_tab_overview")),
+                              "0.00", context='player_profile/_tab_overview')),
             ]
         else:
-            g = safe_call(lambda: getattr(st, "goals", 0), 0, context="player_profile/_tab_overview")
-            a = safe_call(lambda: getattr(st, "assists", 0), 0, context="player_profile/_tab_overview")
+            g = safe_call(lambda: getattr(st, "goals", 0), 0, context='player_profile/_tab_overview')
+            a = safe_call(lambda: getattr(st, "assists", 0), 0, context='player_profile/_tab_overview')
             items = [
-                ("GP", safe_call(lambda: getattr(st, "games_played", 0), 0, context="player_profile/_tab_overview")),
+                ("GP", safe_call(lambda: getattr(st, "games_played", 0), 0, context='player_profile/_tab_overview')),
                 ("G", g), ("A", a), ("PTS", g + a),
             ]
         lay.addWidget(self._section_title("Season Stats"))
@@ -541,7 +541,7 @@ class PlayerProfileScreen(BaseScreen):
         try:
             import game_classes as _gc
             splits = safe_call(lambda: list(_gc.current_season_splits(p)),
-                           [], context="player_profile/_tab_overview") or []
+                           [], context='player_profile/_tab_overview') or []
             splits = [s for s in splits
                       if isinstance(s, dict) and int(s.get("gp", 0) or 0) > 0]
             if len({s.get("team") for s in splits if s.get("team")}) > 1:
@@ -558,56 +558,56 @@ class PlayerProfileScreen(BaseScreen):
         # contract card
         lay.addWidget(self._section_title("Contract"))
         rows = []
-        team_name = (safe_call(lambda: getattr(team, "team_name", None), context="player_profile/_tab_overview")
+        team_name = (safe_call(lambda: getattr(team, "team_name", None), context='player_profile/_tab_overview')
                      or str(safe_call(lambda: getattr(p, "team_name", ""),
-                                  "", context="player_profile/_tab_overview") or "Free Agent"))
+                                  "", context='player_profile/_tab_overview') or "Free Agent"))
         rows.append(("Club", team_name))
         lg = _league_of(team, p)
         if lg:
             rows.append(("League", lg))
-        c = safe_call(lambda: getattr(p, "contract", None), context="player_profile/_tab_overview")
+        c = safe_call(lambda: getattr(p, "contract", None), context='player_profile/_tab_overview')
         if c is not None:
-            sal = safe_call(lambda: getattr(c, "salary", 0), 0, context="player_profile/_tab_overview") or 0
+            sal = safe_call(lambda: getattr(c, "salary", 0), 0, context='player_profile/_tab_overview') or 0
             if sal:
                 rows.append(("Salary", _fmt_money(sal)))
-            yrs = safe_call(lambda: getattr(c, "years_remaining", None), context="player_profile/_tab_overview")
+            yrs = safe_call(lambda: getattr(c, "years_remaining", None), context='player_profile/_tab_overview')
             if yrs is not None:
                 rows.append(("Term", f"{yrs} yr{'s' if yrs != 1 else ''} left"))
             ct = _contract_type_label(p)
             if ct:
                 rows.append(("Type", ct))
-            sb = safe_call(lambda: getattr(c, "signing_bonus", 0), 0, context="player_profile/_tab_overview") or 0
+            sb = safe_call(lambda: getattr(c, "signing_bonus", 0), 0, context='player_profile/_tab_overview') or 0
             if sb:
                 rows.append(("Signing bonus", _fmt_money(sb)))
-            if safe_call(lambda: getattr(c, "two_way", False), False, context="player_profile/_tab_overview"):
-                ahl = safe_call(lambda: getattr(c, "ahl_salary", 0), 0, context="player_profile/_tab_overview") or 0
+            if safe_call(lambda: getattr(c, "two_way", False), False, context='player_profile/_tab_overview'):
+                ahl = safe_call(lambda: getattr(c, "ahl_salary", 0), 0, context='player_profile/_tab_overview') or 0
                 rows.append(("AHL salary", _fmt_money(ahl) if ahl else "--"))
             clauses = []
-            if safe_call(lambda: getattr(c, "no_movement_clause", False), False, context="player_profile/_tab_overview"):
+            if safe_call(lambda: getattr(c, "no_movement_clause", False), False, context='player_profile/_tab_overview'):
                 clauses.append("NMC")
-            if safe_call(lambda: getattr(c, "no_trade_clause", False), False, context="player_profile/_tab_overview"):
+            if safe_call(lambda: getattr(c, "no_trade_clause", False), False, context='player_profile/_tab_overview'):
                 clauses.append("NTC")
             mntc = safe_call(lambda: int(getattr(c, "modified_ntc_teams", 0) or 0),
-                         0, context="player_profile/_tab_overview")
+                         0, context='player_profile/_tab_overview')
             if mntc:
                 clauses.append(f"M-NTC ({mntc} teams)")
             if clauses:
                 rows.append(("Clauses", ", ".join(clauses)))
         rt_team = str(safe_call(lambda: getattr(p, "rights_team", ""),
-                            "", context="player_profile/_tab_overview") or "").strip()
+                            "", context='player_profile/_tab_overview') or "").strip()
         if rt_team:
             rt_type = str(safe_call(lambda: getattr(p, "rights_type", ""),
-                                "", context="player_profile/_tab_overview") or "").strip()
-            rt_exp = safe_call(lambda: getattr(p, "rights_expiry_year", 0), 0, context="player_profile/_tab_overview") or 0
+                                "", context='player_profile/_tab_overview') or "").strip()
+            rt_exp = safe_call(lambda: getattr(p, "rights_expiry_year", 0), 0, context='player_profile/_tab_overview') or 0
             r = rt_team
             if rt_type:
                 r += f" ({rt_type})"
             if rt_exp:
                 r += f" -- thru {rt_exp}"
             rows.append(("Rights", r))
-        dy = safe_call(lambda: getattr(p, "draft_year", None), context="player_profile/_tab_overview")
+        dy = safe_call(lambda: getattr(p, "draft_year", None), context='player_profile/_tab_overview')
         dp = str(safe_call(lambda: getattr(p, "draft_position", ""),
-                       "", context="player_profile/_tab_overview") or "").strip()
+                       "", context='player_profile/_tab_overview') or "").strip()
         if dy or dp:
             rows.append(("Drafted", f"{dy or '?'} {dp}".strip()))
         if not rows:
@@ -643,7 +643,7 @@ class PlayerProfileScreen(BaseScreen):
                 " margin-top: 6px;")
             lay.addWidget(sub)
             for label, field in attrs:
-                val = safe_call(lambda: getattr(p, field, None), context="player_profile/_tab_overview")
+                val = safe_call(lambda: getattr(p, field, None), context='player_profile/_tab_overview')
                 if val is None:
                     continue
                 lay.addWidget(AttributeBar(label, _to100(val)))
@@ -656,13 +656,13 @@ class PlayerProfileScreen(BaseScreen):
             import condition_ui as _cu
         except Exception:
             _cu = None
-        cond = safe_call(lambda: _cu.get_condition(p), None, context="player_profile/_tab_health") if _cu else None
+        cond = safe_call(lambda: _cu.get_condition(p), None, context='player_profile/_tab_health') if _cu else None
         if cond is not None:
             lay.addWidget(self._kv(
                 "Condition",
-                f"{cond} {safe_call(lambda: _cu.condition_label(cond), '', context="player_profile/_tab_health")}"))
-        injured = bool(safe_call(lambda: getattr(p, "is_injured", False), False, context="player_profile/_tab_health"))
-        status = safe_call(lambda: _cu.injury_status(p), context="player_profile/_tab_health") if _cu else None
+                f"{cond} {safe_call(lambda: _cu.condition_label(cond), '', context='player_profile/_tab_health')}"))
+        injured = bool(safe_call(lambda: getattr(p, "is_injured", False), False, context='player_profile/_tab_health'))
+        status = safe_call(lambda: _cu.injury_status(p), context='player_profile/_tab_health') if _cu else None
         if injured and status:
             lab = QLabel(f"\U0001F691 {status}")
             lab.setStyleSheet("color: #f85149; font-weight: 700;")
@@ -677,7 +677,7 @@ class PlayerProfileScreen(BaseScreen):
             lay.addWidget(lab)
 
         prone = safe_call(lambda: getattr(p, "injury_proneness",
-                                      getattr(p, "injury_prone", 50)), 50, context="player_profile/_tab_health")
+                                      getattr(p, "injury_prone", 50)), 50, context='player_profile/_tab_health')
         try:
             prone = int(prone or 0)
         except Exception:
@@ -691,13 +691,13 @@ class PlayerProfileScreen(BaseScreen):
         if injured:
             lay.addWidget(self._section_title("Active Injury"))
             itype = str(safe_call(lambda: getattr(p, "injury_type", "Injured"),
-                              "Injured", context="player_profile/_tab_health") or "Injured").strip() or "Injured"
+                              "Injured", context='player_profile/_tab_health') or "Injured").strip() or "Injured"
             n = safe_call(lambda: int(getattr(p, "games_remaining_injured", 0)
-                                  or 0), 0, context="player_profile/_tab_health")
+                                  or 0), 0, context='player_profile/_tab_health')
             lay.addWidget(self._kv("Injury", itype))
             lay.addWidget(self._kv("Games remaining", str(n)))
             last_inj = safe_call(lambda: str(getattr(p, "last_injury", "") or ""),
-                             "", context="player_profile/_tab_health")
+                             "", context='player_profile/_tab_health')
             if last_inj and last_inj != "None":
                 lay.addWidget(self._kv("Region", last_inj))
             if "concussion" in itype.lower():
@@ -707,8 +707,8 @@ class PlayerProfileScreen(BaseScreen):
 
         lay.addWidget(self._section_title("Injury History"))
         entries = []
-        last_inj = safe_call(lambda: str(getattr(p, "last_injury", "") or ""), "", context="player_profile/_tab_health")
-        inj_type = safe_call(lambda: str(getattr(p, "injury_type", "") or ""), "", context="player_profile/_tab_health")
+        last_inj = safe_call(lambda: str(getattr(p, "last_injury", "") or ""), "", context='player_profile/_tab_health')
+        inj_type = safe_call(lambda: str(getattr(p, "injury_type", "") or ""), "", context='player_profile/_tab_health')
         if last_inj and last_inj != "None":
             bits = inj_type if inj_type and inj_type != "None" else "Injury"
             bits += f" ({last_inj})"
@@ -721,29 +721,29 @@ class PlayerProfileScreen(BaseScreen):
         lay.addWidget(self._kv(
             "Career games missed",
             str(safe_call(lambda: int(getattr(p, "career_games_missed", 0)
-                                  or 0), 0, context="player_profile/_tab_health"))))
+                                  or 0), 0, context='player_profile/_tab_health'))))
         lay.addWidget(self._kv(
             "Days missed",
-            str(safe_call(lambda: int(getattr(p, "days_missed", 0) or 0), 0, context="player_profile/_tab_health"))))
+            str(safe_call(lambda: int(getattr(p, "days_missed", 0) or 0), 0, context='player_profile/_tab_health'))))
         lay.addWidget(self._kv(
             "Career concussions",
             str(safe_call(lambda: int(getattr(p, "career_concussions", 0)
-                                  or 0), 0, context="player_profile/_tab_health"))))
+                                  or 0), 0, context='player_profile/_tab_health'))))
 
     # -- analytics -------------------------------------------------------------------
 
     def _basic_analytics(self, p, goalie):
-        gp = safe_call(lambda: int(getattr(p, "games_played", 0) or 0), 0, context="player_profile/_basic_analytics") or 1
+        gp = safe_call(lambda: int(getattr(p, "games_played", 0) or 0), 0, context='player_profile/_basic_analytics') or 1
         if goalie:
-            w = safe_call(lambda: int(getattr(p, "wins", 0) or 0), 0, context="player_profile/_basic_analytics")
-            sv = safe_call(lambda: float(getattr(p, "save_pct", 0) or 0), 0, context="player_profile/_basic_analytics")
-            gaa = safe_call(lambda: float(getattr(p, "gaa", 0) or 0), 0, context="player_profile/_basic_analytics")
+            w = safe_call(lambda: int(getattr(p, "wins", 0) or 0), 0, context='player_profile/_basic_analytics')
+            sv = safe_call(lambda: float(getattr(p, "save_pct", 0) or 0), 0, context='player_profile/_basic_analytics')
+            gaa = safe_call(lambda: float(getattr(p, "gaa", 0) or 0), 0, context='player_profile/_basic_analytics')
             return [("Goaltending -- Basic",
                      [("Wins", str(w), ""), ("Save %", f"{sv:.3f}", ""),
                       ("GAA", f"{gaa:.2f}", "")])]
-        g = safe_call(lambda: int(getattr(p, "goals", 0) or 0), 0, context="player_profile/_basic_analytics")
-        a = safe_call(lambda: int(getattr(p, "assists", 0) or 0), 0, context="player_profile/_basic_analytics")
-        sog = safe_call(lambda: int(getattr(p, "shots", 0) or 0), 0, context="player_profile/_basic_analytics")
+        g = safe_call(lambda: int(getattr(p, "goals", 0) or 0), 0, context='player_profile/_basic_analytics')
+        a = safe_call(lambda: int(getattr(p, "assists", 0) or 0), 0, context='player_profile/_basic_analytics')
+        sog = safe_call(lambda: int(getattr(p, "shots", 0) or 0), 0, context='player_profile/_basic_analytics')
         return [("Offense -- Basic",
                  [("Goals / game", f"{g / gp:.2f}", ""),
                   ("Points / game", f"{(g + a) / gp:.2f}", ""),
@@ -760,7 +760,7 @@ class PlayerProfileScreen(BaseScreen):
             lens = None
             user_team = self._user_team() or team
             date_str = str(safe_call(lambda: getattr(self.game,
-                                                 "current_date", ""), "", context="player_profile/_tab_analytics"))
+                                                 "current_date", ""), "", context='player_profile/_tab_analytics'))
             try:
                 if user_team is not None:
                     lens = (am.display_goalie_metrics(p, user_team, date_str)
@@ -791,11 +791,11 @@ class PlayerProfileScreen(BaseScreen):
                 return text
 
             def _gloss(key):
-                return safe_call(lambda: am.GLOSSARY.get(key, ""), "", context="player_profile/_gloss")
+                return safe_call(lambda: am.GLOSSARY.get(key, ""), "", context='player_profile/_gloss')
 
             if lens is not None:
-                lens_info = (f"{safe_call(lambda: lens.tier, '', context="player_profile/_tab_analytics")}  "
-                             f"as of {safe_call(lambda: lens.as_of, '', context="player_profile/_tab_analytics")}")
+                lens_info = (f"{safe_call(lambda: lens.tier, '', context='player_profile/_tab_analytics')}  "
+                             f"as of {safe_call(lambda: lens.as_of, '', context='player_profile/_tab_analytics')}")
             if goalie:
                 m = _dc.asdict(am.goalie_advanced(p))
                 sections = [
@@ -893,9 +893,9 @@ class PlayerProfileScreen(BaseScreen):
         # shot tracking summary (real game tracking data)
         try:
             pid = getattr(p, "id", None)
-            pname = safe_call(lambda: getattr(p, "full_name", ""), "", context="player_profile/_tab_analytics") or ""
+            pname = safe_call(lambda: getattr(p, "full_name", ""), "", context='player_profile/_tab_analytics') or ""
             games = list(safe_call(lambda: getattr(team, "analytics_games",
-                                                None) or [], [], context="player_profile/_tab_analytics") or [])
+                                                None) or [], [], context='player_profile/_tab_analytics') or [])
             shots = []
             for rec in games:
                 if not isinstance(rec, dict):
@@ -932,9 +932,9 @@ class PlayerProfileScreen(BaseScreen):
             _pd.ensure_decision_fields(p)
         except Exception:
             pass
-        att = safe_call(lambda: rs.describe_attitude(p), None, context="player_profile/_tab_personality") if rs else None
+        att = safe_call(lambda: rs.describe_attitude(p), None, context='player_profile/_tab_personality') if rs else None
         ff = safe_call(lambda: rs.fan_favourite_score(p, team),
-                   {}, context="player_profile/_tab_personality") or {} if rs else {}
+                   {}, context='player_profile/_tab_personality') or {} if rs else {}
         att_colors = {
             "Volatile": "#f85149", "Fiery": "#d29922",
             "Emotional": "#d29922", "Even-keeled": "#3fb950",
@@ -945,25 +945,25 @@ class PlayerProfileScreen(BaseScreen):
             lab.setStyleSheet(
                 f"color: {att_colors.get(att, '#9aa3b2')}; font-weight: 700;")
             lay.addWidget(lab)
-        fans_tier = safe_call(lambda: ff.get("tier"), "", context="player_profile/_tab_personality")
+        fans_tier = safe_call(lambda: ff.get("tier"), "", context='player_profile/_tab_personality')
         if fans_tier:
             lay.addWidget(self._kv("Fan favourite", str(fans_tier)))
         for label, field in (("Morale", "morale"), ("Happiness", "happiness"),
                              ("Loyalty", "loyalty")):
             lay.addWidget(AttributeBar(
-                label, _to100(safe_call(lambda: getattr(p, field, 50), 50, context="player_profile/_tab_personality"))))
+                label, _to100(safe_call(lambda: getattr(p, field, 50), 50, context='player_profile/_tab_personality'))))
         amb_labels = {"cup": "Stanley Cup", "money": "Money",
                       "ice_time": "Ice Time", "stability": "Stability",
                       "home": "Hometown"}
         amb = amb_labels.get(
-            safe_call(lambda: getattr(p, "ambition", ""), "", context="player_profile/_tab_personality") or "", "")
-        rep = safe_call(lambda: int(getattr(p, "reputation", 0) or 0), 0, context="player_profile/_tab_personality")
-        lead = safe_call(lambda: int(getattr(p, "leadership", 0) or 0), 0, context="player_profile/_tab_personality")
+            safe_call(lambda: getattr(p, "ambition", ""), "", context='player_profile/_tab_personality') or "", "")
+        rep = safe_call(lambda: int(getattr(p, "reputation", 0) or 0), 0, context='player_profile/_tab_personality')
+        lead = safe_call(lambda: int(getattr(p, "leadership", 0) or 0), 0, context='player_profile/_tab_personality')
         rep_line = f"Reputation {rep}/100   \u2022   Leadership {lead}/100"
         if amb:
             rep_line += f"   \u2022   Ambition: {amb}"
         lay.addWidget(self._kv("Profile", rep_line))
-        reasons = safe_call(lambda: list(ff.get("reasons", []) or []), [], context="player_profile/_tab_personality") or []
+        reasons = safe_call(lambda: list(ff.get("reasons", []) or []), [], context='player_profile/_tab_personality') or []
         if reasons:
             lay.addWidget(self._section_title("Why Fans Care"))
             for r in reasons[:2]:
@@ -1004,21 +1004,21 @@ class PlayerProfileScreen(BaseScreen):
         try:
             import analytics_scouting as _as
             record = safe_call(lambda: _as.scout_record_line(scout),
-                           "no graded calls yet", context="player_profile/_tab_scout") or "no graded calls yet"
+                           "no graded calls yet", context='player_profile/_tab_scout') or "no graded calls yet"
         except Exception:
             record = "no graded calls yet"
         lay.addWidget(self._kv("Scout", safe_call(lambda: _sp.scout_display_name(
-            scout), "?", context="player_profile/_tab_scout")))
+            scout), "?", context='player_profile/_tab_scout')))
         lay.addWidget(self._kv("Record", record))
         lay.addWidget(self._kv(
             "Accuracy / Viewings",
-            f"{safe_call(lambda: getattr(report, 'accuracy', 'F'), 'F', context="player_profile/_tab_scout") if report else 'F'}"
+            f"{safe_call(lambda: getattr(report, 'accuracy', 'F'), 'F', context='player_profile/_tab_scout') if report else 'F'}"
             f"  \u2022  "
-            f"{safe_call(lambda: getattr(report, 'viewings', 0), 0, context="player_profile/_tab_scout") if report else 0}"))
+            f"{safe_call(lambda: getattr(report, 'viewings', 0), 0, context='player_profile/_tab_scout') if report else 0}"))
         try:
             comps = _sp.perceived_composites(p, scout, report) or {}
             for key, val in comps.items():
-                label = safe_call(lambda: _sp.composite_label(key), key, context="player_profile/_tab_scout")
+                label = safe_call(lambda: _sp.composite_label(key), key, context='player_profile/_tab_scout')
                 if isinstance(val, tuple):
                     lay.addWidget(self._kv(label, f"{val[0]:.0f}-{val[1]:.0f}"))
                 else:
@@ -1027,13 +1027,13 @@ class PlayerProfileScreen(BaseScreen):
             pass
         try:
             import scouting as _sc
-            pot = safe_call(lambda: _sc.report_potential_display(report, p), "?", context="player_profile/_tab_scout")
+            pot = safe_call(lambda: _sc.report_potential_display(report, p), "?", context='player_profile/_tab_scout')
         except Exception:
             pot = "?"
         lay.addWidget(self._kv("Potential", str(pot)))
         strengths, weaknesses = safe_call(
             lambda: _sp.perceived_strengths_weaknesses(p, scout, report),
-            ([], []), context="player_profile/_tab_scout")
+            ([], []), context='player_profile/_tab_scout')
         if strengths:
             lay.addWidget(self._section_title("Strengths"))
             for s in strengths:
@@ -1043,7 +1043,7 @@ class PlayerProfileScreen(BaseScreen):
             for w in weaknesses:
                 lay.addWidget(self._kv("\u2022", str(w)))
         notes = ""
-        if report and safe_call(lambda: getattr(report, "notes", ""), "", context="player_profile/_tab_scout"):
+        if report and safe_call(lambda: getattr(report, "notes", ""), "", context='player_profile/_tab_scout'):
             notes = str(report.notes)[:600]
         if notes:
             lay.addWidget(self._section_title("Scout Notes"))
@@ -1060,9 +1060,9 @@ class PlayerProfileScreen(BaseScreen):
             lay.addWidget(self._note("Dynamics unavailable."))
             return
         roster = safe_call(lambda: list(getattr(team, "roster", []) or []),
-                       [], context="player_profile/_tab_dynamics") or []
+                       [], context='player_profile/_tab_dynamics') or []
         if roster:
-            tiers = safe_call(lambda: rs.team_hierarchy(roster), {}, context="player_profile/_tab_dynamics") or {}
+            tiers = safe_call(lambda: rs.team_hierarchy(roster), {}, context='player_profile/_tab_dynamics') or {}
             for tname, ps in tiers.items():
                 try:
                     if p in ps:
@@ -1080,11 +1080,11 @@ class PlayerProfileScreen(BaseScreen):
         except Exception:
             pass
         if coach is not None:
-            resp = safe_call(lambda: rs.player_coach_response(p, coach), None, context="player_profile/_tab_dynamics")
+            resp = safe_call(lambda: rs.player_coach_response(p, coach), None, context='player_profile/_tab_dynamics')
             fit = (resp.get("response", "Neutral") if isinstance(resp, dict)
                    else str(resp)) if resp is not None else "Neutral"
             lay.addWidget(self._kv("Coach fit", fit))
-        risk = safe_call(lambda: rs.trade_request_risk(p), None, context="player_profile/_tab_dynamics")
+        risk = safe_call(lambda: rs.trade_request_risk(p), None, context='player_profile/_tab_dynamics')
         if risk is not None:
             if risk >= 0.5:
                 lab = QLabel("Trade risk: HIGH")
@@ -1094,7 +1094,7 @@ class PlayerProfileScreen(BaseScreen):
                 lab = QLabel("Trade risk: elevated")
                 lab.setStyleSheet("color: #d29922; font-weight: 700;")
                 lay.addWidget(lab)
-        friends = safe_call(lambda: rs.get_friends(p, roster), [], context="player_profile/_tab_dynamics") or []
+        friends = safe_call(lambda: rs.get_friends(p, roster), [], context='player_profile/_tab_dynamics') or []
         if friends:
             lay.addWidget(self._section_title("Friends"))
             for f in friends:
@@ -1102,10 +1102,10 @@ class PlayerProfileScreen(BaseScreen):
                 if pl is not None:
                     lay.addWidget(self._kv(
                         "\u2022", safe_call(
-                            lambda: f"{pl.first_name} {pl.last_name}", "?", context="player_profile/_tab_dynamics")))
-        league = (safe_call(lambda: getattr(self._resolve_gm(), "league", None), context="player_profile/_tab_dynamics")
-                  or safe_call(lambda: getattr(self.game, "league", None), context="player_profile/_tab_dynamics"))
-        rivals = safe_call(lambda: rs.get_rivals(p, roster, league), [], context="player_profile/_tab_dynamics") or []
+                            lambda: f"{pl.first_name} {pl.last_name}", "?", context='player_profile/_tab_dynamics')))
+        league = (safe_call(lambda: getattr(self._resolve_gm(), "league", None), context='player_profile/_tab_dynamics')
+                  or safe_call(lambda: getattr(self.game, "league", None), context='player_profile/_tab_dynamics'))
+        rivals = safe_call(lambda: rs.get_rivals(p, roster, league), [], context='player_profile/_tab_dynamics') or []
         if rivals:
             lay.addWidget(self._section_title("Rivals"))
             for d in rivals:
@@ -1113,7 +1113,7 @@ class PlayerProfileScreen(BaseScreen):
                     lay.addWidget(self._kv(
                         "\u2022",
                         f"{d.get('name', '?')} ({d.get('origin', '?')})"))
-        bonds_src = safe_call(lambda: getattr(p, "coach_bonds", None), None, context="player_profile/_tab_dynamics")
+        bonds_src = safe_call(lambda: getattr(p, "coach_bonds", None), None, context='player_profile/_tab_dynamics')
         bonds = []
         if isinstance(bonds_src, dict):
             bonds = [str(s) for s in list(bonds_src.values())[:3]]
@@ -1134,7 +1134,7 @@ class PlayerProfileScreen(BaseScreen):
             _gc = None
         by_season = {}
         for s in (safe_call(lambda: getattr(p, "season_history", None),
-                        [], context="player_profile/_tab_history") or []):
+                        [], context='player_profile/_tab_history') or []):
             if isinstance(s, dict):
                 by_season.setdefault(s.get("season"), []).append(s)
         seasons = sorted((s for s in by_season if s is not None),
@@ -1142,7 +1142,7 @@ class PlayerProfileScreen(BaseScreen):
         live = []
         if _gc is not None:
             live = [s for s in (safe_call(lambda: list(
-                _gc.current_season_splits(p)), [], context="player_profile/_tab_history") or [])
+                _gc.current_season_splits(p)), [], context='player_profile/_tab_history') or [])
                 if isinstance(s, dict) and int(s.get("gp", 0) or 0) > 0]
 
         def stint_line(st):
@@ -1220,25 +1220,25 @@ class PlayerProfileScreen(BaseScreen):
 
         # playoffs
         phist = [pl for pl in (safe_call(lambda: getattr(p, "playoff_history",
-                                                    None), [], context="player_profile/_tab_history") or [])
+                                                    None), [], context='player_profile/_tab_history') or [])
                  if isinstance(pl, dict) and int(pl.get("gp", 0) or 0) > 0]
-        cur = safe_call(lambda: getattr(p, "playoff_stats", None), context="player_profile/_tab_history")
+        cur = safe_call(lambda: getattr(p, "playoff_stats", None), context='player_profile/_tab_history')
         if cur is not None and safe_call(lambda: int(
-                getattr(cur, "games_played", 0) or 0), 0, context="player_profile/_tab_history") > 0:
+                getattr(cur, "games_played", 0) or 0), 0, context='player_profile/_tab_history') > 0:
             phist.append({
                 "season": "Current",
                 "gp": safe_call(lambda: int(getattr(cur, "games_played", 0)
-                                        or 0), 0, context="player_profile/_tab_history"),
-                "g": safe_call(lambda: int(getattr(cur, "goals", 0) or 0), 0, context="player_profile/_tab_history"),
-                "a": safe_call(lambda: int(getattr(cur, "assists", 0) or 0), 0, context="player_profile/_tab_history"),
+                                        or 0), 0, context='player_profile/_tab_history'),
+                "g": safe_call(lambda: int(getattr(cur, "goals", 0) or 0), 0, context='player_profile/_tab_history'),
+                "a": safe_call(lambda: int(getattr(cur, "assists", 0) or 0), 0, context='player_profile/_tab_history'),
                 "pim": safe_call(lambda: int(getattr(cur, "penalties_in_minutes",
-                                                 0) or 0), 0, context="player_profile/_tab_history"),
-                "w": safe_call(lambda: int(getattr(cur, "wins", 0) or 0), 0, context="player_profile/_tab_history"),
-                "l": safe_call(lambda: int(getattr(cur, "losses", 0) or 0), 0, context="player_profile/_tab_history"),
-                "sv": safe_call(lambda: int(getattr(cur, "saves", 0) or 0), 0, context="player_profile/_tab_history"),
+                                                 0) or 0), 0, context='player_profile/_tab_history'),
+                "w": safe_call(lambda: int(getattr(cur, "wins", 0) or 0), 0, context='player_profile/_tab_history'),
+                "l": safe_call(lambda: int(getattr(cur, "losses", 0) or 0), 0, context='player_profile/_tab_history'),
+                "sv": safe_call(lambda: int(getattr(cur, "saves", 0) or 0), 0, context='player_profile/_tab_history'),
                 "sa": safe_call(lambda: int(getattr(cur, "shots_against", 0)
-                                        or 0), 0, context="player_profile/_tab_history"),
-                "so": safe_call(lambda: int(getattr(cur, "shutouts", 0) or 0), 0, context="player_profile/_tab_history"),
+                                        or 0), 0, context='player_profile/_tab_history'),
+                "so": safe_call(lambda: int(getattr(cur, "shutouts", 0) or 0), 0, context='player_profile/_tab_history'),
             })
         phist.sort(key=lambda pl: (0 if pl.get("season") == "Current" else 1,
                                    -(pl["season"]

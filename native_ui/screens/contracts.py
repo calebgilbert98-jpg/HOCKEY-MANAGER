@@ -1057,12 +1057,12 @@ class ExtensionDialog(QDialog):
                     band.get("error") or "Not ELC-eligible.")
             self._player_lbl.setText(
                 f"{_player_name(p)} · {_pos_str(p)} · Age "
-                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context="contracts/_load_static")} · "
-                f"POT {safe_call(lambda: getattr(p, 'potential_grade', '?'), '?', context="contracts/_load_static")}")
+                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context='contracts/_load_static')} · "
+                f"POT {safe_call(lambda: getattr(p, 'potential_grade', '?'), '?', context='contracts/_load_static')}")
         else:
             self._player_lbl.setText(
                 f"{_player_name(p)} · {_pos_str(p)} · Age "
-                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context="contracts/_load_static")} · "
+                f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context='contracts/_load_static')} · "
                 f"{_player_ovr(p)} OVR")
             self._clause_opts = _clause_info(game, p)
             self._fill_clause_combo()

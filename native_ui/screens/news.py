@@ -39,25 +39,25 @@ from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None), context="news/resolve_gm") or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context='news/resolve_gm') or game
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    league = safe_call(lambda: getattr(gm, "league", None), context="news/resolve_league")
+    league = safe_call(lambda: getattr(gm, "league", None), context='news/resolve_league')
     if league is None:
-        league = safe_call(lambda: getattr(game, "league", None), context="news/resolve_league")
+        league = safe_call(lambda: getattr(game, "league", None), context='news/resolve_league')
     return league
 
 
 def _teams(league):
     if league is None:
         return []
-    return safe_call(lambda: list(getattr(league, "teams", None) or []), [], context="news/teams") or []
+    return safe_call(lambda: list(getattr(league, "teams", None) or []), [], context='news/teams') or []
 
 
 def _team_name(t):
-    return safe_call(lambda: str(getattr(t, "team_name", "") or ""), "", context="news/team_name") or ""
+    return safe_call(lambda: str(getattr(t, "team_name", "") or ""), "", context='news/team_name') or ""
 
 
 def _fnum(v, default=0.0):
@@ -105,7 +105,7 @@ def _cat_color(c):
 
 def _news_payload(game):
     """app.news_log -> newest-first list of dicts. Never raises."""
-    raw = safe_call(lambda: list(getattr(game, "news_log", None) or []), [], context="news/payload_news_log") or []
+    raw = safe_call(lambda: list(getattr(game, "news_log", None) or []), [], context='news/payload_news_log') or []
     items = []
     for entry in raw:
         try:
@@ -114,13 +114,13 @@ def _news_payload(game):
                 story = entry.get("story", "")
             else:
                 d, story = None, entry
-            story_text = safe_call(lambda: str(story), "", context="news/payload_story") or ""
+            story_text = safe_call(lambda: str(story), "", context='news/payload_story') or ""
             if isinstance(d, (date, datetime)):
                 date_iso = d.isoformat()
                 date_label = d.strftime("%b %d, %Y")
             else:
                 date_iso = ""
-                date_label = safe_call(lambda: str(d), "", context="news/payload_date") or ""
+                date_label = safe_call(lambda: str(d), "", context='news/payload_date') or ""
             items.append({"date": date_iso, "date_label": date_label,
                           "story": story_text})
         except Exception:
@@ -237,11 +237,11 @@ def _journalists_payload(game):
             for r in reps:
                 arch = safe_call(lambda: str(getattr(r, "archetype", "") or ""),
                              "",
-                                 context="news/reporter_archetype") or "neutral"
+                                 context='news/reporter_archetype') or "neutral"
                 reporters.append({
                     "name": safe_call(lambda: str(getattr(r, "name", "") or ""),
                                   "",
-                                      context="news/reporter_name") or "Unknown",
+                                      context='news/reporter_name') or "Unknown",
                     "archetype": arch,
                     "archetype_blurb": _ARCHETYPE_BLURB.get(arch, ""),
                     "credibility": round(_fnum(
@@ -287,16 +287,16 @@ def _player_index(league):
             for coll in ("roster", "prospects"):
                 for p in safe_call(lambda: list(getattr(t, coll, None) or []),
                                [],
-                                   context="news/player_index_collection") or []:
+                                   context='news/player_index_collection') or []:
                     try:
                         pid = getattr(p, "id", None)
                         if pid is None or pid in idx:
                             continue
                         name = (safe_call(lambda: str(
                             getattr(p, "full_name", "") or ""), "",
-                                          context="news/player_index_full_name")
-                                or (f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '', context="news/player_index_first_name")} "
-                                    f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '', context="news/player_index_last_name")}".strip())
+                                          context='news/player_index_full_name')
+                                or (f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '', context='news/player_index_first_name')} "
+                                    f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '', context='news/player_index_last_name')}".strip())
                                 or "Unknown Player")
                         idx[pid] = name
                     except Exception:
@@ -319,16 +319,16 @@ def _narratives_payload(game):
         names = _player_index(league)
         raw_narrs = safe_call(lambda: list(
             getattr(league, "media_narratives", None) or []), [],
-                              context="news/narratives_raw") or []
+                              context='news/narratives_raw') or []
         narratives = []
         for n in raw_narrs:
             try:
-                kind = safe_call(lambda: str(getattr(n, "kind", "") or ""), "", context="news/narrative_kind")
+                kind = safe_call(lambda: str(getattr(n, "kind", "") or ""), "", context='news/narrative_kind')
                 heat = _fnum(getattr(n, "heat", 0), 0.0)
                 subjects = []
                 for s in safe_call(lambda: list(
                         getattr(n, "subjects", None) or []), [],
-                                   context="news/narrative_subjects") or []:
+                                   context='news/narrative_subjects') or []:
                     if s:
                         subjects.append({
                             "id": str(s),
@@ -341,10 +341,10 @@ def _narratives_payload(game):
                         kind, kind.replace("_", " ").title() or "Storyline"),
                     "team": safe_call(lambda: str(
                         getattr(n, "team_name", "") or ""), "",
-                                      context="news/narrative_team"),
+                                      context='news/narrative_team'),
                     "title": safe_call(lambda: str(
                         getattr(n, "title", "") or ""), "",
-                                       context="news/narrative_title"),
+                                       context='news/narrative_title'),
                     "subjects": subjects,
                     "heat": round(max(0.0, min(100.0, heat)), 1),
                 })
@@ -354,7 +354,7 @@ def _narratives_payload(game):
 
         raw_beefs = safe_call(lambda: list(
             getattr(league, "coach_media_beefs", None) or []), [],
-                              context="news/beefs_raw") or []
+                              context='news/beefs_raw') or []
         beefs = []
         for b in raw_beefs:
             try:
@@ -362,13 +362,13 @@ def _narratives_payload(game):
                 beefs.append({
                     "coach": safe_call(lambda: str(
                         getattr(b, "coach_name", "") or ""), "",
-                                       context="news/beef_coach"),
+                                       context='news/beef_coach'),
                     "reporter": safe_call(lambda: str(
                         getattr(b, "reporter_name", "") or ""), "",
-                                          context="news/beef_reporter"),
+                                          context='news/beef_reporter'),
                     "team": safe_call(lambda: str(
                         getattr(b, "team_name", "") or ""), "",
-                                      context="news/beef_team"),
+                                      context='news/beef_team'),
                     "level": level,
                     "level_label": _BEEF_LEVELS.get(level,
                                                   f"Level {level}"),
@@ -393,7 +393,7 @@ def _fines_payload(game):
     try:
         raw = safe_call(lambda: list(
             getattr(league, "media_fines", None) or []), [],
-                        context="news/fines_raw") or []
+                        context='news/fines_raw') or []
         fines = []
         for f in raw:
             try:
@@ -405,17 +405,17 @@ def _fines_payload(game):
                     date_label = d.strftime("%b %d, %Y")
                 else:
                     date_iso = ""
-                    date_label = safe_call(lambda: str(d), "", context="news/fine_date") or ""
+                    date_label = safe_call(lambda: str(d), "", context='news/fine_date') or ""
                 amount = int(_fnum(f.get("amount", 0), 0))
                 fines.append({
                     "date": date_iso, "date_label": date_label,
-                    "name": safe_call(lambda: str(f.get("name", "") or ""), "", context="news/fine_name"),
-                    "team": safe_call(lambda: str(f.get("team", "") or ""), "", context="news/fine_team"),
+                    "name": safe_call(lambda: str(f.get("name", "") or ""), "", context='news/fine_name'),
+                    "team": safe_call(lambda: str(f.get("team", "") or ""), "", context='news/fine_team'),
                     "amount": amount,
                     "reason": safe_call(lambda: str(
                         f.get("reason", "") or ""), "",
-                                        context="news/fine_reason"),
-                    "role": safe_call(lambda: str(f.get("role", "") or ""), "", context="news/fine_role"),
+                                        context='news/fine_reason'),
+                    "role": safe_call(lambda: str(f.get("role", "") or ""), "", context='news/fine_role'),
                 })
             except Exception:
                 continue
@@ -445,7 +445,7 @@ def _fanbuzz_payload(game):
     except Exception:
         return [], {}
     try:
-        current = safe_call(lambda: getattr(game, "current_date", None), context="news/sentiment_current_date")
+        current = safe_call(lambda: getattr(game, "current_date", None), context='news/sentiment_current_date')
         teams = []
         for t in _teams(league):
             try:
@@ -456,17 +456,17 @@ def _fanbuzz_payload(game):
                     fs.get_fan_sentiment(t, current), 60.0)))
                 label = safe_call(lambda: str(fs.sentiment_label(value) or ""),
                               "",
-                                  context="news/sentiment_label") or "Content"
+                                  context='news/sentiment_label') or "Content"
                 tier = safe_call(lambda: str(fn.sentiment_tier(value) or ""),
                              "",
-                                 context="news/sentiment_tier") or "content"
+                                 context='news/sentiment_tier') or "content"
                 tone = safe_call(lambda: str(
                     fn.media_tone_for_sentiment(t, current) or ""),
                     "",
-                                 context="news/sentiment_tone") or "neutral"
+                                 context='news/sentiment_tone') or "neutral"
                 trail = safe_call(lambda: list(
                     getattr(t, "fan_sentiment_trail", None) or []), [],
-                                  context="news/sentiment_trail") or []
+                                  context='news/sentiment_trail') or []
                 drivers = []
                 for entry in reversed(trail[-4:]):
                     try:
@@ -474,12 +474,12 @@ def _fanbuzz_payload(game):
                             drivers.append({
                                 "date": safe_call(lambda: str(
                                     entry.get("date", "") or ""), "",
-                                                  context="news/driver_date"),
+                                                  context='news/driver_date'),
                                 "delta": round(_fnum(
                                     entry.get("delta", 0.0), 0.0), 1),
                                 "reason": safe_call(lambda: str(
                                     entry.get("reason", "") or ""), "",
-                                                    context="news/driver_reason"),
+                                                    context='news/driver_reason'),
                             })
                     except Exception:
                         continue
@@ -520,16 +520,16 @@ _ON_RISE_THRESHOLD = 55
 
 
 def _player_full_name(p):
-    return safe_call(lambda: str(getattr(p, "full_name", "") or ""), "", context="news/helper_full_name") or (
-        f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '', context="news/helper_first_name")} "
-        f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '', context="news/helper_last_name")}"
+    return safe_call(lambda: str(getattr(p, "full_name", "") or ""), "", context='news/helper_full_name') or (
+        f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '', context='news/helper_first_name')} "
+        f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '', context='news/helper_last_name')}"
         .strip()) or "Unknown Player"
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: gm.user_team, context="news/resolve_user_team")
-            or safe_call(lambda: getattr(game, "user_team", None), context="news/resolve_user_team"))
+    return (safe_call(lambda: gm.user_team, context='news/resolve_user_team')
+            or safe_call(lambda: getattr(game, "user_team", None), context='news/resolve_user_team'))
 
 
 def _playerbuzz_payload(game):

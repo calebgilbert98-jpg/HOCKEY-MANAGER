@@ -293,8 +293,8 @@ class CompareScreen(BaseScreen):
                     child.deleteLater()
             if i < len(self._players):
                 p = self._players[i]
-                name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context="compare/_render_slots")
-                meta = (f"{safe_call(lambda: str(getattr(p, 'team_name', '')), '', context="compare/_render_slots")} · "
+                name = safe_call(lambda: getattr(p, "full_name", "?"), "?", context='compare/_render_slots')
+                meta = (f"{safe_call(lambda: str(getattr(p, 'team_name', '')), '', context='compare/_render_slots')} · "
                         f"{self._pos_str(p)} · {self._overall(p)} OVR")
                 name_l = QLabel(str(name))
                 name_l.setStyleSheet("font-weight: 700; font-size: 14px;")

@@ -33,15 +33,15 @@ from native_ui.safe import safe_call
 
 
 def _pid(p):
-    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context="offer_sheets/_pid"))
+    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context='offer_sheets/_pid'))
 
 
 def _player_name(p):
-    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context="offer_sheets/_player_name")
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context='offer_sheets/_player_name')
 
 
 def _pos_str(p):
-    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="offer_sheets/_pos_str")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context='offer_sheets/_pos_str')
     raw = getattr(pos, "value", pos)
     try:
         return str(raw or "?").strip()
@@ -58,7 +58,7 @@ def _player_ovr(p):
                 return int(v)
     except Exception:
         pass
-    return safe_call(lambda: int(getattr(p, "overall", 0) or 0), 0, context="offer_sheets/_player_ovr")
+    return safe_call(lambda: int(getattr(p, "overall", 0) or 0), 0, context='offer_sheets/_player_ovr')
 
 
 def _fmt_money(v):
@@ -74,19 +74,19 @@ def _fmt_money(v):
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None), context="offer_sheets/_resolve_gm") or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context='offer_sheets/_resolve_gm') or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: gm.user_team, context="offer_sheets/_user_team")
-            or safe_call(lambda: getattr(game, "user_team", None), context="offer_sheets/_user_team"))
+    return (safe_call(lambda: gm.user_team, context='offer_sheets/_user_team')
+            or safe_call(lambda: getattr(game, "user_team", None), context='offer_sheets/_user_team'))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: gm.league, context="offer_sheets/_user_league")
-            or safe_call(lambda: getattr(game, "league", None), context="offer_sheets/_user_league"))
+    return (safe_call(lambda: gm.league, context='offer_sheets/_user_league')
+            or safe_call(lambda: getattr(game, "league", None), context='offer_sheets/_user_league'))
 
 
 # ---------------------------------------------------------------------------
@@ -118,22 +118,22 @@ def _targets(game):
         return []
     league = _user_league(game)
     user = _user_team(game)
-    user_name = str(safe_call(lambda: getattr(user, "team_name", ""), "", context="offer_sheets/_targets"))
+    user_name = str(safe_call(lambda: getattr(user, "team_name", ""), "", context='offer_sheets/_targets'))
     teams = safe_call(lambda: list(getattr(league, "teams", None) or []),
-                  [], context="offer_sheets/_targets") or []
+                  [], context='offer_sheets/_targets') or []
     out = []
     for team in teams:
         try:
             if team is user:
                 continue
             if str(safe_call(lambda: getattr(team, "team_name", ""),
-                         "", context="offer_sheets/_targets")) == user_name:
+                         "", context='offer_sheets/_targets')) == user_name:
                 continue
             if str(safe_call(lambda: getattr(team, "league_name", ""),
-                         "", context="offer_sheets/_targets")) != "National Hockey League":
+                         "", context='offer_sheets/_targets')) != "National Hockey League":
                 continue
             for p in list(safe_call(lambda: getattr(team, "roster", None)
-                                or [], [], context="offer_sheets/_targets") or []):
+                                or [], [], context='offer_sheets/_targets') or []):
                 try:
                     if not rfa.is_rfa(p):
                         continue
@@ -155,7 +155,7 @@ def _cap_space(game, team):
     try:
         from salary_cap_system import cap_breakdown
         return int(safe_call(lambda: cap_breakdown(team).get("space", 0),
-                         0, context="offer_sheets/_cap_space") or 0)
+                         0, context='offer_sheets/_cap_space') or 0)
     except Exception:
         return 0
 
@@ -163,7 +163,7 @@ def _cap_space(game, team):
 def _window_check(game):
     try:
         import transaction_windows as _tw
-        d = safe_call(lambda: getattr(game, "current_date", None), context="offer_sheets/_window_check")
+        d = safe_call(lambda: getattr(game, "current_date", None), context='offer_sheets/_window_check')
         ok, why = _tw.check_window("offer_sheet", d)
         return bool(ok), (why or "")
     except Exception:
@@ -181,7 +181,7 @@ def _compensation_pick_status(user_team, year, picks):
     for rnd in picks:
         pk, y = None, year
         for yy in range(year, year + 7):
-            cand = safe_call(lambda: rfa.own_pick_available(user_team, yy, rnd), context="offer_sheets/_compensation_pick_status")
+            cand = safe_call(lambda: rfa.own_pick_available(user_team, yy, rnd), context='offer_sheets/_compensation_pick_status')
             if cand is not None and id(cand) not in used:
                 pk, y = cand, yy
                 break
@@ -214,7 +214,7 @@ def _preview(game, player, aav, years):
     except Exception:
         label, picks = "?", []
     year = int(safe_call(lambda: getattr(league, "season_year", 2026),
-                     2026, context="offer_sheets/_preview") or 2026) + 1
+                     2026, context='offer_sheets/_preview') or 2026) + 1
     comp_lines, missing = _compensation_pick_status(user, year, picks)
     out["compensation"] = {"label": label or "No compensation",
                            "lines": comp_lines, "missing": missing}
@@ -224,7 +224,7 @@ def _preview(game, player, aav, years):
                    "text": f"Cap space {_fmt_money(space)} vs "
                            f"{_fmt_money(aav)}/yr"})
     n_roster = safe_call(lambda: len(list(getattr(user, "roster", None) or [])),
-                     0, context="offer_sheets/_preview")
+                     0, context='offer_sheets/_preview')
     checks.append({"ok": n_roster < 23,
                    "text": f"Roster {n_roster}/23"})
     if missing:
@@ -289,7 +289,7 @@ def _present(game, player, aav, years):
     except Exception as e:
         return False, f"Could not price compensation: {e}"
     year = int(safe_call(lambda: getattr(league, "season_year", 2026),
-                     2026, context="offer_sheets/_present") or 2026) + 1
+                     2026, context='offer_sheets/_present') or 2026) + 1
     _lines, missing = _compensation_pick_status(user, year, picks)
     if missing:
         return False, (f"You don't hold your own picks for the required "
@@ -301,7 +301,7 @@ def _present(game, player, aav, years):
         return False, (f"Not enough cap space: {_fmt_money(space)} "
                        f"available vs {_fmt_money(aav)}/yr.")
     n_roster = safe_call(lambda: len(list(getattr(user, "roster", None) or [])),
-                     0, context="offer_sheets/_present")
+                     0, context='offer_sheets/_present')
     if n_roster >= 23:
         return False, "Your NHL roster is full (23/23)."
     # 4. The player must agree to sign (real engine).
@@ -312,7 +312,7 @@ def _present(game, player, aav, years):
             if _pid(p) == _pid(player):
                 original_team = t
                 break
-        rng = safe_call(lambda: getattr(game, "_rng", None), context="offer_sheets/_present")
+        rng = safe_call(lambda: getattr(game, "_rng", None), context='offer_sheets/_present')
         willing, _appeal, reasons = _pd.player_accepts_offer_sheet(
             player, user, aav, years, original_team,
             league=league, app=game, rng=rng)
@@ -332,7 +332,7 @@ def _present(game, player, aav, years):
     #    the same the July pass uses. One rulebook.
     try:
         tname = (safe_call(lambda: getattr(original_team, "team_name", "?"),
-                       "?", context="offer_sheets/_present") if original_team is not None else "?")
+                       "?", context='offer_sheets/_present') if original_team is not None else "?")
         if rfa.ai_match_decision(original_team, player, aav, label):
             mres = rfa.apply_offer_sheet_matched(
                 league, user, original_team, player, aav, years, app=game)
@@ -343,7 +343,7 @@ def _present(game, player, aav, years):
             return True, msg
         res = rfa.execute_offer_sheet(
             league, user, original_team, player, aav, years,
-            app=game, rng=safe_call(lambda: getattr(game, "_rng", None), context="offer_sheets/_present"))
+            app=game, rng=safe_call(lambda: getattr(game, "_rng", None), context='offer_sheets/_present'))
         if isinstance(res, dict) and not res.get("ok"):
             return False, (f"The sheet failed: "
                            f"{res.get('reason', 'unknown')}.")
@@ -492,9 +492,9 @@ class OfferSheetsScreen(BaseScreen):
         self._target_list.clear()
         self._items = []
         for (p, team, market) in targets:
-            tname = safe_call(lambda: getattr(team, "team_name", "?"), "?", context="offer_sheets/_load_targets")
+            tname = safe_call(lambda: getattr(team, "team_name", "?"), "?", context='offer_sheets/_load_targets')
             text = (f"{_player_name(p)} — {_pos_str(p)}, age "
-                    f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context="offer_sheets/_load_targets")}, "
+                    f"{safe_call(lambda: int(getattr(p, 'age', 0) or 0), 0, context='offer_sheets/_load_targets')}, "
                     f"{tname}, {_tier_label(_player_ovr(p))}\n"
                     f"Est. value {_fmt_money(market)}/yr")
             item = QListWidgetItem(text)
@@ -526,10 +526,10 @@ class OfferSheetsScreen(BaseScreen):
         self._selected = self._items[row]
         player, team, market = self._selected
         self._result_lbl.setText("")
-        tname = safe_call(lambda: getattr(team, "team_name", "?"), "?", context="offer_sheets/_on_select")
+        tname = safe_call(lambda: getattr(team, "team_name", "?"), "?", context='offer_sheets/_on_select')
         self._detail_lbl.setText(
             f"{_player_name(player)} — {_pos_str(player)}, age "
-            f"{safe_call(lambda: int(getattr(player, 'age', 0) or 0), 0, context="offer_sheets/_on_select")}, "
+            f"{safe_call(lambda: int(getattr(player, 'age', 0) or 0), 0, context='offer_sheets/_on_select')}, "
             f"{_tier_label(_player_ovr(player))}\n"
             f"Rights held by: {tname}\n"
             f"Engine's market read: {_fmt_money(market)}/yr")
