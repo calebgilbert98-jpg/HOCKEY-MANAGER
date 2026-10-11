@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QTextEdit, QStackedWidget, QMessageBox, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 
 from .base import BaseScreen
 
@@ -54,7 +55,8 @@ def _fmt_money(v):
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None),
+                     context="inbox/resolve_gm") or game
 
 
 def _user_team(game):
@@ -102,7 +104,8 @@ def _try_all_messages(game):
 
 
 def _msg_id(m):
-    return safe_call(lambda: str(getattr(m, "id", "")), "")
+    return safe_call(lambda: str(getattr(m, "id", "")), "",
+                     context="inbox/msg_id")
 
 
 def _find_message(game, mid):
@@ -114,13 +117,17 @@ def _find_message(game, mid):
 
 
 def _user_team_name(game):
-    return safe_call(lambda: getattr(_user_team(game), "team_name", ""), "") or ""
+    return (safe_call(lambda: getattr(_user_team(game), "team_name", ""), "",
+                      context="inbox/team_name")
+            or "")
 
 
 def _today(game):
     gm = _resolve_gm(game)
-    t = (safe_call(lambda: getattr(gm, "current_date", None))
-         or safe_call(lambda: getattr(game, "current_date", None)))
+    t = (safe_call(lambda: getattr(gm, "current_date", None),
+                      context="inbox/today")
+         or safe_call(lambda: getattr(game, "current_date", None),
+                      context="inbox/today"))
     return t
 
 
@@ -196,11 +203,13 @@ def _matches_search(m, q):
 def _indicator(m):
     """red = action needed, gold = urgent/important, blue = unread."""
     try:
-        if bool(safe_call(lambda: m.is_overdue(), False)):
+        if bool(safe_call(lambda: m.is_overdue(), False,
+                           context="inbox/indicator_overdue")):
             return "red"
         if bool(getattr(m, "requires_response", False)):
             return "red"
-        prio = safe_call(lambda: int(getattr(m, "priority", 1) or 1), 1)
+        prio = safe_call(lambda: int(getattr(m, "priority", 1) or 1), 1,
+                         context="inbox/indicator_priority")
         if bool(getattr(m, "is_urgent", False)) or prio >= 4:
             return "gold"
         if bool(getattr(m, "is_important", False)) or prio >= 3:
@@ -217,7 +226,8 @@ _IND_COLORS = {"red": "#ef4444", "gold": "#f59e0b", "blue": "#3B82F6"}
 
 def _date_label(m):
     try:
-        age = int(safe_call(lambda: m.get_age_days(), 0) or 0)
+        age = int(safe_call(lambda: m.get_age_days(), 0,
+                            context="inbox/date_label_age") or 0)
     except Exception:
         age = 0
     if age <= 0:
@@ -233,7 +243,8 @@ def _date_label(m):
 def _snippet(m, n=120):
     return safe_call(
         lambda: (getattr(m, "content", "") or "").replace("\n", " "
-                ).strip()[:n], "")
+                ).strip()[:n], "",
+        context="inbox/snippet")
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +279,10 @@ def _gameday_is_preseason(game, team, today):
         if team is None or today is None:
             return False
         gm = _resolve_gm(game)
-        league = safe_call(lambda: getattr(gm, "league", None))
-        tname = safe_call(lambda: getattr(team, "team_name", ""))
+        league = safe_call(lambda: getattr(gm, "league", None),
+                             context="inbox/preseason_schedule")
+        tname = safe_call(lambda: getattr(team, "team_name", ""),
+                          context="inbox/preseason_schedule")
         for item in (getattr(league, "schedule", None) or []):
             try:
                 if isinstance(item, dict):
@@ -307,7 +320,8 @@ def _story_developing(game):
     items = []
     gm = _resolve_gm(game)
     league = _user_league(game)
-    now = safe_call(lambda: getattr(gm, "current_date", None))
+    now = safe_call(lambda: getattr(gm, "current_date", None),
+                      context="inbox/story_now")
     try:
         for n in (getattr(league, "media_narratives", None) or []):
             try:
@@ -326,7 +340,8 @@ def _story_developing(game):
     except Exception:
         pass
     try:
-        ms = safe_call(lambda: getattr(gm, "media_system", None))
+        ms = safe_call(lambda: getattr(gm, "media_system", None),
+                         context="inbox/story_media_system")
         for s in (getattr(ms, "storylines", None) or []):
             try:
                 try:
@@ -386,8 +401,10 @@ def _story_feed(game, limit=60):
         return out
 
     def _d(m):
-        return (safe_call(lambda: getattr(m, "game_date_sent", None))
-                or safe_call(lambda: getattr(m, "date_sent", None)))
+        return (safe_call(lambda: getattr(m, "game_date_sent", None),
+                          context="inbox/story_feed_date")
+                or safe_call(lambda: getattr(m, "date_sent", None),
+                             context="inbox/story_feed_date"))
 
     try:
         msgs.sort(key=lambda m: (_d(m) is None, _d(m)), reverse=True)
@@ -426,6 +443,14 @@ class InboxScreen(BaseScreen):
         self._search = ""
         self._open_id = None
         self._pill_buttons = {}
+        # B-UX3: single-level undo snapshot for mark-all-read. List of
+        # (message_id, previous is_read, previous date_read) for exactly the
+        # messages that changed. Session-local only: it does NOT survive
+        # save/load (documented choice -- the snapshot is in-memory UI
+        # state, not game state). The screen instance persists across
+        # navigation, so undo still works after navigating away and back.
+        self._mark_all_undo = None
+        self._undo_btn = None
         super().__init__(game, main_window, parent)
 
     # -- layout -------------------------------------------------------
@@ -473,6 +498,18 @@ class InboxScreen(BaseScreen):
         mark_all = QPushButton("Mark all read")
         mark_all.clicked.connect(self._on_mark_all_read)
         toolbar.addWidget(mark_all)
+
+        # B-UX3: undo for mark-all-read (button + Ctrl+Z). Enabled only
+        # while a snapshot exists.
+        self._undo_btn = QPushButton("Undo")
+        self._undo_btn.setToolTip("Undo mark-all-read (Ctrl+Z)")
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self._on_undo_mark_all_read)
+        toolbar.addWidget(self._undo_btn)
+        undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        undo_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        undo_shortcut.activated.connect(self._on_undo_mark_all_read)
         self._layout.addLayout(toolbar)
 
         self._count_lbl = QLabel("")
@@ -557,6 +594,10 @@ class InboxScreen(BaseScreen):
 
     def refresh(self):
         self._rebuild_pills()
+        # Keep the Undo affordance in sync: the screen instance persists
+        # across navigation, so a snapshot taken earlier in the session is
+        # still undoable after navigating away and back.
+        self._set_undo_enabled(bool(self._mark_all_undo))
         if self._filter == "story":
             self._show_story()
         else:
@@ -685,7 +726,8 @@ class InboxScreen(BaseScreen):
         d_lbl.setAlignment(Qt.AlignRight)
         right.addWidget(d_lbl)
         if bool(getattr(m, "requires_response", False)) or bool(
-                safe_call(lambda: m.is_overdue(), False)):
+                safe_call(lambda: m.is_overdue(), False,
+                          context="inbox/row_overdue")):
             pill = QLabel("Action needed")
             pill.setStyleSheet(
                 "color: #ef4444; border: 1px solid #ef4444; border-radius: 8px;"
@@ -748,6 +790,21 @@ class InboxScreen(BaseScreen):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if confirm != QMessageBox.Yes:
             return
+        # B-UX3: snapshot the exact pre-change state of every message that
+        # is about to change, BEFORE mark_all_read() runs. mark_as_read()
+        # sets is_read=True AND date_read=today(), so both must be
+        # snapshotted for an exact restore. Single-level: this replaces any
+        # previous snapshot.
+        snapshot = []
+        for m in unread:
+            try:
+                snapshot.append((
+                    str(getattr(m, "id", "")),
+                    bool(getattr(m, "is_read", False)),
+                    getattr(m, "date_read", None),
+                ))
+            except Exception:
+                continue
         try:
             inbox.mark_all_read()
         except Exception as exc:
@@ -755,10 +812,53 @@ class InboxScreen(BaseScreen):
                 self, "Mark all read failed",
                 f"Could not mark messages as read: {exc}")
             return
+        self._mark_all_undo = snapshot
+        self._set_undo_enabled(True)
         QMessageBox.information(
             self, "Mark all read",
             f"{len(unread)} message{'s' if len(unread) != 1 else ''} "
-            "marked as read.")
+            "marked as read. You can undo this (Ctrl+Z).")
+        self.refresh()
+
+    def _set_undo_enabled(self, enabled):
+        if self._undo_btn is not None:
+            self._undo_btn.setEnabled(bool(enabled))
+
+    def _on_undo_mark_all_read(self):
+        """B-UX3: restore the exact pre-mark-all-read read/unread state.
+
+        Only snapshotted message ids are touched: a message that arrived
+        (or was added) after the mark keeps its own state, and a
+        snapshotted message that was deleted in the meantime is skipped.
+        unread_count is recomputed from actual message states so the
+        engine counter agrees with what undo produced. Consumes the
+        snapshot (single-level undo)."""
+        snap = self._mark_all_undo
+        if not snap:
+            return  # no-op: nothing to undo, no crash
+        for mid, prev_read, prev_date_read in snap:
+            m = _find_message(self.game, mid)
+            if m is None:
+                continue
+            try:
+                m.is_read = bool(prev_read)
+                try:
+                    m.date_read = prev_date_read
+                except Exception:
+                    pass
+            except Exception:
+                continue
+        inbox = _inbox_of(self.game)
+        if inbox is not None:
+            try:
+                msgs = getattr(inbox, "messages", None) or []
+                inbox.unread_count = sum(
+                    1 for mm in msgs
+                    if not bool(getattr(mm, "is_read", False)))
+            except Exception:
+                pass
+        self._mark_all_undo = None
+        self._set_undo_enabled(False)
         self.refresh()
 
     def _toggle_flag(self, mid, flag):
@@ -995,11 +1095,15 @@ class InboxScreen(BaseScreen):
         layout.addWidget(lab)
 
     def _build_actions(self, layout, m):
-        at = safe_call(lambda: getattr(m, "action_type", None))
+        at = safe_call(lambda: getattr(m, "action_type", None),
+                         context="inbox/action_type")
         if not at:
             return
-        done = bool(safe_call(lambda: getattr(m, "action_done", False), False))
-        d = safe_call(lambda: getattr(m, "action_data", None) or {}, {}) or {}
+        done = bool(safe_call(lambda: getattr(m, "action_done", False), False,
+                              context="inbox/action_done"))
+        d = (safe_call(lambda: getattr(m, "action_data", None) or {}, {},
+                       context="inbox/action_data")
+             or {})
         builder = {
             "trade_offer": self._actions_trade,
             "trade_counter": self._actions_trade,
@@ -1031,7 +1135,8 @@ class InboxScreen(BaseScreen):
     # -- trade ------------------------------------------------------------
 
     def _actions_trade(self, layout, m, d, done):
-        at = safe_call(lambda: getattr(m, "action_type", ""))
+        at = safe_call(lambda: getattr(m, "action_type", ""),
+                       context="inbox/trade_action_type")
         if done:
             self._ia_note(layout, "This negotiation is no longer on the "
                                   "table.")
@@ -1285,8 +1390,10 @@ class InboxScreen(BaseScreen):
                 m.action_done = True
             except Exception:
                 pass
-            today = (safe_call(lambda: app.game_manager.current_date)
-                     or safe_call(lambda: getattr(app, "current_date", None)))
+            today = (safe_call(lambda: app.game_manager.current_date,
+                                 context="inbox/gameday_today")
+                     or safe_call(lambda: getattr(app, "current_date", None),
+                                  context="inbox/gameday_today"))
             try:
                 app._game_day_resolution = {
                     "watch": bool(watch), "talk_boost": talk_boost,
