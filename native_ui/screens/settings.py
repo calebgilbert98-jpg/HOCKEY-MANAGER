@@ -138,7 +138,14 @@ def _settings_dir():
 
 def _local_defaults():
     """Mirror of settings_window.default_settings (used only when
-    settings_window itself can't be imported)."""
+    settings_window itself can't be imported).
+
+    NOTE: includes 'auto_fit_ui': False even though mainline's
+    default_settings() omits that key. Mainline's SettingsWindow manages
+    auto_fit_ui (writes it on save, reads it with a False fallback), so
+    the merge must not silently drop a managed field -- otherwise a
+    written True would read back as None on the next load.
+    """
     return {
         'game_results': {
             'show_user_team_only': True,
@@ -151,6 +158,7 @@ def _local_defaults():
         'ui_preferences': {
             'theme': 'Dark (Current)',
             'font_size': 'Default',
+            'auto_fit_ui': False,
             'auto_close_settings': False,
             'remember_window_positions': True,
         },
@@ -248,22 +256,58 @@ def reset_to_defaults():
     """Reset every setting the screen manages to its factory default.
 
     Mainline parity (settings_window._reset_to_defaults): defaults come
-    from factory defaults, NOT the last-saved file. Each field goes
-    through set_setting() so writes are validated, persisted to
-    settings.json, and verified via read-back. Keys this screen does not
-    manage are preserved untouched; nothing outside the settings store
-    is touched (no save-game data, no career state).
+    from factory defaults, NOT the last-saved file. Writes happen in one
+    pass over the raw settings.json so keys this screen does not manage
+    are preserved untouched; nothing outside the settings store is
+    touched (no save-game data, no career state). Every managed field is
+    validated on write and the whole result is verified by reading back
+    through the game's own loader -- the reset only counts if the loader
+    returns the new values.
 
     Returns (ok, failures) -- failures is a list of (tab, key, error).
     """
     defaults = _defaults()
+    _loader_fn, path = _loader()
+    try:
+        with open(path, "r") as f:
+            settings = json.load(f)
+        if not isinstance(settings, dict):
+            settings = {}
+    except Exception:
+        settings = {}
     failures = []
     for tab, fields in _FIELDS.items():
+        sec = settings.get(tab)
+        if not isinstance(sec, dict):
+            sec = settings[tab] = {}
         for _label, key, _widget, _options, _hint in fields:
             value = _field_value(tab, key, defaults)
-            ok, msg = set_setting(tab, key, value)
+            ok, coerced, err = _validate(tab, key, value)
             if not ok:
-                failures.append((tab, key, msg))
+                failures.append((tab, key, err))
+                continue
+            if key.startswith("email_"):
+                emails = sec.get("email_notifications")
+                if not isinstance(emails, dict):
+                    emails = sec["email_notifications"] = {}
+                emails[key[len("email_"):]] = coerced
+            else:
+                sec[key] = coerced
+    try:
+        with open(path, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        return False, [("", "", f"could not save settings.json: {e}")]
+    # Verify VALUES through the game's loader, not just keys on disk.
+    reloaded = _read_settings()
+    for tab, fields in _FIELDS.items():
+        for _label, key, _widget, _options, _hint in fields:
+            back = _field_value(tab, key, reloaded)
+            want = _field_value(tab, key, defaults)
+            if back != want:
+                failures.append(
+                    (tab, key, f"write did not stick: read back {back!r}, "
+                               f"expected {want!r}"))
     return (len(failures) == 0), failures
 
 
