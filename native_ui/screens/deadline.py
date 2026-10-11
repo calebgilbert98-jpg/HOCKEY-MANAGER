@@ -1,8 +1,24 @@
 """Trade Deadline Center: countdown, stance, market, rumors.
 
 Native port of the web UI deadline screen (web_ui/templates/deadline.html
-+ web_ui/screens/deadline.py + web_ui/static/js/deadline.js). Calls the
-game object DIRECTLY -- no Flask/HTTP, no command queue, no JSON.
++ web_ui/screens/deadline.py + web_ui/static/js/deadline.js) plus the
+mainline (Tkinter) TradeDeadlineCenter depth features from
+trade_deadline_center.py:
+
+  - Fire sale: lists your expiring contracts on the real trade block
+    (trade_market.list_piece, source "user_block") so AI GMs can bid.
+  - Player movement tracker: deadline-day deal log + movement stats from
+    TradeDeadlineManager.trade_activity_log / get_deadline_summary.
+  - Quick trade: streamlined offer workbench — live league partner list,
+    your tradeable picks + expiring rentals vs. their real trade block,
+    live trade_engine.evaluate_trade, send via trade_negotiation.send_offer
+    (NTC veto + cap revalidation, consume-once).
+  - Market analytics: 5-tab browser over
+    TradeDeadlineManager.get_market_intelligence() /
+    get_market_temperature() — overview + price trends (supply/demand),
+    buyers & sellers, position needs, trade predictions, cap analysis.
+
+Calls the game object DIRECTLY -- no Flask/HTTP, no command queue, no JSON.
 
 Game methods used (all real, same as the web bridge called):
   - trade_deadline_manager: trade_deadline_date, get_deadline_manager,
@@ -11,13 +27,18 @@ Game methods used (all real, same as the web bridge called):
   - media_rumors: generate_rumors, get_impact_players
   - league standings (wins/losses/ot_losses) for buyers/sellers thirds
   - league._web_deadline_stance (declared stance scratch)
+  - trade_market: list_piece, refresh_trade_blocks, get_trade_blocks,
+    resolve_player
+  - trade_engine: asset_value, asset_label, evaluate_trade, trade_vetoes
+  - trade_negotiation: send_offer, asset_summary
 """
 
 from datetime import date, datetime
 
 from PySide6.QtWidgets import (
-    QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+    QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout,
+    QWidget,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -273,8 +294,801 @@ def _declare_stance(game, stance):
 
 
 # ---------------------------------------------------------------------------
+# mainline-depth features (ported from trade_deadline_center.py)
+# ---------------------------------------------------------------------------
+
+def _pos_code(p):
+    """Position code for a player (mirrors QuickTradeInterface._pos_code)."""
+    try:
+        pos = getattr(p, "primary_position", None)
+        return getattr(pos, "value", None) or getattr(pos, "name", "?")
+    except Exception:
+        return "?"
+
+
+def _ovr(p):
+    try:
+        return int(p.overall_rating())
+    except Exception:
+        return 0
+
+
+def _expiring_contracts(user):
+    """Roster players with exactly 1 year left on their contract."""
+    out = []
+    for p in (safe_call(lambda: list(getattr(user, "roster", None) or []),
+                        [], context="deadline/firesale/roster")
+              or []):
+        try:
+            if getattr(getattr(p, "contract", None),
+                       "years_remaining", 99) == 1:
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def _fire_sale(game):
+    """Fire sale (port of EmergencyTradeInterface._fire_sale).
+
+    Lists every expiring contract on the user's roster on the trade block
+    via the real trade_market store (source "user_block") so AI GMs can
+    bid immediately, and mirrors them into the canonical team block
+    (user_team.trade_block, read by refresh_trade_blocks). Returns a
+    dict {ok, message, listed, skipped}. Never raises.
+    """
+    gm = _resolve_gm(game)
+    league = _user_league(game)
+    user = _user_team(game)
+    if gm is None or league is None or user is None:
+        return {"ok": False, "listed": 0, "skipped": 0,
+                "message": "No league loaded — nothing was listed."}
+    expiring = _expiring_contracts(user)
+    if not expiring:
+        return {"ok": False, "listed": 0, "skipped": 0,
+                "message": "No expiring contracts on your roster — "
+                           "nothing to list."}
+    try:
+        import trade_market as tmk
+    except Exception:
+        return {"ok": False, "listed": 0, "skipped": 0,
+                "message": "Trade market unavailable — nothing was listed."}
+    listed, skipped = 0, 0
+    for p in expiring:
+        pid = safe_call(lambda: getattr(p, "id", None),
+                        context="deadline/firesale/pid")
+        try:
+            # Canonical native store: user_team.trade_block (live list,
+            # mirrored into league.trade_blocks by refresh_trade_blocks).
+            block = getattr(user, "trade_block", None)
+            if not isinstance(block, list):
+                block = []
+                user.trade_block = block
+            if pid is not None and not any(
+                    safe_call(lambda: getattr(e, "id", None),
+                              context="deadline/firesale/entry_id") == pid
+                    for e in block):
+                block.append(p)
+            # Legacy app-level store (mainline used app.trade_block).
+            gm_block = getattr(gm, "trade_block", None)
+            if isinstance(gm_block, list) and pid is not None and not any(
+                    safe_call(lambda: getattr(e, "id", None),
+                              context="deadline/firesale/gm_entry_id") == pid
+                    for e in gm_block):
+                gm_block.append(p)
+            # Real market listing so AI GMs can bid (source "user_block"
+            # always gets a slot; returns None if already listed).
+            li = tmk.list_piece(gm, league, user, p, source="user_block")
+            if li is not None:
+                listed += 1
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+    names = ", ".join(str(safe_call(lambda: getattr(p, "full_name", "?"),
+                                    context="deadline/firesale/name") or "?")
+                      for p in expiring[:4])
+    if len(expiring) > 4:
+        names += f" (+{len(expiring) - 4} more)"
+    msg = (f"Fire sale: {listed} expiring contract(s) listed on the "
+           f"trade block: {names}.")
+    if skipped:
+        msg += f" ({skipped} already listed or on cooldown.)"
+    return {"ok": True, "listed": listed, "skipped": skipped, "message": msg}
+
+
+def _movement_data(game):
+    """Player movement tracker data.
+
+    Real deadline-day stats from TradeDeadlineManager.get_deadline_summary()
+    plus the raw trade_activity_log (the deal-by-deal record mainline's
+    recent-trades list renders). Honest "--" when a stat is not yet known.
+    Never raises.
+    """
+    dm = _deadline_manager(game)
+
+    def _fmt(value, money=False):
+        if value is None:
+            return "--"
+        try:
+            if money and not int(value):
+                return "--"
+        except Exception:
+            return "--"
+        return f"${int(value)}M" if money else str(value)
+
+    stats, log = {}, []
+    if dm is not None:
+        summary = safe_call(lambda: dm.get_deadline_summary(), {},
+                            context="deadline/tracker/summary") or {}
+        stats = summary.get("statistics", {}) or {}
+        log = (safe_call(lambda: list(getattr(dm, "trade_activity_log",
+                                              None) or []), [],
+                         context="deadline/tracker/log")
+               or [])
+    deals = []
+    for entry in reversed(log[-15:]):
+        teams = safe_call(lambda: list(entry.get("teams_involved", []) or []),
+                          [], context="deadline/tracker/entry_teams")
+        teams = [t for t in teams if t]
+        stamp = entry.get("timestamp")
+        try:
+            stamp = (stamp.strftime("%H:%M") if hasattr(stamp, "strftime")
+                     else str(stamp or ""))
+        except Exception:
+            stamp = ""
+        count = safe_call(lambda: int(entry.get("players_count", 0) or 0),
+                          0, context="deadline/tracker/entry_count")
+        ttype = str(entry.get("trade_type", "standard") or "standard")
+        tid = str(entry.get("trade_id", "") or "")
+        label = (" ↔ ".join(teams) if teams else "Deal")
+        detail = f"{label} — {count} player{'s' if count != 1 else ''} ({ttype})"
+        if tid:
+            detail = f"[{tid}] {detail}"
+        if stamp:
+            detail += f" · {stamp}"
+        deals.append(detail)
+    return {
+        "players_moved": _fmt(stats.get("players_moved")),
+        "total_trades": _fmt(stats.get("total_trades")),
+        "biggest_deal": _fmt(stats.get("biggest_deal_value"), money=True),
+        "deals": deals,
+    }
+
+
+def _market_intel(game):
+    """TradeDeadlineManager.get_market_intelligence() — never raises."""
+    dm = _deadline_manager(game)
+    if dm is None:
+        return {}
+    return (safe_call(lambda: dm.get_market_intelligence(), {},
+                      context="deadline/analytics/intel")
+            or {})
+
+
+def _market_temp(game):
+    """TradeDeadlineManager.get_market_temperature() — never raises."""
+    dm = _deadline_manager(game)
+    if dm is None:
+        return {}
+    return (safe_call(lambda: dm.get_market_temperature(), {},
+                      context="deadline/analytics/temp")
+            or {})
+
+
+def _nhl_partners(game, league, user):
+    """Every NHL team except the user's, sorted — real league state
+    (mirrors QuickTradeInterface._nhl_partners)."""
+    out = []
+    uname = safe_call(lambda: getattr(user, "team_name", ""),
+                      context="deadline/quicktrade/user_name")
+    for t in (safe_call(lambda: list(getattr(league, "teams", None) or []),
+                        [], context="deadline/quicktrade/teams")
+              or []):
+        try:
+            if t is None or t is user:
+                continue
+            if uname and getattr(t, "team_name", "") == uname:
+                continue
+            ln = str(getattr(t, "league_name", "") or "")
+            if "National Hockey League" in ln or "NHL" in ln or not ln:
+                out.append(t)
+        except Exception:
+            continue
+    return sorted(out,
+                  key=lambda t: str(getattr(t, "team_name", "")))
+
+
+def _your_pool(user):
+    """Your real offerable assets: tradeable picks + expiring contracts
+    ("rentals"), best value first (mirrors QuickTrade._refresh_your_pool)."""
+    try:
+        import trade_engine as te
+    except Exception:
+        te = None
+    pool = []
+    if user is not None and te is not None:
+        for yr in sorted(safe_call(
+                lambda: getattr(user, "draft_picks", {}) or {}, {},
+                context="deadline/quicktrade/picks") or {}):
+            for pk in (safe_call(
+                    lambda: user.draft_picks.get(yr) or [], [],
+                    context="deadline/quicktrade/pick_year")
+                       or []):
+                try:
+                    if (safe_call(lambda: getattr(pk, "current_team", ""),
+                                  context="deadline/quicktrade/pick_team")
+                            != getattr(user, "team_name", "")):
+                        continue
+                    if (hasattr(pk, "can_be_traded")
+                            and not pk.can_be_traded()):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    label = (f"{te.asset_label(pk)}  "
+                             f"[{te.asset_value(pk):,}]")
+                except Exception:
+                    label = "Draft pick"
+                pool.append((label, pk))
+        rentals = _expiring_contracts(user)
+        try:
+            rentals.sort(key=lambda p: te.asset_value(p), reverse=True)
+        except Exception:
+            pass
+        for p in rentals[:12]:
+            try:
+                val = te.asset_value(p)
+            except Exception:
+                val = 0
+            name = safe_call(lambda: getattr(p, "full_name", "?"),
+                             context="deadline/quicktrade/rental_name")
+            pool.append((f"{name} ({_pos_code(p)}, {_ovr(p)})  [{val:,}]", p))
+    return pool
+
+
+def _their_pool(game, league, partner):
+    """The selected partner's real trade block (mirrors
+    QuickTrade._refresh_their_pool)."""
+    try:
+        import trade_market as tmk
+        import trade_engine as te
+    except Exception:
+        return []
+    pool = []
+    gm = _resolve_gm(game)
+    if partner is None or league is None:
+        return []
+    try:
+        tmk.refresh_trade_blocks(gm, league)
+    except Exception:
+        pass
+    blocks = safe_call(lambda: tmk.get_trade_blocks(league), {},
+                       context="deadline/quicktrade/blocks") or {}
+    tname = str(safe_call(lambda: getattr(partner, "team_name", ""),
+                          context="deadline/quicktrade/partner_name"))
+    for pid in (blocks.get(tname, None) or []):
+        player = safe_call(lambda: tmk.resolve_player(league, pid)[0],
+                           context="deadline/quicktrade/resolve_player")
+        if player is None:
+            continue
+        try:
+            val = te.asset_value(player)
+        except Exception:
+            val = 0
+        name = safe_call(lambda: getattr(player, "full_name", "?"),
+                         context="deadline/quicktrade/block_name")
+        pool.append((f"{name} ({_pos_code(player)}, {_ovr(player)})  "
+                     f"[{val:,}]", player))
+    return pool
+
+
+def _evaluate_offer(user_team, partner_team, user_assets, partner_assets):
+    """Run the real trade engine over the proposal. Returns
+    (label, detail, verdict_key). Mirrors QuickTrade._update_evaluation."""
+    try:
+        import trade_engine as te
+        ev = te.evaluate_trade(user_assets, partner_assets,
+                               user_team=user_team,
+                               partner_team=partner_team)
+    except Exception:
+        return "Unavailable", "", "unavailable"
+    detail = (f"Your value: {ev.user_value:,}   |   "
+              f"Their value: {ev.partner_value:,}")
+    if not user_assets or not partner_assets:
+        return ("Incomplete", "Add at least one asset to each side.",
+                "incomplete")
+    return ev.label, detail, ev.label
+
+
+# ---------------------------------------------------------------------------
 # screen
 # ---------------------------------------------------------------------------
+
+class _QuickTradeDialog(QDialog):
+    """Quick trade proposal dialog for deadline day.
+
+    Port of mainline's QuickTradeInterface (trade_deadline_center.py):
+    the partner list is every NHL team except yours (live league state),
+    "Your Offer" is your real tradeable picks + expiring contracts,
+    "Their Offer" is the selected partner's real trade block, the
+    evaluation runs the real trade engine, and SEND PROPOSAL submits
+    through the real negotiation machinery (trade_negotiation.send_offer)
+    — the AI answers instantly on deadline day and the confirmation
+    reflects the negotiation's real post-send status. Non-modal on
+    close: closing defers, never sends.
+    """
+
+    def __init__(self, parent, game):
+        super().__init__(parent)
+        self.game = game
+        self.main_window = getattr(parent, "main_window", None)
+        self.gm = _resolve_gm(game)
+        self.league = _user_league(game)
+        self.user_team = _user_team(game)
+        self.partner_team = None
+        self.user_assets = []      # real Player / DraftPick objects (yours)
+        self.partner_assets = []   # real Player objects (theirs)
+        self._your_pool = []       # [(label, asset)] you can offer
+        self._their_pool = []      # [(label, asset)] from partner's block
+        self._team_objs = {}       # team name -> team object
+        self._sent = False         # consume-once: never send twice
+        self._build()
+        self._refresh_your_pool()
+        self._update_evaluation()
+
+    # -- build --------------------------------------------------------
+    def _build(self):
+        self.setWindowTitle("Quick Trade")
+        self.setMinimumWidth(760)
+        lay = QVBoxLayout(self)
+
+        remaining = ""
+        try:
+            remaining = (_deadline_manager(self.game)
+                         .get_time_until_deadline().get("formatted", ""))
+        except Exception:
+            pass
+        title = QLabel("QUICK TRADE"
+                       + (f" — {remaining} REMAINING" if remaining else ""))
+        title.setObjectName("section-header")
+        lay.addWidget(title)
+
+        lay.addWidget(QLabel("Select Trading Partner (live league):"))
+        self._partner_list = QListWidget()
+        self._partner_list.setMaximumHeight(110)
+        for t in _nhl_partners(self.game, self.league, self.user_team):
+            name = str(getattr(t, "team_name", "") or "")
+            if not name:
+                continue
+            self._team_objs[name] = t
+            self._partner_list.addItem(name)
+        if not self._team_objs:
+            self._partner_list.addItem("(no league loaded)")
+        self._partner_list.itemSelectionChanged.connect(
+            self._on_team_select)
+        lay.addWidget(self._partner_list)
+
+        cols = QHBoxLayout()
+        self._your_pool_list, self._your_offer_list = self._asset_column(
+            cols, "Your Offer (your real picks & rentals)", "user")
+        self._their_pool_list, self._their_offer_list = self._asset_column(
+            cols, "Their Offer (their real trade block)", "partner")
+        lay.addLayout(cols)
+
+        self._eval_label = QLabel("Incomplete")
+        self._eval_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        lay.addWidget(self._eval_label)
+        self._eval_detail = QLabel("")
+        self._eval_detail.setWordWrap(True)
+        lay.addWidget(self._eval_detail)
+
+        btns = QHBoxLayout()
+        send_btn = QPushButton("SEND PROPOSAL")
+        send_btn.setStyleSheet("font-weight: bold;")
+        send_btn.clicked.connect(self._send_proposal)
+        btns.addWidget(send_btn)
+        full_btn = QPushButton("FULL TRADE CENTER")
+        full_btn.clicked.connect(self._open_full_trade_center)
+        btns.addWidget(full_btn)
+        btns.addStretch()
+        close_btn = QPushButton("CLOSE")
+        close_btn.clicked.connect(self.reject)
+        btns.addWidget(close_btn)
+        lay.addLayout(btns)
+
+    def _asset_column(self, parent_layout, title, side):
+        """One offer column: available pool + add/remove + chosen assets."""
+        group = QGroupBox(title)
+        gl = QVBoxLayout(group)
+        gl.addWidget(QLabel("Available:"))
+        pool_list = QListWidget()
+        pool_list.setMinimumHeight(120)
+        gl.addWidget(pool_list)
+        row = QHBoxLayout()
+        add_btn = QPushButton("Add ▼")
+        add_btn.clicked.connect(lambda: self._add_asset(side))
+        row.addWidget(add_btn)
+        row.addStretch()
+        rm_btn = QPushButton("▲ Remove")
+        rm_btn.clicked.connect(lambda: self._remove_asset(side))
+        row.addWidget(rm_btn)
+        gl.addLayout(row)
+        gl.addWidget(QLabel("In proposal:"))
+        offer_list = QListWidget()
+        offer_list.setMaximumHeight(72)
+        gl.addWidget(offer_list)
+        parent_layout.addWidget(group)
+        return pool_list, offer_list
+
+    @staticmethod
+    def _render_listbox(lb, labels, empty=""):
+        lb.clear()
+        if labels:
+            lb.addItems(labels)
+        elif empty:
+            lb.addItem(empty)
+
+    def _asset_label(self, asset):
+        try:
+            from game_classes import DraftPick
+            if isinstance(asset, DraftPick):
+                import trade_engine as te
+                return te.asset_label(asset)
+        except Exception:
+            pass
+        name = safe_call(lambda: getattr(asset, "full_name", "?"),
+                         context="deadline/quicktrade/asset_label")
+        return f"{name} ({_pos_code(asset)}, {_ovr(asset)})"
+
+    # -- live data ----------------------------------------------------
+    def _refresh_your_pool(self):
+        self._your_pool = _your_pool(self.user_team)
+        self._render_listbox(self._your_pool_list,
+                             [label for label, _ in self._your_pool],
+                             empty="(no tradeable picks or rentals)")
+
+    def _refresh_their_pool(self):
+        self._their_pool = _their_pool(self.game, self.league,
+                                       self.partner_team)
+        self._render_listbox(self._their_pool_list,
+                             [label for label, _ in self._their_pool],
+                             empty="(nothing on their block)")
+
+    # -- interactions -------------------------------------------------
+    def _on_team_select(self):
+        items = self._partner_list.selectedItems()
+        if not items:
+            return
+        self.partner_team = self._team_objs.get(items[0].text())
+        # Their side resets: those assets belong to the old partner.
+        self.partner_assets = []
+        self._refresh_their_pool()
+        self._render_offer("partner")
+        self._update_evaluation()
+
+    def _add_asset(self, side):
+        if side == "user":
+            pool, pool_lb, assets = (self._your_pool, self._your_pool_list,
+                                     self.user_assets)
+        else:
+            pool, pool_lb, assets = (self._their_pool, self._their_pool_list,
+                                     self.partner_assets)
+        items = pool_lb.selectedItems()
+        if not items:
+            return
+        row = pool_lb.row(items[0])
+        if row < 0 or row >= len(pool):
+            return
+        _label, asset = pool[row]
+        if not any(a is asset for a in assets):
+            assets.append(asset)
+        self._render_offer(side)
+        self._update_evaluation()
+
+    def _remove_asset(self, side):
+        if side == "user":
+            offer_lb, assets = self._your_offer_list, self.user_assets
+        else:
+            offer_lb, assets = self._their_offer_list, self.partner_assets
+        items = offer_lb.selectedItems()
+        if not items:
+            return
+        row = offer_lb.row(items[0])
+        if 0 <= row < len(assets):
+            assets.pop(row)
+        self._render_offer(side)
+        self._update_evaluation()
+
+    def _render_offer(self, side):
+        if side == "user":
+            assets, lb = self.user_assets, self._your_offer_list
+        else:
+            assets, lb = self.partner_assets, self._their_offer_list
+        self._render_listbox(lb, [self._asset_label(a) for a in assets],
+                             empty="(empty)")
+
+    def _update_evaluation(self):
+        label, detail, key = _evaluate_offer(self.user_team,
+                                             self.partner_team,
+                                             self.user_assets,
+                                             self.partner_assets)
+        colors = {"Fair deal": "#10b981", "You overpay": "#e5484d",
+                  "They overpay": "#d4a017", "Incomplete": "#9ca3af",
+                  "Unavailable": "#9ca3af"}
+        self._eval_label.setText(label)
+        self._eval_label.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: "
+            f"{colors.get(key, '#ffffff')};")
+        self._eval_detail.setText(detail)
+
+    def _open_full_trade_center(self):
+        try:
+            show = getattr(self.main_window, "show_screen", None)
+            if callable(show):
+                show("trades")
+                self.accept()
+                return
+        except Exception:
+            pass
+        QMessageBox.information(self, "Trade Center",
+                                "The full Trade Center is unavailable "
+                                "right now.")
+
+    def _send_proposal(self):
+        """Send the proposal through the real negotiation machinery."""
+        if self.gm is None or self.user_team is None:
+            QMessageBox.warning(self, "No League",
+                                "No league loaded — cannot send a proposal.")
+            return
+        dm = _deadline_manager(self.game)
+        if dm is not None and safe_call(
+                lambda: dm.is_deadline_passed(), False,
+                context="deadline/quicktrade/deadline_passed"):
+            QMessageBox.warning(self, "Deadline passed",
+                                "The deadline has passed — deals are locked.")
+            return
+        if self.partner_team is None:
+            QMessageBox.warning(self, "No Partner",
+                                "Select a trading partner first.")
+            return
+        if not self.user_assets or not self.partner_assets:
+            QMessageBox.warning(
+                self, "Incomplete",
+                "Add at least one asset to each side of the deal first.")
+            return
+        # Consume-once: a double-click must not send the proposal twice.
+        if self._sent:
+            return
+        # No-trade clauses block the deal before it leaves the building —
+        # say so honestly instead of sending a dead proposal.
+        try:
+            import trade_engine as te
+            vetoes = te.trade_vetoes(self.user_team, self.partner_team,
+                                     self.user_assets, league=self.league)
+        except Exception:
+            vetoes = []
+        if vetoes:
+            names = ", ".join(
+                str(getattr(v.get("player"), "full_name", "?"))
+                for v in vetoes[:3])
+            QMessageBox.warning(
+                self, "No-trade protection",
+                f"{names} cannot be moved to "
+                f"{getattr(self.partner_team, 'team_name', 'them')} "
+                f"({vetoes[0].get('clause', 'clause')} protection).\n\n"
+                "Remove them from the offer, or ask for a waiver in the "
+                "full Trade Center.")
+            return
+        # Transactional cap revalidation at the moment of send — the cap
+        # may have moved since the workbench was built.
+        try:
+            import trade_engine as te
+            cap_ok = safe_call(
+                lambda: te._cap_ok_after(self.user_team, self.user_assets,
+                                         self.partner_assets), True,
+                context="deadline/quicktrade/cap_check")
+            if not cap_ok:
+                QMessageBox.warning(
+                    self, "Cap check",
+                    "The deal no longer fits under the salary cap — "
+                    "your roster moved since the proposal was built. "
+                    "Adjust the offer and try again.")
+                return
+        except Exception:
+            pass
+        try:
+            import trade_negotiation as tn
+            neg = tn.send_offer(self.gm, self.partner_team,
+                                list(self.user_assets),
+                                list(self.partner_assets))
+        except Exception as e:
+            QMessageBox.warning(self, "Send failed",
+                                f"Could not send the proposal: {e}")
+            return
+        self._sent = True  # consume-once: the deal is in the inbox now
+        # Confirmation reflects real post-send state: on deadline day the
+        # AI answers instantly, so read the negotiation's actual status.
+        pname = str(getattr(self.partner_team, "team_name", "them"))
+        try:
+            you = tn.asset_summary(neg.user_assets)
+            them = tn.asset_summary(neg.partner_assets)
+        except Exception:
+            you, them = "your assets", "their assets"
+        status = str(safe_call(lambda: getattr(neg, "status", ""),
+                               context="deadline/quicktrade/neg_status"))
+        if status == "accepted":
+            title = "Deal accepted!"
+            body = (f"{pname} accepted your offer on the spot.\n\n"
+                    f"YOU SEND: {you}\nYOU GET: {them}")
+        elif status == "declined":
+            title = "Offer declined"
+            body = (f"{pname} turned the offer down.\n\n"
+                    f"YOU OFFERED: {you}\nYOU ASKED FOR: {them}\n\n"
+                    "Their reply is in your inbox.")
+        elif status == "awaiting_user":
+            title = "Counter-offer waiting"
+            body = (f"{pname} countered instantly — answer it from your "
+                    f"inbox.\n\nYOUR OFFER: {you} for {them}")
+        else:
+            title = "Offer sent"
+            body = (f"Your offer is with {pname}'s front office.\n\n"
+                    f"YOU SEND: {you}\nYOU GET: {them}\n\n"
+                    "The reply will land in your inbox.")
+        QMessageBox.information(self, title, body)
+        self.accept()
+
+
+class _MarketAnalyticsDialog(QDialog):
+    """Market analytics browser for deadline day.
+
+    Port of mainline's DeadlineMarketBrowser (trade_deadline_center.py):
+    5 tabs over TradeDeadlineManager.get_market_intelligence() /
+    get_market_temperature() — market overview + price trends
+    (supply/demand guidance), buyers & sellers, position needs, trade
+    predictions, salary cap analysis.
+    """
+
+    def __init__(self, parent, game):
+        super().__init__(parent)
+        self.game = game
+        self.setWindowTitle("Market Analytics")
+        self.setMinimumWidth(720)
+        self.setMinimumHeight(520)
+        lay = QVBoxLayout(self)
+        tabs = QTabWidget()
+        lay.addWidget(tabs)
+        intel = _market_intel(game)
+        temp = _market_temp(game)
+        tabs.addTab(self._overview_tab(temp, intel), "Market Overview")
+        tabs.addTab(self._buyers_sellers_tab(intel), "Buyers & Sellers")
+        tabs.addTab(self._position_tab(intel), "Position Needs")
+        tabs.addTab(self._predictions_tab(intel), "Trade Predictions")
+        tabs.addTab(self._cap_tab(intel), "Salary Cap")
+        close_btn = QPushButton("CLOSE")
+        close_btn.clicked.connect(self.accept)
+        lay.addWidget(close_btn)
+
+    @staticmethod
+    def _tab_page(text):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignTop)
+        lay.addWidget(lbl)
+        lay.addStretch()
+        return page
+
+    def _overview_tab(self, temp, intel):
+        overall = temp.get("overall", "warm") if temp else "warm"
+        colors = {"cold": "#60a5fa", "warm": "#fbbf24",
+                  "hot": "#f87171", "blazing": "#dc2626"}
+        color = colors.get(overall, "#fbbf24")
+        trends = (intel.get("deadline_trends", {}) or {}) if intel else {}
+        rental = (trends.get("rental_vs_futures", {}) or {}).get(
+            "rental", "--")
+        prices = trends.get("price_trends", {}) or {}
+        lines = [
+            f"<h3>Market Temperature: "
+            f"<span style='color:{color}'>{str(overall).upper()}</span></h3>",
+        ]
+        for plabel, ptemp in (("Forwards", temp.get("forwards")),
+                              ("Defensemen", temp.get("defensemen")),
+                              ("Goalies", temp.get("goalies"))):
+            if ptemp:
+                lines.append(f"• {plabel}: <b>{ptemp}</b>")
+        lines += [
+            f"<br>Most active position: "
+            f"<b>{trends.get('most_active_position', '--')}</b>",
+            f"Average trade size: "
+            f"<b>{trends.get('average_trade_size', '--')}</b> players",
+            f"Rental market: <b>{rental}%</b> rental",
+            f"Market sentiment: <b>{trends.get('market_sentiment', '--')}</b>",
+            "<br><b>Price guidance (supply/demand):</b>",
+            f"• Rentals: {prices.get('rentals', '--')}",
+            f"• Defensemen: {prices.get('defensemen', '--')}",
+            f"• Goalies: {prices.get('goalies', '--')}",
+            f"• Draft picks: {prices.get('picks', '--')}",
+        ]
+        return self._tab_page("<br>".join(lines))
+
+    def _buyers_sellers_tab(self, intel):
+        buyers = (intel.get("buyer_teams", []) or [])[:6] if intel else []
+        sellers = (intel.get("seller_teams", []) or [])[:6] if intel else []
+        lines = ["<h3 style='color:#10b981'>ACTIVE BUYERS</h3>"]
+        if buyers:
+            for b in buyers:
+                lines.append(
+                    f"• <b>{b.get('team', '?')}</b> — {b.get('likelihood', '')}"
+                    f"<br>&nbsp;&nbsp;Need: {b.get('primary_need', '--')} | "
+                    f"Cap: {b.get('cap_space', '--')} | "
+                    f"{b.get('assets', '')}")
+        else:
+            lines.append("No active buyers identified.")
+        lines.append("<br><h3 style='color:#e5484d'>ACTIVE SELLERS</h3>")
+        if sellers:
+            for s in sellers:
+                lines.append(
+                    f"• <b>{s.get('team', '?')}</b> — {s.get('likelihood', '')}"
+                    f"<br>&nbsp;&nbsp;Asset: {s.get('notable_assets', '--')} | "
+                    f"Price: {s.get('asking_price', '--')}")
+        else:
+            lines.append("No active sellers identified.")
+        return self._tab_page("<br>".join(lines))
+
+    def _position_tab(self, intel):
+        needs = (intel.get("position_needs", {}) or {}) if intel else {}
+        lines = ["<h3>POSITION NEEDS ANALYSIS</h3>"]
+        for pname, key in (("Forwards", "forwards"),
+                           ("Defensemen", "defensemen"),
+                           ("Goalies", "goalies"),
+                           ("Depth Players", "depth")):
+            teams = needs.get(key, []) or []
+            lines.append(f"• <b>{pname}:</b> "
+                         + (", ".join(teams) if teams else "No active needs"))
+        return self._tab_page("<br>".join(lines))
+
+    def _predictions_tab(self, intel):
+        preds = (intel.get("trade_predictions", []) or []) if intel else []
+        lines = ["<h3>TRADE PREDICTIONS</h3>"]
+        if preds:
+            for p in preds:
+                like = p.get("likelihood", 0)
+                color = ("#10b981" if like >= 70 else "#fbbf24"
+                         if like >= 50 else "#9ca3af")
+                teams = " ↔ ".join(p.get("teams_involved", []) or [])
+                lines.append(
+                    f"• <b style='color:{color}'>{like}%</b> — "
+                    f"<b>{p.get('description', '')}</b> ({teams})"
+                    f"<br>&nbsp;&nbsp;Assets: {p.get('assets', '')}"
+                    f"<br>&nbsp;&nbsp;<i>{p.get('reasoning', '')}</i><br>")
+        else:
+            lines.append("No trade predictions available.")
+        return self._tab_page("<br>".join(lines))
+
+    def _cap_tab(self, intel):
+        cap = (intel.get("salary_cap_space", {}) or {}) if intel else {}
+        lines = ["<h3>SALARY CAP ANALYSIS</h3>"]
+        if cap:
+            for team, data in cap.items():
+                space = safe_call(lambda: int(data.get("cap_space", 0) or 0),
+                                  0, context="deadline/analytics/cap_space")
+                dspace = safe_call(
+                    lambda: int(data.get("deadline_space", 0) or 0), 0,
+                    context="deadline/analytics/deadline_space")
+                flex = data.get("flexibility", "Medium")
+                ret = safe_call(lambda: int(data.get("retention_slots", 0)
+                                            or 0), 0,
+                                context="deadline/analytics/retention")
+                lines.append(
+                    f"• <b>{team}</b>: cap {_fmt_money(space)} | "
+                    f"deadline space {_fmt_money(dspace)} | "
+                    f"flexibility {flex} | retention {ret}/3")
+        else:
+            lines.append("No cap analysis available.")
+        return self._tab_page("<br>".join(lines))
+
 
 class DeadlineScreen(BaseScreen):
     """Trade Deadline Center: countdown + 30-minute game clock, stance
@@ -340,6 +1154,50 @@ class DeadlineScreen(BaseScreen):
         self._needs_lbl.setWordWrap(True)
         sg.addWidget(self._needs_lbl)
         lay.addWidget(stance_group)
+
+        # --- deadline tools (mainline quick actions) ---
+        tools_group = QGroupBox("Deadline tools")
+        tg = QVBoxLayout(tools_group)
+        tools_row = QHBoxLayout()
+        self._quick_trade_btn = QPushButton("QUICK TRADE")
+        self._quick_trade_btn.setStyleSheet("font-weight: bold;")
+        self._quick_trade_btn.clicked.connect(self._on_quick_trade)
+        tools_row.addWidget(self._quick_trade_btn)
+        self._fire_sale_btn = QPushButton("FIRE SALE")
+        self._fire_sale_btn.clicked.connect(self._on_fire_sale)
+        tools_row.addWidget(self._fire_sale_btn)
+        self._analytics_btn = QPushButton("MARKET ANALYTICS")
+        self._analytics_btn.clicked.connect(self._on_market_analytics)
+        tools_row.addWidget(self._analytics_btn)
+        tools_row.addStretch()
+        tg.addLayout(tools_row)
+        self._tools_hint = QLabel(
+            "Quick Trade: streamlined offer workbench. Fire Sale: list your "
+            "expiring contracts on the trade block so AI GMs can bid. "
+            "Market Analytics: supply/demand, buyers/sellers, predictions.")
+        self._tools_hint.setWordWrap(True)
+        tg.addWidget(self._tools_hint)
+        lay.addWidget(tools_group)
+
+        # --- player movement tracker ---
+        tracker_group = QGroupBox("Player movement tracker")
+        tk = QVBoxLayout(tracker_group)
+        stats_row = QHBoxLayout()
+        self._move_players_lbl = QLabel("—")
+        self._move_players_lbl.setStyleSheet("font-weight: bold;")
+        stats_row.addWidget(self._move_players_lbl)
+        self._move_trades_lbl = QLabel("—")
+        self._move_trades_lbl.setStyleSheet("font-weight: bold;")
+        stats_row.addWidget(self._move_trades_lbl)
+        self._move_biggest_lbl = QLabel("—")
+        self._move_biggest_lbl.setStyleSheet("font-weight: bold;")
+        stats_row.addWidget(self._move_biggest_lbl)
+        stats_row.addStretch()
+        tk.addLayout(stats_row)
+        self._tracker_lbl = QLabel("")
+        self._tracker_lbl.setWordWrap(True)
+        tk.addWidget(self._tracker_lbl)
+        lay.addWidget(tracker_group)
 
         # --- market ---
         market_row = QHBoxLayout()
@@ -424,10 +1282,11 @@ class DeadlineScreen(BaseScreen):
             else:
                 self._count_lbl.setText("Deadline date TBD.")
 
-            # stance + market + rumors
+            # stance + market + rumors + movement tracker
             self._paint_stance(_compute_stance(game, league, gm))
             self._paint_market(_market(game, league, gm))
             self._paint_rumors(_rumors(game, gm, league))
+            self._paint_tracker(_movement_data(game))
 
             # deadline-day game clock: start at 9 AM, advance +30 min.
             dm = _deadline_manager(game)
@@ -541,6 +1400,47 @@ class DeadlineScreen(BaseScreen):
             self._declared = prev
             QMessageBox.warning(self, "Deadline stance",
                                 f"Could not save stance: {msg}")
+
+    # -- deadline tools --------------------------------------------------
+
+    def _on_quick_trade(self):
+        dlg = _QuickTradeDialog(self, self.game)
+        dlg.exec()
+
+    def _on_fire_sale(self):
+        res = _fire_sale(self.game)
+        self._status_lbl.setText(res.get("message", ""))
+        # Refresh so the new block listings show in the market sections.
+        self.refresh()
+        # Also refresh any other open views (trade block etc.).
+        try:
+            mw = getattr(self, "main_window", None)
+            refresh = getattr(mw, "refresh", None)
+            if callable(refresh):
+                refresh()
+        except Exception:
+            pass
+
+    def _on_market_analytics(self):
+        dlg = _MarketAnalyticsDialog(self, self.game)
+        dlg.exec()
+
+    def _paint_tracker(self, m):
+        if not m:
+            return
+        self._move_players_lbl.setText(
+            f"Players moved today: {m.get('players_moved', '--')}")
+        self._move_trades_lbl.setText(
+            f"Trades completed: {m.get('total_trades', '--')}")
+        biggest = m.get("biggest_deal", "--")
+        self._move_biggest_lbl.setText(f"Biggest deal: {biggest}")
+        deals = m.get("deals") or []
+        if deals:
+            self._tracker_lbl.setText("<br>".join(
+                f"🤝 {d}" for d in deals))
+        else:
+            self._tracker_lbl.setText(
+                "No deadline-day deals logged yet.")
 
     # -- market / rumors -----------------------------------------------------
 
