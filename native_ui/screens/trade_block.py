@@ -31,28 +31,24 @@ from PySide6.QtCore import Qt
 
 from .base import BaseScreen
 
+from native_ui.safe import safe_call
+
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _pid(p):
-    return str(_safe(lambda: getattr(p, "id", id(p)), ""))
+    return str(safe_call(lambda: getattr(p, "id", id(p)), "", context="trade_block/get_player_id"))
 
 
 def _player_name(p):
-    return _safe(lambda: getattr(p, "full_name", "?"), "?")
+    return safe_call(lambda: getattr(p, "full_name", "?"), "?", context="trade_block/get_player_name")
 
 
 def _pos_str(p):
-    pos = _safe(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "", context="trade_block/get_position")
     raw = getattr(pos, "value", pos)
     try:
         return str(raw or "?").strip().upper()
@@ -69,7 +65,7 @@ def _player_ovr(p):
                 return int(v)
     except Exception:
         pass
-    return _safe(lambda: int(getattr(p, "overall", 0) or 0), 0)
+    return safe_call(lambda: int(getattr(p, "overall", 0) or 0), 0, context="trade_block/get_overall")
 
 
 def _fmt_money(v):
@@ -85,19 +81,19 @@ def _fmt_money(v):
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="trade_block/get_game_manager") or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team, context="trade_block/load_user_team")
+            or safe_call(lambda: getattr(game, "user_team", None), context="trade_block/get_user_team"))
 
 
 def _user_league(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league, context="trade_block/load_league")
+            or safe_call(lambda: getattr(game, "league", None), context="trade_block/get_league"))
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +125,8 @@ def _market_listings(game):
         if league is None:
             return []
         market = tm.get_market(league)
-        return _safe(lambda: list(market.get("listings", []) or []),
-                     []) or []
+        return safe_call(lambda: list(market.get("listings", []) or []), [],
+                     context="trade_block/load_market_listings") or []
     except Exception:
         return []
 
@@ -140,7 +136,7 @@ def _my_interest(game):
     trade_market store. Returns list of dicts; never raises."""
     out = []
     team = _user_team(game)
-    my_name = _safe(lambda: getattr(team, "team_name", ""), "")
+    my_name = safe_call(lambda: getattr(team, "team_name", ""), "", context="trade_block/get_team_name")
     for li in _market_listings(game):
         try:
             if not isinstance(li, dict):
@@ -173,7 +169,7 @@ def _others_blocks(game):
     per-team trade_block attrs as fallback. Never raises."""
     out = []
     team = _user_team(game)
-    my_name = _safe(lambda: getattr(team, "team_name", ""), "")
+    my_name = safe_call(lambda: getattr(team, "team_name", ""), "", context="trade_block/get_team_name")
     for li in _market_listings(game):
         try:
             if not isinstance(li, dict):
@@ -195,15 +191,16 @@ def _others_blocks(game):
             continue
     if not out:
         league = _user_league(game)
-        teams = _safe(lambda: list(getattr(league, "teams", None) or []),
-                      []) or []
+        teams = safe_call(lambda: list(getattr(league, "teams", None) or []), [],
+                      context="trade_block/load_teams") or []
         for t in teams:
             try:
-                tn = _safe(lambda: getattr(t, "team_name", ""), "")
+                tn = safe_call(lambda: getattr(t, "team_name", ""), "", context="trade_block/get_team_name")
                 if not tn or tn == my_name:
                     continue
-                for p in (_safe(lambda: list(getattr(t, "trade_block",
-                                                    None) or []), []) or []):
+                for p in (safe_call(lambda: list(getattr(t, "trade_block",
+                                                    None) or []), [],
+                             context="trade_block/load_trade_block") or []):
                     out.append({
                         "player": _player_name(p),
                         "player_id": _pid(p),
@@ -248,8 +245,8 @@ def _block_add(game, pids):
     team = _user_team(game)
     pool = []
     for lst in ("roster", "ahl_roster", "prospects"):
-        pool.extend(_safe(lambda: list(getattr(team, lst, None) or []),
-                          []) or [])
+        pool.extend(safe_call(lambda: list(getattr(team, lst, None) or []), [],
+                          context="trade_block/load_player_pool") or [])
     for pid in pids:
         pid = str(pid)
         for p in pool:
@@ -282,8 +279,8 @@ def _shop(game, player):
     out = {"player": _player_name(player), "player_id": _pid(player),
            "market_value": 0, "block_value": 0, "interested": []}
     try:
-        base = int(_safe(lambda: game.calculate_player_value(player),
-                         0) or 0)
+        base = int(safe_call(lambda: game.calculate_player_value(player), 0,
+                         context="trade_block/calculate_player_value") or 0)
     except Exception:
         base = 0
     out["market_value"] = base
@@ -309,8 +306,8 @@ def _shop(game, player):
 
 def _suggest_value(game, player):
     try:
-        base = int(_safe(lambda: game.calculate_player_value(player),
-                         0) or 0)
+        base = int(safe_call(lambda: game.calculate_player_value(player), 0,
+                         context="trade_block/calculate_player_value") or 0)
     except Exception:
         base = 0
     return {"player": _player_name(player), "market_value": base,
@@ -472,8 +469,8 @@ class _AddPlayersDialog(QDialog):
         team = _user_team(self._game)
         pool = []
         for lst in ("roster", "ahl_roster", "prospects"):
-            pool.extend(_safe(lambda: list(getattr(team, lst, None) or []),
-                              []) or [])
+            pool.extend(safe_call(lambda: list(getattr(team, lst, None) or []), [],
+                              context="trade_block/load_player_pool") or [])
         on_block = {_pid(p) for p in _user_block(self._game)}
         self._pool = [p for p in pool if _pid(p) not in on_block]
         self._filter("")
@@ -617,7 +614,7 @@ class TradeBlockScreen(BaseScreen):
         for p in _user_block(self.game):
             pos = _pos_str(p)
             ovr = _player_ovr(p)
-            age = _safe(lambda: int(getattr(p, "age", 0) or 0), 0)
+            age = safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="trade_block/get_age")
             if self._pos_filter != "All":
                 hit = (pos == self._pos_filter
                        or (self._pos_filter == "W" and pos in ("LW", "RW"))
@@ -640,8 +637,8 @@ class TradeBlockScreen(BaseScreen):
         self._block_count.setText(
             f"{n} player{'s' if n != 1 else ''} on your block")
         for p in self._mine_players:
-            sal = _safe(lambda: int(getattr(p, "salary", 0) or 0), 0)
-            age = _safe(lambda: int(getattr(p, "age", 0) or 0), 0)
+            sal = safe_call(lambda: int(getattr(p, "salary", 0) or 0), 0, context="trade_block/get_salary")
+            age = safe_call(lambda: int(getattr(p, "age", 0) or 0), 0, context="trade_block/get_age")
             item = QListWidgetItem(
                 f"{_player_ovr(p)} OVR  {_player_name(p)}  ·  "
                 f"{_pos_str(p)} · Age {age} · {_fmt_money(sal)}")
