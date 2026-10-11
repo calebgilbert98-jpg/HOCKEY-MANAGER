@@ -320,6 +320,23 @@ class SeasonFlowScreen(BaseScreen):
         self._running = False
         self._day_result_q = None
         self._day_restore_notify = None
+        # FIX-1: _day_worker_in_flight tracks whether a real season-flow day
+        # worker thread exists. The poll chain and the busy guard key off
+        # this, not off _sim_in_progress, so _stop_automation() can clear
+        # the busy latch without stranding an in-flight worker's result
+        # or its notify-guard restore.
+        self._day_worker_in_flight = False
+        # FIX-D1(c): independent quick-advance state. run_threaded's _poll
+        # returns early when its dialog is X-closed, so its on_done never
+        # fires -- the worker reports to our own queue (finally) and the
+        # _poll_quick_abandon watchdog reclaims the guard independently.
+        self._quick_dlg = None
+        self._quick_result_q = None
+        self._quick_restore_notify = None
+        self._quick_on_done_fired = False
+        self._quick_cleaned = False
+        # FIX-3: set by closeEvent; once True no widget/dialog work happens.
+        self._closed = False
 
         if not _ENGINE_OK:
             err = QLabel(
@@ -457,9 +474,12 @@ class SeasonFlowScreen(BaseScreen):
                 self._milestone_lbl.setText("No upcoming milestones")
             # OBS-2: while a worker sim is in flight (automation day or
             # quick advance), all sim-triggering controls stay disabled so
-            # the user cannot stack overlapping workers.
-            busy = bool(self._running) or bool(
-                getattr(self, "_sim_in_progress", False))
+            # the user cannot stack overlapping workers. FIX-1: the worker
+            # flag is authoritative -- the busy latch is cleared by
+            # _stop_automation() even with a mid-day worker still in flight.
+            busy = (bool(self._running)
+                    or bool(getattr(self, "_sim_in_progress", False))
+                    or bool(getattr(self, "_day_worker_in_flight", False)))
             self._start_btn.setEnabled(not busy)
             self._stop_btn.setEnabled(bool(self._running))
             self._mode_combo.setEnabled(not busy)
@@ -517,8 +537,38 @@ class SeasonFlowScreen(BaseScreen):
             self._automation.automation_active = False
         except Exception:
             pass
+        # FIX-1 (root cause): _stop_automation means "automation is not
+        # running", so the busy latch must reflect that -- unconditionally.
+        # The verified stuck scenario was _install_worker_notify_guard
+        # raising between the latch being set and the worker truly starting:
+        # the tick handler's _stop_automation() left _sim_in_progress True
+        # forever, refresh() disabled every sim control, and ticks
+        # early-returned with no recovery. The in-flight day worker is
+        # tracked separately by _day_worker_in_flight (which refresh(),
+        # _automation_tick, and _advance_days all honor), so clearing the
+        # latch here can never let a new worker overlap it -- and the poll
+        # chain still drains its result and runs the notify-guard restore.
+        # Net invariant: the flag is never True while no worker exists.
+        self._sim_in_progress = False
         self._hide_auto_overlay()
         self.refresh()
+
+    def closeEvent(self, event):
+        """Tear down automation when the screen closes mid-sim (FIX-3).
+
+        Stops the timer and automation state immediately. An in-flight day
+        worker still drains through _poll_day_worker, which skips all
+        widget/dialog work once _closed is set (see the _closed branch
+        there) and stops the poll chain, so no dialog ever parents to a
+        destroyed widget. Matches the closeEvent convention in
+        contracts.py / staff.py.
+        """
+        self._closed = True
+        try:
+            self._stop_automation()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _open_settings(self):
         try:
@@ -542,11 +592,17 @@ class SeasonFlowScreen(BaseScreen):
         the whole time.
         """
         auto = self._automation
+        if getattr(self, "_closed", False):
+            return
         if not self._running or auto is None:
             return
-        if self._sim_in_progress:
+        if self._sim_in_progress or getattr(self, "_day_worker_in_flight",
+                                            False):
             # Previous day's worker still running -- skip this tick; the
-            # next tick will pick up where it left off.
+            # next tick will pick up where it left off. Keys off the worker
+            # flag too: _stop_automation() clears the busy latch while a
+            # mid-day worker is still in flight, and a new worker must not
+            # overlap it.
             return
         try:
             if not safe_call(auto.should_auto_advance, False,
@@ -584,49 +640,100 @@ class SeasonFlowScreen(BaseScreen):
         drained -- see ``_install_worker_notify_guard``.
         """
         game = self.game
-        self._sim_in_progress = True
-        self._show_auto_overlay()
-        self.refresh()
-        result_q = queue.Queue()
-        self._day_result_q = result_q
-        restore_notify = _install_worker_notify_guard(game)
+        restore_notify = None
+        try:
+            self._sim_in_progress = True
+            self._show_auto_overlay()
+            self.refresh()
+            result_q = queue.Queue()
+            self._day_result_q = result_q
+            self._day_worker_in_flight = True
+            restore_notify = _install_worker_notify_guard(game)
 
-        def _worker():
-            try:
-                _bulk = getattr(game, "_bulk_simming", None)
+            def _worker():
                 try:
-                    if _bulk is not None:
-                        game._bulk_simming = True
-                    game.simulate_day()
-                finally:
-                    if _bulk is not None:
-                        try:
-                            game._bulk_simming = False
-                        except Exception:
-                            pass
-                result_q.put((False, None))
-            except Exception as e:  # noqa: BLE001 -- reported on UI thread
-                result_q.put((True, e))
+                    _bulk = getattr(game, "_bulk_simming", None)
+                    try:
+                        if _bulk is not None:
+                            game._bulk_simming = True
+                        game.simulate_day()
+                    finally:
+                        if _bulk is not None:
+                            try:
+                                game._bulk_simming = False
+                            except Exception:
+                                pass
+                    result_q.put((False, None))
+                except Exception as e:  # noqa: BLE001 -- reported on UI thread
+                    result_q.put((True, e))
 
-        threading.Thread(target=_worker, daemon=True,
-                         name="season-flow-day").start()
-        QTimer.singleShot(100, self._poll_day_worker)
-        # Keep restore paired with this worker even if the poll chain is
-        # somehow dropped: stash it for the poll to consume.
-        self._day_restore_notify = restore_notify
+            threading.Thread(target=_worker, daemon=True,
+                             name="season-flow-day").start()
+            QTimer.singleShot(100, self._poll_day_worker)
+            # Keep restore paired with this worker even if the poll chain is
+            # somehow dropped: stash it for the poll to consume.
+            self._day_restore_notify = restore_notify
+        except Exception:
+            # FIX-1 (root cause): the worker is NOT in flight -- the guard
+            # install (or thread start) raised before it began. It must be
+            # impossible for _sim_in_progress to stay True here, or the
+            # screen deadlocks with every sim control disabled. Reset both
+            # flags, undo the partial guard install, and re-raise so the
+            # caller's handler (_automation_tick) stops automation cleanly.
+            if restore_notify is not None:
+                try:
+                    restore_notify()
+                except Exception:
+                    pass
+            self._day_result_q = None
+            self._day_worker_in_flight = False
+            self._day_restore_notify = None
+            self._sim_in_progress = False
+            raise
 
     def _poll_day_worker(self):
         """Drain the day worker's result queue. Runs ON the UI thread."""
+        if getattr(self, "_closed", False):
+            # FIX-3: the screen closed mid-sim. Still drain the queue and
+            # restore the notify guard (it must never leak onto the shared
+            # game object), but touch no widgets and show no dialogs; the
+            # poll chain stops here.
+            try:
+                result_q = getattr(self, "_day_result_q", None)
+                if result_q is not None:
+                    try:
+                        result_q.get_nowait()
+                    except queue.Empty:
+                        # Worker still running -- keep draining till it lands.
+                        QTimer.singleShot(100, self._poll_day_worker)
+                        return
+            except Exception:
+                pass
+            self._day_result_q = None
+            self._day_worker_in_flight = False
+            restore = getattr(self, "_day_restore_notify", None)
+            self._day_restore_notify = None
+            if restore is not None:
+                try:
+                    restore()
+                except Exception:
+                    pass
+            return
         result_q = getattr(self, "_day_result_q", None)
         if result_q is None:
             return
         try:
             failed, payload = result_q.get_nowait()
         except queue.Empty:
-            if getattr(self, "_sim_in_progress", False):
+            # FIX-1: keep polling while a real worker is in flight -- keyed
+            # off _day_worker_in_flight, not the busy latch, so
+            # _stop_automation() can clear the latch without stranding the
+            # result or the notify-guard restore.
+            if getattr(self, "_day_worker_in_flight", False):
                 QTimer.singleShot(100, self._poll_day_worker)
             return
         self._day_result_q = None
+        self._day_worker_in_flight = False
         restore = getattr(self, "_day_restore_notify", None)
         self._day_restore_notify = None
         try:
@@ -761,15 +868,28 @@ class SeasonFlowScreen(BaseScreen):
         thread with a cancelable progress dialog (per-day progress);
         ``_on_done`` runs on the UI thread and does all widget updates.
         A busy guard rejects overlapping runs (double-click safe).
+
+        FIX-D1: cleanup never depends solely on run_threaded's on_done.
+        The worker reports its actual completed-day count to our own queue
+        in a finally; if the user X-closes the progress dialog
+        (SimProgressDialog.closeEvent sets _closed WITHOUT the cancel
+        event, so run_threaded's _poll returns early and on_done never
+        fires), the _poll_quick_abandon watchdog sets the cancel event
+        itself -- X-close behaves like Cancel -- then reclaims the notify
+        guard and clears the busy latch with no dialogs.
         """
         if not self._automation:
             return
-        if self._sim_in_progress or self._running:
+        # FIX-1: also refuse while a season-flow day worker is in flight
+        # (the busy latch may have been cleared by _stop_automation).
+        if (self._sim_in_progress or self._running
+                or getattr(self, "_day_worker_in_flight", False)):
             QMessageBox.information(
                 self, "Busy",
                 "A simulation is already running. "
                 "Wait for it to finish before advancing again.")
             return
+        restore_notify = None
         try:
             _label, blockers = self.game.get_continue_state()
             if blockers:
@@ -790,65 +910,191 @@ class SeasonFlowScreen(BaseScreen):
             self.refresh()
             game = self.game
             restore_notify = _install_worker_notify_guard(game)
+            # Our own completion channel: the worker always reports its
+            # ACTUAL completed-day count here (finally), even on cancel or
+            # error, so the watchdog can finish the job when on_done never
+            # fires. run_threaded discards the worker's return value, so
+            # this queue (plus the days_completed cell) is the honest
+            # plumbing for FIX-2 as well.
+            quick_q = queue.Queue()
+            self._quick_result_q = quick_q
+            self._quick_restore_notify = restore_notify
+            self._quick_on_done_fired = False
+            self._quick_cleaned = False
+            days_completed = [0]
 
             def _worker(cancel_event, progress):
                 # Runs OFF the UI thread. Must not touch widgets.
                 done = 0
                 _bulk = getattr(game, "_bulk_simming", None)
                 try:
-                    if _bulk is not None:
-                        game._bulk_simming = True
-                    for i in range(days):
-                        if cancel_event.is_set():
-                            break
-                        game.simulate_day()
-                        done += 1
-                        progress((i + 1) / days,
-                                 f"Day {i + 1} of {days}\u2026")
+                    try:
+                        if _bulk is not None:
+                            game._bulk_simming = True
+                        for i in range(days):
+                            if cancel_event.is_set():
+                                break
+                            game.simulate_day()
+                            done += 1
+                            progress((i + 1) / days,
+                                     f"Day {i + 1} of {days}\u2026")
+                    finally:
+                        if _bulk is not None:
+                            try:
+                                game._bulk_simming = False
+                            except Exception:
+                                pass
                 finally:
-                    if _bulk is not None:
-                        try:
-                            game._bulk_simming = False
-                        except Exception:
-                            pass
+                    # Always report, even on cancel/error: the watchdog
+                    # reclaims the guard from this, independent of on_done.
+                    days_completed[0] = done
+                    try:
+                        quick_q.put(done)
+                    except Exception:
+                        pass
                 return done
 
             def _on_done(cancelled, error):
-                # Runs ON the UI thread.
-                self._sim_in_progress = False
+                # Runs ON the UI thread via run_threaded's poll. Never
+                # fires if the user X-closed the progress dialog -- then
+                # _poll_quick_abandon owns cleanup (silent, no dialogs).
+                # FIX-3: if the SCREEN closed meanwhile, clean up silently.
+                self._quick_on_done_fired = True
+                if getattr(self, "_closed", False):
+                    self._finish_quick_advance(update_ui=False)
+                    return
+                done = days_completed[0]
                 try:
-                    restore_notify()
-                except Exception:
-                    pass
-                if error is not None:
-                    print(f"[season_flow] advance days failed: {error}")
-                    QMessageBox.critical(
-                        self, "Error",
-                        f"Failed to advance: {error}\n\n"
-                        "No further days were simulated.")
-                else:
-                    try:
-                        hub = getattr(self.main_window, "hub", None)
-                        if hub is not None and hasattr(hub, "refresh"):
-                            hub.refresh(self.game)
-                    except Exception:
-                        pass
-                    if not cancelled:
-                        QMessageBox.information(
-                            self, "Advanced",
-                            f"Advanced {days} day"
-                            f"{'s' if days != 1 else ''}.")
-                self.refresh()
+                    if error is not None:
+                        print(f"[season_flow] advance days failed: {error}")
+                        QMessageBox.critical(
+                            self, "Error",
+                            f"Failed to advance: {error}\n\n"
+                            f"Advanced {done} of {days} days "
+                            "before the failure.")
+                    else:
+                        try:
+                            hub = getattr(self.main_window, "hub", None)
+                            if hub is not None and hasattr(hub, "refresh"):
+                                hub.refresh(self.game)
+                        except Exception:
+                            pass
+                        if not cancelled:
+                            QMessageBox.information(
+                                self, "Advanced",
+                                f"Advanced {days} day"
+                                f"{'s' if days != 1 else ''}.")
+                        else:
+                            # FIX-2 (root cause): report the ACTUAL days the
+                            # worker completed, never the requested count.
+                            QMessageBox.information(
+                                self, "Advance Cancelled",
+                                f"Advanced {done} of {days} days "
+                                "(cancelled).")
+                finally:
+                    self._finish_quick_advance(update_ui=True)
 
-            run_threaded(self, f"Advancing {days} day"
-                               f"{'s' if days != 1 else ''}\u2026",
-                         _worker, on_done=_on_done,
-                         status="Starting\u2026")
+            dlg = run_threaded(self, f"Advancing {days} day"
+                                     f"{'s' if days != 1 else ''}\u2026",
+                               _worker, on_done=_on_done,
+                               status="Starting\u2026")
+            self._quick_dlg = dlg
+            # FIX-D1(c): independent watchdog for a user-abandoned dialog.
+            QTimer.singleShot(100, self._poll_quick_abandon)
         except Exception as e:
+            # FIX-D1(b): run_threaded (or anything above) raised
+            # synchronously after the guard was installed. _on_done will
+            # never run, so restore the guard here -- otherwise
+            # game._ui_notify stays guarded (depth counter stuck) forever.
+            # Force _quick_cleaned open: the raise may have happened before
+            # the in-try init, and _quick_restore_notify is None in that
+            # case (always reset to None by the previous cleanup), so the
+            # restore below is a safe no-op then.
             print(f"[season_flow] advance days failed: {e}")
-            self._sim_in_progress = False
-            self.refresh()
+            self._quick_cleaned = False
+            self._finish_quick_advance(update_ui=True)
             QMessageBox.critical(self, "Error", f"Failed to advance: {e}")
+
+    def _finish_quick_advance(self, update_ui=True):
+        """Idempotent quick-advance cleanup (FIX-D1).
+
+        Restores the worker notify guard and clears the busy latch exactly
+        once, whether reached from _on_done (normal completion), the
+        X-close watchdog, or the synchronous-failure path. update_ui=False
+        skips widget touches (screen already closed).
+        """
+        if getattr(self, "_quick_cleaned", False):
+            return
+        self._quick_cleaned = True
+        self._sim_in_progress = False
+        restore = getattr(self, "_quick_restore_notify", None)
+        self._quick_restore_notify = None
+        if restore is not None:
+            try:
+                restore()
+            except Exception:
+                pass
+        self._quick_dlg = None
+        if update_ui:
+            try:
+                self.refresh()
+            except Exception:
+                pass
+
+    def _poll_quick_abandon(self):
+        """Watchdog for an X-closed quick-advance dialog (FIX-D1(c)).
+
+        Runs ON the UI thread. run_threaded's _poll returns early when its
+        dialog closes, so _on_done never fires after an X-close -- without
+        this watchdog the notify guard would leak and _sim_in_progress
+        would stay True forever ("Busy" forever). Instead: make X-close
+        behave like Cancel (set the dialog's cancel event via its public
+        property), wait for the worker's result in our own queue, then
+        clean up silently -- no dialogs, just a reclaimed guard and a
+        cleared latch.
+        """
+        if getattr(self, "_quick_on_done_fired", False):
+            return
+        if getattr(self, "_closed", False):
+            # Screen closed mid-advance: reclaim the guard, touch no
+            # widgets; the worker's result still lands in our queue.
+            try:
+                q = getattr(self, "_quick_result_q", None)
+                if q is not None:
+                    try:
+                        q.get_nowait()
+                    except queue.Empty:
+                        QTimer.singleShot(100, self._poll_quick_abandon)
+                        return
+            except Exception:
+                pass
+            self._quick_result_q = None
+            self._finish_quick_advance(update_ui=False)
+            return
+        dlg = getattr(self, "_quick_dlg", None)
+        if dlg is None:
+            return
+        if not getattr(dlg, "_closed", False):
+            # Dialog still open: run_threaded's own poll owns completion
+            # and will deliver _on_done. Keep watching.
+            QTimer.singleShot(100, self._poll_quick_abandon)
+            return
+        # The dialog was abandoned (user X-closed it): behave like Cancel.
+        try:
+            dlg.cancel_event.set()
+        except Exception:
+            pass
+        try:
+            self._quick_result_q.get_nowait()
+        except queue.Empty:
+            # Worker still finishing the current day -- keep polling until
+            # its result lands, then clean up.
+            QTimer.singleShot(100, self._poll_quick_abandon)
+            return
+        except Exception:
+            pass
+        self._quick_result_q = None
+        self._finish_quick_advance(update_ui=True)
 
     def _advance_to_next_game(self):
         try:
