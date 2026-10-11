@@ -1991,6 +1991,13 @@ class MainWindow(QMainWindow):
         try:
             self._ui_notify_signal.connect(
                 self._on_ui_notify_request, Qt.QueuedConnection)
+            # Fail-fast wiring flag: if this connect ever fails, emitting
+            # _ui_notify_signal would stall every worker-thread notify for
+            # the full backstop timeout (_UI_NOTIFY_TIMEOUT_S). Record the
+            # success here so _ui_notify_from_worker raises loudly instead
+            # of stalling silently. (Direct dispatch is NOT a safe fallback
+            # from a worker thread -- only the queued connection is.)
+            self._ui_notify_wired = True
         except Exception as e:
             print(f"[native] _ui_notify signal wiring failed: {e}")
         self.setWindowTitle("Puck Dynasty")
@@ -2471,6 +2478,12 @@ class MainWindow(QMainWindow):
         the worker blocks only on its own per-request event, with a
         generous backstop timeout (see _UI_NOTIFY_TIMEOUT_S).
         """
+        # Fail-fast: if the signal wiring above ever failed (or was
+        # skipped), this emission would go into the void and the worker
+        # would stall for the full backstop timeout per notify. Raise
+        # loudly instead of stalling silently.
+        if not getattr(self, "_ui_notify_wired", False):
+            raise RuntimeError("ui-notify signal not wired")
         request = _UiNotifyRequest(kind, args, kwargs)
         self._ui_notify_signal.emit(request)
         answered = request.done.wait(timeout=_UI_NOTIFY_TIMEOUT_S)
