@@ -101,6 +101,10 @@ class TradeDeadlineManager:
         # Breaking news tracking
         self.breaking_news = []
         self.last_breaking_news_check = datetime.now()
+        # Dedup set for breaking-news strings already emitted this
+        # process (kept bounded). Stored as a set so repeated deadline-
+        # day polls don't re-announce the same fact.
+        self._news_shown = set()
         
         # Initialize team market activity
         self._initialize_team_strategies()
@@ -115,6 +119,7 @@ class TradeDeadlineManager:
         self.trade_activity_log = []
         self.breaking_news = []
         self.deadline_passed = False
+        self._news_shown = set()
         self.deadline_stats = {
             'total_trades': 0,
             'players_moved': 0,
@@ -439,95 +444,214 @@ class TradeDeadlineManager:
             'overall': base_heat
         }
     
+    def _real_trade_counts(self) -> Dict[str, int]:
+        """Real per-team trade counts from live league state.
+
+        Combines this season's deadline activity log with completed
+        trades recorded on the game manager's trade_history
+        (trade_engine.CompletedTrade records). Only teams that exist in
+        the live league are counted -- stray names never leak in.
+        """
+        counts: Dict[str, int] = {}
+        real = {self._intel_team_name(t) for t in self._intel_teams()}
+
+        def bump_all(names) -> None:
+            clean = [str(n or "").strip() for n in (names or [])]
+            clean = [n for n in clean if n]
+            # All-or-nothing: a trade that names a club outside the
+            # live league is not league activity (keeps this in sync
+            # with _recent_real_trades).
+            if clean and all(n in real for n in clean):
+                for n in clean:
+                    counts[n] = counts.get(n, 0) + 1
+
+        try:
+            for entry in (self.trade_activity_log or []):
+                bump_all(entry.get("teams_involved", None))
+        except Exception:
+            pass
+        try:
+            history = getattr(self.game_manager, "trade_history", None) or []
+            for tr in history:
+                bump_all([getattr(tr, "team_a", ""),
+                          getattr(tr, "team_b", "")])
+        except Exception:
+            pass
+        return counts
+
+    @staticmethod
+    def _parse_trade_date(value) -> Any:
+        """CompletedTrade.date is a free-form string; parse defensively."""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime(value.year, value.month, value.day)
+        if isinstance(value, str):
+            text = value.strip()
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    return datetime.strptime(text, fmt)
+                except Exception:
+                    continue
+            try:
+                return datetime.fromisoformat(text)
+            except Exception:
+                pass
+        return None
+
+    def _recent_real_trades(self, limit: int = 8) -> List[Dict[str, Any]]:
+        """Newest-first list of real completed trades from live state.
+
+        Merges this season's deadline activity log with the game
+        manager's completed-trade history. Each item:
+          {'ts': datetime|None, 'teams': [a, b], 'players': int,
+           'summary': str}
+        Only trades between teams that exist in the live league.
+        Deterministic. Never raises.
+        """
+        real = {self._intel_team_name(t) for t in self._intel_teams()}
+        items: List[Dict[str, Any]] = []
+
+        def ok_teams(names):
+            clean = [str(n or "").strip() for n in (names or [])]
+            clean = [n for n in clean if n]
+            if not clean:
+                return []
+            return clean if all(n in real for n in clean) else []
+
+        try:
+            for entry in (self.trade_activity_log or []):
+                teams = ok_teams(entry.get("teams_involved"))
+                if not teams:
+                    continue
+                ts = entry.get("timestamp")
+                if not isinstance(ts, datetime):
+                    ts = None
+                try:
+                    players = int(entry.get("players_count", 0) or 0)
+                except Exception:
+                    players = 0
+                items.append({
+                    "ts": ts,
+                    "teams": teams,
+                    "players": players,
+                    "summary": str(entry.get("trade_type", "") or ""),
+                })
+        except Exception:
+            pass
+        try:
+            history = getattr(self.game_manager, "trade_history", None) or []
+            for tr in history:
+                teams = ok_teams([getattr(tr, "team_a", ""),
+                                  getattr(tr, "team_b", "")])
+                if len(teams) < 2:
+                    continue
+                try:
+                    players = (len(getattr(tr, "a_gave", None) or [])
+                               + len(getattr(tr, "b_gave", None) or []))
+                except Exception:
+                    players = 0
+                items.append({
+                    "ts": self._parse_trade_date(getattr(tr, "date", "")),
+                    "teams": teams,
+                    "players": players,
+                    "summary": str(getattr(tr, "summary", "") or ""),
+                })
+        except Exception:
+            pass
+        items.sort(key=lambda i: (i["ts"] is not None, i["ts"]),
+                   reverse=True)
+        return items[:max(0, int(limit or 0))]
+
     def generate_trade_activity(self) -> List[Dict]:
-        """Generate simulated trade activity for deadline day"""
+        """Deadline-day trade activity derived from REAL league state.
+
+        Returns the most recent actual completed trades (this season's
+        deadline log plus the game manager's completed-trade history),
+        newest first, capped at 8. The dict shape is unchanged from
+        before ('timestamp' datetime, 'type', 'description', 'impact',
+        'teams_involved', 'urgency_level') so existing callers
+        (trade_deadline_center.py, deadline.py paths) keep working.
+
+        When no real trade has happened yet, the ticker gets explicitly
+        labeled ESTIMATE projections grounded in real buyer-need /
+        seller-asset matchups -- never fabricated deals presented as
+        fact, never hardcoded NHL abbreviations, no random figures.
+        """
         if not self.is_trade_deadline_day():
             return []
-        
+
         time_info = self.get_time_until_deadline()
-        if time_info['expired']:
+        if time_info.get('expired'):
             return []
-        
-        # Generate more activity closer to deadline
-        activity_multiplier = 1
-        if time_info['urgency'] == 'critical':
-            activity_multiplier = 4
-        elif time_info['urgency'] == 'high':
-            activity_multiplier = 3
-        elif time_info['urgency'] == 'medium':
-            activity_multiplier = 2
-        
-        trade_scenarios = [
-            {
-                'type': 'rental',
-                'description': "{team1} acquires rental {position} from {team2}",
-                'impact': 'medium',
-                'positions': ['forward', 'defenseman']
-            },
-            {
-                'type': 'futures',
-                'description': "{team1} trades veteran {position} to {team2} for prospects",
-                'impact': 'high',
-                'positions': ['forward', 'defenseman', 'goalie']
-            },
-            {
-                'type': 'depth',
-                'description': "{team1} adds depth {position} from {team2}",
-                'impact': 'low',
-                'positions': ['forward', 'defenseman']
-            },
-            {
-                'type': 'blockbuster',
-                'description': "BLOCKBUSTER: {team1} and {team2} complete major deal",
-                'impact': 'huge',
-                'positions': ['multiple']
-            }
-        ]
-        
-        generated_activity = []
-        
-        # Generate random number of trades based on urgency
-        num_trades = random.randint(1, 3) * activity_multiplier
-        
-        for _ in range(min(num_trades, 8)):  # Cap at 8 trades per generation
-            scenario = random.choice(trade_scenarios)
-            
-            # Don't generate too many blockbusters
-            if scenario['type'] == 'blockbuster' and random.random() > 0.1:
-                scenario = random.choice([s for s in trade_scenarios if s['type'] != 'blockbuster'])
-            
-            # Generate random teams
-            team1, team2 = self._get_random_trading_teams()
-            position = random.choice(scenario['positions'])
-            
-            trade = {
+        urgency = time_info.get('urgency', 'normal')
+
+        def impact_for(players: int) -> str:
+            if players >= 6:
+                return 'huge'
+            if players >= 4:
+                return 'high'
+            if players >= 2:
+                return 'medium'
+            return 'low'
+
+        out: List[Dict] = []
+        for item in self._recent_real_trades(limit=8):
+            teams = item["teams"]
+            summary = (item.get("summary") or "").strip()
+            n = item["players"]
+            detail = (summary if summary
+                      else f"{n} player{'s' if n != 1 else ''} moved")
+            out.append({
+                'timestamp': item["ts"] or datetime.now(),
+                'type': 'completed',
+                'description': f"TRADE: {' ↔ '.join(teams)} — {detail}",
+                'impact': impact_for(n),
+                'teams_involved': list(teams),
+                'urgency_level': urgency
+            })
+        if out:
+            return out
+
+        # No real trades yet: speculative projections, honestly labeled
+        # (each _generate_trade_predictions description is already
+        # prefixed ESTIMATE per the REV-F3 convention).
+        for pred in self._generate_trade_predictions()[:4]:
+            try:
+                like = int(pred.get('likelihood', 0) or 0)
+            except Exception:
+                like = 0
+            out.append({
                 'timestamp': datetime.now(),
-                'type': scenario['type'],
-                'description': scenario['description'].format(
-                    team1=team1, team2=team2, position=position
-                ),
-                'impact': scenario['impact'],
-                'teams_involved': [team1, team2],
-                'urgency_level': time_info['urgency']
-            }
-            
-            generated_activity.append(trade)
-            
-        return generated_activity
-    
+                'type': 'projection',
+                'description': str(pred.get('description', '')),
+                'impact': ('huge' if like >= 75 else 'high' if like >= 60
+                           else 'medium' if like >= 50 else 'low'),
+                'teams_involved': list(pred.get('teams_involved', [])),
+                'urgency_level': urgency
+            })
+        return out
+
     def get_team_activity_status(self) -> Dict[str, Dict]:
-        """Get trading activity status for all teams"""
-        teams = self._get_all_team_names()
-        activity_status = {}
-        
-        for team in teams:
-            # Get team's trading strategy and activity
-            strategy = self.team_strategies.get(team, 'neutral')
-            recent_activity = len([
-                activity for activity in self.trade_activity_log[-10:]  # Last 10 trades
-                if team in activity.get('teams_involved', [])
-            ])
-            
+        """Trading activity status for every team in the LIVE league.
+
+        Keys are real team names (never hardcoded abbreviations);
+        strategies come from the live buyer/seller standings split and
+        activity from real completed trades. Value shape is unchanged:
+        activity_level / indicator / strategy / recent_trades /
+        status_text.
+        """
+        self._refresh_team_strategies()
+        trade_counts = self._real_trade_counts()
+        activity_status: Dict[str, Dict] = {}
+
+        for team in self._intel_teams():
+            name = self._intel_team_name(team)
+            if name in activity_status:
+                continue  # duplicate names: first wins, deterministic
+            strategy = self.team_strategies.get(name, 'neutral')
+            recent_activity = trade_counts.get(name, 0)
+
             # Determine activity level
             if recent_activity >= 3:
                 activity_level = 'hot'
@@ -538,50 +662,49 @@ class TradeDeadlineManager:
             else:
                 activity_level = 'quiet'
                 indicator = '⚪'
-            
-            activity_status[team] = {
+
+            activity_status[name] = {
                 'activity_level': activity_level,
                 'indicator': indicator,
                 'strategy': strategy,
                 'recent_trades': recent_activity,
-                'status_text': strategy.upper() if strategy != 'neutral' else activity_level.upper()
+                'status_text': (strategy.upper() if strategy != 'neutral'
+                                else activity_level.upper())
             }
-        
+
         return activity_status
-    
+
+    def _refresh_team_strategies(self) -> None:
+        """Rebuild the team_strategies map from the LIVE standings.
+
+        Buyers (top third by points) -> 'buying'; sellers (bottom
+        third) -> 'selling'; everyone else -> 'neutral'. Refreshing on
+        every read keeps strategies honest when standings move or the
+        league is first attached after __init__ ran.
+        """
+        try:
+            buyers, sellers = self._buyer_seller_split()
+            buyer_names = {self._intel_team_name(t) for t in buyers}
+            seller_names = {self._intel_team_name(t) for t in sellers}
+            strategies: Dict[str, str] = {}
+            for team in self._intel_teams():
+                name = self._intel_team_name(team)
+                if name in strategies:
+                    continue
+                if name in buyer_names:
+                    strategies[name] = 'buying'
+                elif name in seller_names:
+                    strategies[name] = 'selling'
+                else:
+                    strategies[name] = 'neutral'
+            self.team_strategies = strategies
+        except Exception:
+            pass
+
     def _initialize_team_strategies(self):
-        """Initialize team trading strategies for deadline day"""
-        teams = self._get_all_team_names()
-        
-        strategies = ['buying', 'selling', 'neutral']
-        
-        for team in teams:
-            # Assign random strategies with realistic distribution
-            rand = random.random()
-            if rand < 0.3:
-                strategy = 'buying'  # 30% buyers
-            elif rand < 0.5:
-                strategy = 'selling'  # 20% sellers
-            else:
-                strategy = 'neutral'  # 50% neutral/quiet
-            
-            self.team_strategies[team] = strategy
-    
-    def _get_all_team_names(self) -> List[str]:
-        """Get list of all NHL team names for simulation"""
-        return [
-            'BOS', 'NYR', 'TOR', 'TBL', 'FLA', 'BUF', 'DET', 'MTL', 'OTT', 'NYI', 'NJD', 'PHI',
-            'CAR', 'WSH', 'PIT', 'CBJ', 'VGK', 'COL', 'DAL', 'MIN', 'WPG', 'NSH', 'STL', 'CHI',
-            'EDM', 'VAN', 'CGY', 'SEA', 'LAK', 'ANA', 'SJS', 'ARI'
-        ]
-    
-    def _get_random_trading_teams(self) -> Tuple[str, str]:
-        """Get two random teams for simulated trades"""
-        teams = self._get_all_team_names()
-        team1 = random.choice(teams)
-        team2 = random.choice([t for t in teams if t != team1])
-        return team1, team2
-    
+        """Initialize team trading strategies from live league state."""
+        self._refresh_team_strategies()
+
     def _generate_deadline_trade_id(self) -> str:
         """Generate unique trade ID for deadline day"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -649,67 +772,98 @@ class TradeDeadlineManager:
         }
     
     def get_breaking_news(self) -> List[str]:
-        """Generate breaking news items for deadline day"""
+        """Breaking news for deadline day, derived from REAL league state.
+
+        Throttled (min 2 minutes between batches) as before; returns
+        List[str] and appends to self.breaking_news. Items are built
+        from actual completed trades, live standings, real trade counts,
+        and the real deadline clock. Anything speculative carries the
+        RUMOR (ESTIMATE) label. Deterministic -- no random selection;
+        already-shown items are not repeated (bounded dedup set).
+        """
         now = datetime.now()
-        
+
         # Only generate breaking news on deadline day
         if not self.is_trade_deadline_day(now):
             return []
-        
+
         # Check if enough time has passed since last news update
         if (now - self.last_breaking_news_check).total_seconds() < 120:  # 2 minutes minimum
             return []
-            
+
         self.last_breaking_news_check = now
-        
+
+        shown = getattr(self, '_news_shown', None)
+        if not isinstance(shown, set):
+            shown = self._news_shown = set()
+
         time_info = self.get_time_until_deadline()
-        
-        # Generate breaking news based on urgency and time
-        news_items = []
-        
-        if time_info['urgency'] == 'critical':
-            # Last hour - lots of activity
-            critical_news = [
-                f"BREAKING: Multiple teams making last-minute moves before 3 PM deadline!",
-                f"URGENT: {random.choice(['TOR', 'BOS', 'NYR', 'TBL', 'FLA'])} finalizing major deal in final minutes!",
-                f"DEADLINE FRENZY: Trade calls flooding NHL offices with {time_info['formatted']} remaining!",
-                f"LAST MINUTE: Several GMs working phones frantically to beat deadline!"
-            ]
-            news_items.extend(random.sample(critical_news, min(2, len(critical_news))))
-            
-        elif time_info['urgency'] == 'high':
-            # Final hours - building tension
-            high_urgency_news = [
-                f"Market heating up: {random.choice(['COL', 'EDM', 'DAL', 'VGK'])} in serious talks for rental player",
-                f"Sources: Big name player expected to move before deadline",
-                f"Deadline approaching: Teams making final decisions on roster moves",
-                f"Trade activity accelerating as deadline looms"
-            ]
-            news_items.extend(random.sample(high_urgency_news, 1))
-            
-        elif time_info['urgency'] == 'medium':
-            # Morning activity
-            medium_news = [
-                f"Trade Deadline Day: Teams assessing final options", 
-                f"GM calls increasing as deadline approaches",
-                f"Several players on waivers ahead of deadline",
-                f"Contenders finalizing trade deadline strategy"
-            ]
-            news_items.extend(random.sample(medium_news, 1))
-        
-        # Add random major trade announcements
-        if random.random() < 0.3:  # 30% chance
-            major_trades = [
-                f"TRADE: Veteran defenseman moves to playoff contender",
-                f"BLOCKBUSTER: Multi-player deal reshapes playoff race",
-                f"RENTAL MARKET: Top scorer traded for future considerations", 
-                f"SURPRISE MOVE: Unexpected player on the move before deadline"
-            ]
-            news_items.extend(random.sample(major_trades, 1))
-            
+        formatted = str(time_info.get('formatted', ''))
+
+        candidates: List[str] = []
+        # Slightly wider than the throttle so a trade logged between
+        # polls is never skipped.
+        since = now - timedelta(seconds=130)
+
+        # 1. Real trades completed since the last news check.
+        for item in self._recent_real_trades(limit=8):
+            ts = item.get("ts")
+            if ts is None or ts < since:
+                continue
+            teams = item["teams"]
+            n = item["players"]
+            summary = (item.get("summary") or "").strip()
+            detail = (summary if summary
+                      else f"{n} player{'s' if n != 1 else ''} moved")
+            candidates.append(f"TRADE: {' ↔ '.join(teams)} — {detail}")
+
+        # 2. Live standings facts (never speculative).
+        order = self._standings_order()
+        if order:
+            leader = order[0]
+            pts = self._intel_points(leader)
+            if pts > 0:
+                candidates.append(
+                    f"{self._intel_team_name(leader)} top the standings "
+                    f"with {pts} points as the deadline clock ticks down "
+                    f"({formatted} remaining).")
+
+        # 3. Real busiest club from completed trades.
+        counts = self._real_trade_counts()
+        if counts:
+            top_name, top_n = max(counts.items(),
+                                  key=lambda kv: (kv[1], kv[0]))
+            if top_n >= 1:
+                candidates.append(
+                    f"{top_name} {'is' if top_n == 1 else 'are'} the "
+                    f"deadline's busiest club with {top_n} completed "
+                    f"deal{'s' if top_n != 1 else ''}.")
+
+        # 4. Speculative item, honestly labeled (already ESTIMATE).
+        preds = self._generate_trade_predictions()
+        if preds:
+            candidates.append(
+                f"RUMOR (ESTIMATE): {preds[0].get('description', '')}")
+
+        # 5. Quiet day: fall back to the real deadline clock.
+        if not candidates:
+            candidates.append(
+                f"Trade deadline day: {formatted} until the 3 PM deadline.")
+
+        # Emit up to 3 new items, in deterministic priority order.
+        news_items: List[str] = []
+        for text in candidates:
+            if text not in shown:
+                shown.add(text)
+                news_items.append(text)
+                if len(news_items) >= 3:
+                    break
+        if len(shown) > 200:  # bounded dedup memory
+            shown.clear()
+
         # Store in breaking news log
         self.breaking_news.extend(news_items)
-        
+
         return news_items
     
     def get_market_intelligence(self) -> Dict[str, Any]:
@@ -1146,6 +1300,8 @@ class TradeDeadlineManager:
                     else "Depth")
             for srank, steam in enumerate(sellers[:5]):
                 sname = self._intel_team_name(steam)
+                if sname == bname:
+                    continue  # tiny leagues overlap buyer/seller sets
                 if (bname, sname) in used:
                     continue
                 assets = self._rental_assets(steam, need if need != "Depth"
