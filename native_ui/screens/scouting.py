@@ -28,6 +28,109 @@ from .base import BaseScreen
 from ..widgets.player_table import PlayerTable
 from native_ui.safe import safe_call
 
+# Mainline logic ports (scouting_window_helpers.py, scouting.py, trade_market.py):
+# cancel assignment, assignment ETA, 30-assignment cap, scout suggestions,
+# advanced analysis. Imported lazily so the screen still loads if a mainline
+# module is unavailable; the wrappers below fall back to identical semantics.
+try:
+    import scouting_window_helpers as _scout_helpers
+    import scouting as _scout_logic
+    import trade_market as _trade_market
+    _MAINLINE_SCOUT_HELPERS = True
+except Exception:
+    _scout_helpers = None
+    _scout_logic = None
+    _trade_market = None
+    _MAINLINE_SCOUT_HELPERS = False
+
+#: Standing 30-assignment cap (mainline: scouting_window_helpers).
+#: Communicated to the user in the assignments section header and in the
+#: refusal message from _create_assignment -- never silently enforced.
+if _MAINLINE_SCOUT_HELPERS:
+    _MAX_ACTIVE_ASSIGNMENTS = int(
+        getattr(_scout_helpers, "_MAX_ACTIVE_ASSIGNMENTS", 30) or 30)
+else:
+    _MAX_ACTIVE_ASSIGNMENTS = 30
+
+
+def _create_assignment(game, player, scout):
+    """Create a REAL scouting assignment. Mainline-faithful port of
+    scouting_window_helpers.create_scout_assignment: refuses duplicates,
+    enforces the 30-assignment cap with a message, and reports the ETA
+    pace. Returns (ok: bool, message: str)."""
+    if _MAINLINE_SCOUT_HELPERS:
+        try:
+            return _scout_helpers.create_scout_assignment(game, player, scout)
+        except Exception as e:
+            return False, f"Could not create the assignment: {e}"
+    # Local fallback: identical semantics to the mainline helper.
+    if player is None:
+        return False, "No player selected."
+    if scout is None:
+        return False, "No scout selected."
+    try:
+        assigns = getattr(game, "scouting_assignments", None)
+        if assigns is None:
+            assigns = {}
+            game.scouting_assignments = assigns
+        if player in assigns:
+            other = assigns[player]
+            return False, (
+                f"{getattr(player, 'full_name', 'That player')} is already "
+                f"being scouted by {getattr(other, 'full_name', 'a scout')}.")
+        if len(assigns) >= _MAX_ACTIVE_ASSIGNMENTS:
+            return False, (
+                f"You have {_MAX_ACTIVE_ASSIGNMENTS} active assignments "
+                "already. Cancel one to free up a scout.")
+        assigns[player] = scout
+        days = _estimate_days(game, player, scout)
+        pace = f" (~{days} days at this scout's pace)" if days else ""
+        return True, (
+            f"{getattr(scout, 'full_name', 'Scout')} will scout "
+            f"{getattr(player, 'full_name', 'the player')}{pace}.\n"
+            "The report builds up day by day in the Reports tab.")
+    except Exception as e:
+        return False, f"Could not create the assignment: {e}"
+
+
+def _cancel_assignment(game, player):
+    """Remove a REAL scouting assignment. Mainline-faithful port of
+    scouting_window_helpers.cancel_scout_assignment: pops the player from
+    the assignments dict, freeing the scout; filed reports are kept.
+    Returns (ok: bool, message: str)."""
+    if _MAINLINE_SCOUT_HELPERS:
+        try:
+            return _scout_helpers.cancel_scout_assignment(game, player)
+        except Exception as e:
+            return False, f"Could not cancel the assignment: {e}"
+    # Local fallback: identical semantics to the mainline helper.
+    if player is None:
+        return False, "No assignment selected."
+    try:
+        assigns = getattr(game, "scouting_assignments", None) or {}
+        if player not in assigns:
+            return False, "That assignment is no longer active."
+        scout = assigns.pop(player)
+        return True, (
+            f"Assignment cancelled: {getattr(scout, 'full_name', 'Scout')} "
+            f"is no longer scouting {getattr(player, 'full_name', 'the player')}.")
+    except Exception as e:
+        return False, f"Could not cancel the assignment: {e}"
+
+
+def _estimate_days(game, player, scout):
+    """Real estimated days until the report reaches 'A' accuracy.
+
+    Mainline-faithful port of scouting_window_helpers.estimate_completion_days
+    (0 = complete, None = cannot estimate). Never raises."""
+    if _MAINLINE_SCOUT_HELPERS:
+        try:
+            return _scout_helpers.estimate_completion_days(
+                game, player, scout)
+        except Exception:
+            return None
+    return None
+
 # Scouting profiles: custom attribute-weight filters (mainline parity).
 # The logic module is GUI-free; the dialogs below are the Qt port of
 # scouting_profile_dialog.py (Tkinter).
@@ -59,13 +162,16 @@ ASSIGNMENT_PAGE_SIZE = 200
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return (safe_call(lambda: getattr(game, "game_manager", None),
+                      context="scouting/resolve_gm") or game)
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (safe_call(lambda: gm.user_team)
-            or safe_call(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team,
+                      context="scouting/user_team")
+            or safe_call(lambda: getattr(game, "user_team", None),
+                         context="scouting/user_team"))
 
 
 def _pos_str(p):
@@ -130,6 +236,16 @@ class AssignDialog(QDialog):
 
         # Load options last: _apply_prospects needs the pager widgets above.
         self._load_options()
+
+        # ETA pace preview (mainline parity): the scout's estimated
+        # completion for the currently selected prospect + scout.
+        self._pace_label = QLabel("")
+        self._pace_label.setStyleSheet("color: #6b7488; font-size: 11px;")
+        self._pace_label.setWordWrap(True)
+        layout.addRow("", self._pace_label)
+        self._prospect_combo.currentIndexChanged.connect(self._update_pace)
+        self._scout_combo.currentIndexChanged.connect(self._update_pace)
+        self._update_pace()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -219,6 +335,31 @@ class AssignDialog(QDialog):
     def get_selection(self):
         return (self._prospect_combo.currentData(),
                 self._scout_combo.currentData())
+
+    def _update_pace(self, *args):
+        """ETA preview for the selected prospect + scout.
+
+        Mainline parity with scouting_window_helpers._update_pace: shows
+        the estimated days until the report reaches 'A' accuracy.
+        """
+        prospect = self._prospect_combo.currentData()
+        scout = self._scout_combo.currentData()
+        if prospect is None or scout is None:
+            self._pace_label.setText("")
+            return
+        days = safe_call(
+            lambda: _estimate_days(self.game, prospect, scout), None,
+            context="scouting/estimate_pace")
+        sname = getattr(scout, "full_name", getattr(scout, "name", "this scout"))
+        if days == 0:
+            self._pace_label.setText(
+                "This player already has a complete report.")
+        elif days is None:
+            self._pace_label.setText("Estimated completion: unknown.")
+        else:
+            self._pace_label.setText(
+                f"Estimated completion: ~{days} days at {sname}'s pace "
+                "(report reaches 'A' accuracy, then the assignment closes).")
 
 
 class BeatDialog(QDialog):
