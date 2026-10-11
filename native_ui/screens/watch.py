@@ -149,11 +149,13 @@ def _tension_breakdown(home_team, away_team, gm, is_playoff=False,
                        series_game=0):
     """Pre-game tension drivers (mainline PBPVisualSim init parity).
 
-    Fixback: is_playoff/series_game used to be hardcoded to
-    regular-season here, but mainline passes the real values -- playoff
-    games get the "Playoff stakes" driver (15 + 2*series_game points).
-    Callers must thread the real context (read from the live sim, which
-    _ensure_live_sim now constructs with the entry's playoff state).
+    LATENT scaffolding: is_playoff/series_game are threaded from the
+    entry's playoff state, but NEITHER codebase supports watching playoff
+    games today -- mainline's open_pbp_window() accepts is_playoff/
+    series_game, yet its only real callers (game_manager.py, main.py)
+    never pass them, and its playoff path sims headless. Regular-season
+    entries get (False, 0) and behave exactly as before. Enabling a
+    watch-playoff-games feature would be NEW SCOPE in both codebases.
     """
     try:
         import reputation_system as _rs
@@ -504,8 +506,10 @@ def _ensure_live_sim(game):
             return None
 
         q = queue.Queue()
-        # Fixback: thread the entry's real playoff context into the sim
-        # (mainline PBPVisualSim gets the real is_playoff/series_game).
+        # LATENT scaffolding: thread the entry's playoff context into the
+        # sim. Mainline never passes its own is_playoff/series_game --
+        # its playoff path sims headless, so this matches mainline parity
+        # (neither codebase lets users watch playoff games today).
         # Regular-season entries get (False, 0) -- behavior unchanged.
         _po, _sg = _playoff_context(entry)
         sim = GameSim(home, away, high_fidelity=True,
