@@ -88,10 +88,22 @@ class SystemsClutchScreen(BaseScreen):
             content.addWidget(no_game_label())
             content.addStretch()
             return
+        import logging
+        _logger = logging.getLogger(__name__)
+
         try:
             import team_clutch as tcl
             breakdown = tcl.clutch_breakdown(team) or {}
-        except Exception:
+        except Exception as exc:
+            # Rendering every factor as "neutral" and the verdict as the
+            # coin-flip Neutral band on a lookup failure is fine, but the
+            # failure must be visible in the logs (with the team context)
+            # so the screen isn't silently lying about a room that should
+            # be clutch or shaky.
+            _logger.warning(
+                "team_clutch import or clutch_breakdown failed for team %r; "
+                "breakdown unavailable, rendering neutral: %s",
+                getattr(team, "team_name", team), exc)
             breakdown = {}
         try:
             total = float(breakdown.get("total", 1.0))
