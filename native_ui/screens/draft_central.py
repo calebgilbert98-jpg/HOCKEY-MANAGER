@@ -27,12 +27,7 @@ from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 class DraftCentralScreen(BaseScreen):
@@ -269,7 +264,8 @@ class DraftCentralScreen(BaseScreen):
             st = {}
         if not st.get("active"):
             gm = getattr(self.game, "game_manager", None) or self.game
-            team = _safe(lambda: getattr(gm.user_team, "team_name", "")) \
+            team = safe_call(lambda: getattr(gm.user_team, "team_name", ""),
+                               context="draft_central/get_user_team_name") \
                 or "Your team"
             return (team,
                     "Your war room is ready — open the draft board to "
