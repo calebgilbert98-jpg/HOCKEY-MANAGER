@@ -216,7 +216,15 @@ def _cap_state(game, offer_salary=0, extension=False, current_hit=0):
         from salary_cap_system import total_cap_charge
         cap = _live_cap(game)
         team = _user_team(game)
-        charge = int(safe_call(lambda: total_cap_charge(team), 0, context="contracts/_cap_state"))
+        # default=None: an unknown charge must FAIL CLOSED. The old code
+        # let int(None) raise into the except below so `fits` stayed False;
+        # defaulting to 0 here instead would silently compute fits from a
+        # $0 charge and wrongly enable the submit button.
+        charge = safe_call(lambda: total_cap_charge(team), None,
+                           context="contracts/_cap_state")
+        if charge is None:
+            return out  # fits=False: unverifiable charge, do not enable
+        charge = int(charge)
         proj = charge + int(offer_salary or 0)
         if extension:
             proj -= int(current_hit or 0)
