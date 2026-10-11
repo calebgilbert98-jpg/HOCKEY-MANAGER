@@ -7712,438 +7712,531 @@ NHL League Office""",
             preseason: exhibition -- the result is stored for viewing but
                 never touches the standings.
             """
-            # Update league standings (safely) -- never for preseason.
-            home_score, away_score = scores
+            # ATOMICITY (data-integrity): normalize + snapshot before ANY
+            # mutation. Malformed notable events (non-dict entries) carry no
+            # interpretable data -- drop them up front so every downstream
+            # consumer can rely on the dict shape instead of each guarding
+            # separately.
+            if notable_events is None:
+                notable_events = []
+            else:
+                notable_events = [e for e in notable_events
+                                  if isinstance(e, dict)]
 
+            # Snapshot the standings rows, the Team record mirrors, and every
+            # rostered player's season stat sheet. If anything below fails,
+            # the except restores all three in place and re-raises, so the
+            # game is left in a clean re-processable state -- never a partial
+            # write (standings up, stats lost) that re-processing would
+            # double-count.
+            _standings_snap = {}
+            _teamrec_snap = {}
+            _statline_snap = {}
             if not preseason:
-                # Ensure teams exist in standings
-                if home_team.team_name not in self.league.standings:
-                    self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-                if away_team.team_name not in self.league.standings:
-                    self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-
-            # Detect if game went to overtime/shootout (for OTL point)
-            # NHL rule: loser in OT/SO gets 1 point (OTL)
-            # Use sim_engine.period (notable_events dicts don't have 'period' key)
-            try:
-                went_to_ot = sim_engine is not None and int(getattr(sim_engine, 'period', 3) or 3) > 3
-            except Exception:
-                went_to_ot = False
-
-            # Grudge-week report card: marketed hard and fizzled gets called out.
-            try:
-                _ufights = 0
-                if sim_engine is not None:
-                    _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
-                self._grudge_week_grade(game_date, home_team, away_team,
-                                        home_score, away_score, went_to_ot,
-                                        fights=_ufights)
-            except Exception:
-                pass
-
-            # Winner gets 2 points (regular season only -- preseason
-            # exhibitions never touch the table).
-            if not preseason:
-                self.league.standings[winner.team_name]['W'] += 1
-                self.league.standings[winner.team_name]['Points'] += 2
-
-                # Loser: OTL point if game went to OT/SO, else regulation loss
-                if went_to_ot:
-                    self.league.standings[loser.team_name]['OTL'] += 1
-                    self.league.standings[loser.team_name]['Points'] += 1
-                else:
-                    self.league.standings[loser.team_name]['L'] += 1
-
-                # Sync the Team objects too (the dashboard, standings window,
-                # and season-review builder read team.wins/losses/ot_losses/
-                # games_played/goals_for/goals_against -- not league.standings).
-                # The canonical Team.update_record() keeps streaks consistent.
-                try:
-                    _wl, _ll = (home_team, away_team) if winner == home_team \
-                        else (away_team, home_team)
-                    _wl.update_record("WIN")
-                    _ll.update_record("LOSS", overtime=went_to_ot)
-                    home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
-                    home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
-                    away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
-                    away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
-                except Exception:
-                    pass
-
-            # Store game result for later viewing
-            player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
-            game_stats = getattr(sim_engine, 'game_stats', None) or {}
-            game_result_team_stats = None
-            if not game_stats:
-                # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
-                # flatten to the {pid: {...}} shape the box score expects.
-                by_id = {}
-                for _tm in (home_team, away_team):
-                    for _p in getattr(_tm, 'roster', []) or []:
-                        by_id[_p.id] = _p
-                for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
-                    if not isinstance(_pmap, dict):
-                        continue
-                    for _pid, _st in _pmap.items():
-                        if not isinstance(_st, dict) or _pid not in by_id:
+                for _st in (home_team, away_team):
+                    _srow = self.league.standings.get(_st.team_name)
+                    if isinstance(_srow, dict):
+                        _standings_snap[_st.team_name] = dict(_srow)
+                    _teamrec_snap[_st.team_name] = {
+                        a: getattr(_st, a, 0) for a in (
+                            "wins", "losses", "ties", "ot_losses",
+                            "games_played", "win_streak",
+                            "longest_win_streak", "goals_for",
+                            "goals_against")}
+                for _st in (home_team, away_team):
+                    for _pl in getattr(_st, 'roster', []) or []:
+                        _pso = getattr(_pl, 'stats', None)
+                        if _pso is None:
                             continue
-                        # Defensive record: the shared attribute-driven roll --
-                        # the same single decision GameSim applies live, so a
-                        # quick-simmed game leaves the same statistical trail.
-                        # Rolled ONCE here; the values below feed both the
-                        # per-game box score and (below, under stats_from_events)
-                        # the season totals, so the two always agree. Goalies
-                        # are skipped like GameSim's end-of-game roll.
                         try:
-                            from game_classes import roll_defensive_game_stats as _rdg
-                            _pos = getattr(getattr(by_id[_pid], "primary_position",
-                                                    None), "name", "")
-                            if _pos == "GOALIE":
-                                _dh, _dt, _db = 0, 0, 0
-                            else:
-                                _dh, _dt, _db = _rdg(by_id[_pid])
+                            _statline_snap[id(_pl)] = (_pso, dict(vars(_pso)))
                         except Exception:
-                            _dh, _dt, _db = 0, 0, 0
-                        game_stats[_pid] = {
-                            'player': by_id[_pid],
-                            'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
-                            'shots_on_goal': _st.get('shots', 0),
-                            'saves': _st.get('saves', 0),
-                            'shots_against': 0,  # derived in the box score
-                            'goals_against': 0,
-                            'hits': _dh,
-                            'blocked_shots': _db,
-                            'takeaways': _dt,
-                            'giveaways': 0,
-                            'faceoffs_won': 0,   # filled by the faceoff roll below
-                            'faceoffs_lost': 0,
-                            '_def_roll': (_dh, _dt, _db),
-                        }
-                # Faceoffs: the shared per-game model (GameSim resolves them
-                # live; the quick path was leaving zeros). Writes per-player
-                # won/lost into the game_stats built above.
+                            pass
+
+            try:
+                # Update league standings (safely) -- never for preseason.
+                home_score, away_score = scores
+
+                if not preseason:
+                    # Ensure teams exist in standings
+                    if home_team.team_name not in self.league.standings:
+                        self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+                    if away_team.team_name not in self.league.standings:
+                        self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+
+                # Detect if game went to overtime/shootout (for OTL point)
+                # NHL rule: loser in OT/SO gets 1 point (OTL)
+                # Use sim_engine.period (notable_events dicts don't have 'period' key)
                 try:
-                    from game_classes import roll_faceoff_game_stats as _rfo
-                    _fo_home, _fo_away = _rfo(home_team.roster, away_team.roster)
-                    for _fo_map in (_fo_home, _fo_away):
-                        for _fpid, (_fw, _fl) in _fo_map.items():
-                            if _fpid in game_stats:
-                                game_stats[_fpid]['faceoffs_won'] = _fw
-                                game_stats[_fpid]['faceoffs_lost'] = _fl
+                    went_to_ot = sim_engine is not None and int(getattr(sim_engine, 'period', 3) or 3) > 3
+                except Exception:
+                    went_to_ot = False
+
+                # Grudge-week report card: marketed hard and fizzled gets called out.
+                try:
+                    _ufights = 0
+                    if sim_engine is not None:
+                        _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
+                    self._grudge_week_grade(game_date, home_team, away_team,
+                                            home_score, away_score, went_to_ot,
+                                            fights=_ufights)
                 except Exception:
                     pass
-                # Team aggregates for the box-score team-stats section
-                # (AdvGS has no team_stats of its own).
-                try:
-                    _team_agg = {}
-                    for _pid, _gs in game_stats.items():
-                        _pl = _gs.get('player')
-                        _tnm = getattr(_pl, 'team_name', None)
-                        if not _tnm:
-                            continue
-                        _ag = _team_agg.setdefault(_tnm, {
-                            'hits': 0, 'blocked_shots': 0, 'takeaways': 0,
-                            'giveaways': 0, 'faceoffs_won': 0, 'shots': 0,
-                        })
-                        _ag['hits'] += _gs.get('hits', 0)
-                        _ag['blocked_shots'] += _gs.get('blocked_shots', 0)
-                        _ag['takeaways'] += _gs.get('takeaways', 0)
-                        _ag['giveaways'] += _gs.get('giveaways', 0)
-                        _ag['faceoffs_won'] += _gs.get('faceoffs_won', 0)
-                        _ag['shots'] += _gs.get('shots_on_goal', 0)
-                    if _team_agg:
-                        game_result_team_stats = dict(_team_agg)
+
+                # Winner gets 2 points (regular season only -- preseason
+                # exhibitions never touch the table).
+                if not preseason:
+                    self.league.standings[winner.team_name]['W'] += 1
+                    self.league.standings[winner.team_name]['Points'] += 2
+
+                    # Loser: OTL point if game went to OT/SO, else regulation loss
+                    if went_to_ot:
+                        self.league.standings[loser.team_name]['OTL'] += 1
+                        self.league.standings[loser.team_name]['Points'] += 1
                     else:
-                        game_result_team_stats = None
-                except Exception:
-                    game_result_team_stats = None
-                # GAP-001 (parity): the AdvGS records chance grades per game in
-                # sim.stats but never flushed them to season stats. Mirror the
-                # GameSim finalization flush so both engines feed the analytics
-                # integration's per-player aggregates. This block only runs for
-                # the AdvGS shape (GameSim has game_stats and skips it); the
-                # stats_from_events guard keeps preseason exhibitions and the
-                # GameSim path (already flushed in its finalization) from
-                # double-counting.
-                if stats_from_events:
+                        self.league.standings[loser.team_name]['L'] += 1
+
+                    # Sync the Team objects too (the dashboard, standings window,
+                    # and season-review builder read team.wins/losses/ot_losses/
+                    # games_played/goals_for/goals_against -- not league.standings).
+                    # The canonical Team.update_record() keeps streaks consistent.
                     try:
-                        for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
-                            if not isinstance(_pmap, dict):
-                                continue
-                            for _pid, _st in _pmap.items():
-                                if not isinstance(_st, dict) or _pid not in by_id:
-                                    continue
-                                _pl = by_id[_pid]
-                                try:
-                                    if getattr(getattr(_pl, 'primary_position', None), 'name', '') == 'GOALIE':
-                                        continue
-                                    for _g in ('a', 'b', 'c'):
-                                        _sk = f'grade_{_g}_shots'
-                                        _gk = f'grade_{_g}_goals'
-                                        setattr(_pl.stats, _sk,
-                                                (getattr(_pl.stats, _sk, 0) or 0) + (_st.get(_sk, 0) or 0))
-                                        setattr(_pl.stats, _gk,
-                                                (getattr(_pl.stats, _gk, 0) or 0) + (_st.get(_gk, 0) or 0))
-                                except Exception:
-                                    pass
+                        _wl, _ll = (home_team, away_team) if winner == home_team \
+                            else (away_team, home_team)
+                        _wl.update_record("WIN")
+                        _ll.update_record("LOSS", overtime=went_to_ot)
+                        home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+                        home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+                        away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+                        away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
                     except Exception:
                         pass
-            game_result = {
-                'date': game_date,
-                'home_team': home_team,
-                'away_team': away_team,
-                'home_score': home_score,
-                'away_score': away_score,
-                'winner': winner,
-                'events': events,
-                'notable_events': notable_events,
-                'player_ratings': player_ratings,
-                'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
-                'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
-                # Per-team game stats: AdvGS has none of its own, so use the
-                # aggregates built from the flattened per-player stats above.
-                'team_stats': (game_result_team_stats
-                               if game_result_team_stats
-                               else getattr(sim_engine, 'team_stats', {})),
-                'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
-                'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
-                # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
-                'lines': self._snapshot_game_lines(home_team, away_team),
-            }
-            # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
-            # the game (integration read; missing data stays missing).
-            try:
-                _toi, _fat = self._snapshot_game_toi_fatigue(
-                    sim_engine, home_team, away_team)
-                game_result['player_toi'] = _toi
-                game_result['player_fatigue'] = _fat
-            except Exception:
-                pass
 
-            self._record_game_result(game_result)
-
-            # Three stars of the game (NHL media criteria) -- stamped on the
-            # result and recorded onto the players. Preseason names no stars.
-            try:
-                import stars as _stars_mod
-                _stars_mod.record_game_stars(game_result, home_team, away_team,
-                                            preseason=preseason,
-                                            game_date=game_date)
-            except Exception as _se:
-                print(f"Three-stars error (non-fatal): {_se}")
-
-            # Generate media events for the game (if media system enabled)
-            if hasattr(self, 'media_system') and self.media_system:
-                self.media_system.process_game_result(game_result)
-
-            # Update player stats from game events
-            # Records: goals, assists, shots, saves, PIM
-            # (Skipped when the sim engine already updated player.stats itself.)
-            if stats_from_events:
-                # Build roster lookups for assist selection
-                home_roster = {p.id: p for p in home_team.roster}
-                away_roster = {p.id: p for p in away_team.roster}
-
-                # Identify starting goalies for save tracking
-                def get_starting_goalie(team):
-                    goalies = [p for p in team.roster
-                              if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
-                    return goalies[0] if goalies else None
-
-                home_goalie = get_starting_goalie(home_team)
-                away_goalie = get_starting_goalie(away_team)
-
-                for event in notable_events:
-                    event_type = event.get('event')
-                    player = event.get('player')
-                    team_name = event.get('team')
-
-                    if not player:
-                        continue
-
-                    if event_type == 'Goal':
-                        # Scorer gets goal + shot
-                        player.stats.goals += 1
-                        player.stats.shots += 1
-
-                        # Assists: up to 2 teammates, selected by the SHARED
-                        # attribute-weighted decision (mesh_system.assist_weight)
-                        # -- the same call both engines make. BUG-023: the old
-                        # filter checked .name != "G" but the enum member name is
-                        # "GOALIE" ("G" is the value), so goalies were never
-                        # excluded; and uniform random.sample bypassed the entire
-                        # multi-attribute assist rework for user-team games
-                        # (backup goalie at 8 assists in October S1).
-                        team_roster = home_roster if team_name == home_team.team_name else away_roster
-                        potential_assisters = [
-                            p for p in team_roster.values()
-                            if p.id != player.id
-                            and getattr(p, 'primary_position', None)
-                            and p.primary_position.name != "GOALIE"
-                        ]
-                        # P2 (scoring calibration 2026-09-29): trust the sim's
-                        # own attribute-weighted assist ledger when the Goal
-                        # event carries one -- this is the same single source of
-                        # truth the box score uses, so the season log agrees with
-                        # it and star playmakers are no longer diluted by a
-                        # uniform re-roll. Legacy events without an assist ledger
-                        # fall back to the BUG-023 attribute-weighted re-roll
-                        # (never uniform, never goalies) at the P1 rate so the
-                        # user's team credits assists at league intensity.
-                        event_assists = event.get('assists', None)
-                        if event_assists is not None:
-                            for assister in event_assists:
-                                pos_name = getattr(getattr(assister, 'primary_position', None), 'name', '')
-                                if (assister is not None
-                                        and getattr(assister, 'id', None) != player.id
-                                        and pos_name not in ("GOALIE", "G")
-                                        and getattr(assister, 'stats', None) is not None):
-                                    assister.stats.assists += 1
-                        else:
-                            num_assists = random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
-                            if potential_assisters and num_assists > 0:
-                                try:
-                                    from mesh_system import assist_weight as _aw_ev
-                                    _tm_ev = home_team if team_name == home_team.team_name else away_team
-                                    _ws = [max(0.05, _aw_ev(p, player, _tm_ev))
-                                           for p in potential_assisters]
-                                    assisters = []
-                                    _pool = list(potential_assisters)
-                                    _wp = list(_ws)
-                                    for _ in range(min(num_assists, len(_pool))):
-                                        _pick = random.choices(_pool, weights=_wp, k=1)[0]
-                                        _i = _pool.index(_pick)
-                                        assisters.append(_pick)
-                                        del _pool[_i]
-                                        del _wp[_i]
-                                except Exception:
-                                    assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
-                                for assister in assisters:
-                                    assister.stats.assists += 1
-
-                        # Opposing goalie: shot against (goal counts as shot faced, not a save)
-                        opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
-                        if opp_goalie:
-                            opp_goalie.stats.shots_against += 1
-                            opp_goalie.stats.goals_against += 1
-
-                    elif event_type == 'Shootout Goal':
-                        # NHL rule: shootout goals don't count in player stats
-                        pass
-
-                    elif event_type == 'Shot':
-                        # Shooter gets a shot on goal
-                        player.stats.shots += 1
-                        # Opposing goalie gets a save + shot against
-                        opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
-                        if opp_goalie:
-                            opp_goalie.stats.saves += 1
-                            opp_goalie.stats.shots_against += 1
-
-                    elif event_type == 'Penalty':
-                        # Standard minor penalty: 2 PIM
-                        player.stats.penalties += 1
-                        player.stats.penalties_in_minutes += 2
-
-            # Games played: all roster players get credit -- but only when stats
-            # are derived from events (quick sim). GameSim already credited GP
-            # to dressed players itself; running this too would double-count.
-            if stats_from_events:
-                # (In real NHL only dressed players get GP, but sim doesn't track scratches)
-                for team in [home_team, away_team]:
-                    for player in team.roster:
-                        player.stats.games_played += 1
-                # Goalie decisions: the events path credits goals/saves above
-                # but not W/L/SO. GameSim and the lightweight path credit them,
-                # so do it here too -- monthly awards and the record book must
-                # see the same numbers on every sim path.
-                if not preseason:
-                    for _team, _opp_score, _won in (
-                            (home_team, away_score, winner is home_team),
-                            (away_team, home_score, winner is away_team)):
-                        _g = get_starting_goalie(_team)
-                        if _g is None:
+                # Store game result for later viewing
+                player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
+                game_stats = getattr(sim_engine, 'game_stats', None) or {}
+                game_result_team_stats = None
+                if not game_stats:
+                    # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
+                    # flatten to the {pid: {...}} shape the box score expects.
+                    by_id = {}
+                    for _tm in (home_team, away_team):
+                        for _p in getattr(_tm, 'roster', []) or []:
+                            by_id[_p.id] = _p
+                    for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                        if not isinstance(_pmap, dict):
                             continue
-                        if _won:
-                            _g.stats.wins += 1
+                        for _pid, _st in _pmap.items():
+                            if not isinstance(_st, dict) or _pid not in by_id:
+                                continue
+                            # Defensive record: the shared attribute-driven roll --
+                            # the same single decision GameSim applies live, so a
+                            # quick-simmed game leaves the same statistical trail.
+                            # Rolled ONCE here; the values below feed both the
+                            # per-game box score and (below, under stats_from_events)
+                            # the season totals, so the two always agree. Goalies
+                            # are skipped like GameSim's end-of-game roll.
+                            try:
+                                from game_classes import roll_defensive_game_stats as _rdg
+                                _pos = getattr(getattr(by_id[_pid], "primary_position",
+                                                        None), "name", "")
+                                if _pos == "GOALIE":
+                                    _dh, _dt, _db = 0, 0, 0
+                                else:
+                                    _dh, _dt, _db = _rdg(by_id[_pid])
+                            except Exception:
+                                _dh, _dt, _db = 0, 0, 0
+                            game_stats[_pid] = {
+                                'player': by_id[_pid],
+                                'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
+                                'shots_on_goal': _st.get('shots', 0),
+                                'saves': _st.get('saves', 0),
+                                'shots_against': 0,  # derived in the box score
+                                'goals_against': 0,
+                                'hits': _dh,
+                                'blocked_shots': _db,
+                                'takeaways': _dt,
+                                'giveaways': 0,
+                                'faceoffs_won': 0,   # filled by the faceoff roll below
+                                'faceoffs_lost': 0,
+                                '_def_roll': (_dh, _dt, _db),
+                            }
+                    # Faceoffs: the shared per-game model (GameSim resolves them
+                    # live; the quick path was leaving zeros). Writes per-player
+                    # won/lost into the game_stats built above.
+                    try:
+                        from game_classes import roll_faceoff_game_stats as _rfo
+                        _fo_home, _fo_away = _rfo(home_team.roster, away_team.roster)
+                        for _fo_map in (_fo_home, _fo_away):
+                            for _fpid, (_fw, _fl) in _fo_map.items():
+                                if _fpid in game_stats:
+                                    game_stats[_fpid]['faceoffs_won'] = _fw
+                                    game_stats[_fpid]['faceoffs_lost'] = _fl
+                    except Exception:
+                        pass
+                    # Team aggregates for the box-score team-stats section
+                    # (AdvGS has no team_stats of its own).
+                    try:
+                        _team_agg = {}
+                        for _pid, _gs in game_stats.items():
+                            _pl = _gs.get('player')
+                            _tnm = getattr(_pl, 'team_name', None)
+                            if not _tnm:
+                                continue
+                            _ag = _team_agg.setdefault(_tnm, {
+                                'hits': 0, 'blocked_shots': 0, 'takeaways': 0,
+                                'giveaways': 0, 'faceoffs_won': 0, 'shots': 0,
+                            })
+                            _ag['hits'] += _gs.get('hits', 0)
+                            _ag['blocked_shots'] += _gs.get('blocked_shots', 0)
+                            _ag['takeaways'] += _gs.get('takeaways', 0)
+                            _ag['giveaways'] += _gs.get('giveaways', 0)
+                            _ag['faceoffs_won'] += _gs.get('faceoffs_won', 0)
+                            _ag['shots'] += _gs.get('shots_on_goal', 0)
+                        if _team_agg:
+                            game_result_team_stats = dict(_team_agg)
                         else:
-                            _g.stats.losses += 1
-                        if _opp_score == 0:
-                            _g.stats.shutouts += 1
-                # Defensive record: the per-game roll already happened once in
-                # the flattening above (stored as _def_roll on each game_stats
-                # entry) -- reuse those exact values so the season totals agree
-                # with the box score. Fall back to a fresh shared roll only if
-                # the flattening didn't run (shouldn't happen on this path).
+                            game_result_team_stats = None
+                    except Exception:
+                        game_result_team_stats = None
+                    # GAP-001 (parity): the AdvGS records chance grades per game in
+                    # sim.stats but never flushed them to season stats. Mirror the
+                    # GameSim finalization flush so both engines feed the analytics
+                    # integration's per-player aggregates. This block only runs for
+                    # the AdvGS shape (GameSim has game_stats and skips it); the
+                    # stats_from_events guard keeps preseason exhibitions and the
+                    # GameSim path (already flushed in its finalization) from
+                    # double-counting.
+                    if stats_from_events:
+                        try:
+                            for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                                if not isinstance(_pmap, dict):
+                                    continue
+                                for _pid, _st in _pmap.items():
+                                    if not isinstance(_st, dict) or _pid not in by_id:
+                                        continue
+                                    _pl = by_id[_pid]
+                                    try:
+                                        if getattr(getattr(_pl, 'primary_position', None), 'name', '') == 'GOALIE':
+                                            continue
+                                        for _g in ('a', 'b', 'c'):
+                                            _sk = f'grade_{_g}_shots'
+                                            _gk = f'grade_{_g}_goals'
+                                            setattr(_pl.stats, _sk,
+                                                    (getattr(_pl.stats, _sk, 0) or 0) + (_st.get(_sk, 0) or 0))
+                                            setattr(_pl.stats, _gk,
+                                                    (getattr(_pl.stats, _gk, 0) or 0) + (_st.get(_gk, 0) or 0))
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                game_result = {
+                    'date': game_date,
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'home_score': home_score,
+                    'away_score': away_score,
+                    'winner': winner,
+                    'events': events,
+                    'notable_events': notable_events,
+                    'player_ratings': player_ratings,
+                    'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
+                    'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
+                    # Per-team game stats: AdvGS has none of its own, so use the
+                    # aggregates built from the flattened per-player stats above.
+                    'team_stats': (game_result_team_stats
+                                   if game_result_team_stats
+                                   else getattr(sim_engine, 'team_stats', {})),
+                    'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
+                    'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
+                    # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
+                    'lines': self._snapshot_game_lines(home_team, away_team),
+                }
+                # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
+                # the game (integration read; missing data stays missing).
                 try:
-                    from game_classes import roll_defensive_game_stats as _rdg
+                    _toi, _fat = self._snapshot_game_toi_fatigue(
+                        sim_engine, home_team, away_team)
+                    game_result['player_toi'] = _toi
+                    game_result['player_fatigue'] = _fat
+                except Exception:
+                    pass
+
+                self._record_game_result(game_result)
+
+                # Three stars of the game (NHL media criteria) -- stamped on the
+                # result and recorded onto the players. Preseason names no stars.
+                try:
+                    import stars as _stars_mod
+                    _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                                preseason=preseason,
+                                                game_date=game_date)
+                except Exception as _se:
+                    print(f"Three-stars error (non-fatal): {_se}")
+
+                # Generate media events for the game (if media system enabled).
+                # Best-effort: a plugin failure must never abort (or partially
+                # roll back) an already-decided game.
+                if hasattr(self, 'media_system') and self.media_system:
+                    try:
+                        self.media_system.process_game_result(game_result)
+                    except Exception as _ms_e:
+                        print(f"Media system error (non-fatal, game kept): {_ms_e}")
+
+                # Update player stats from game events
+                # Records: goals, assists, shots, saves, PIM
+                # (Skipped when the sim engine already updated player.stats itself.)
+                if stats_from_events:
+                    # Build roster lookups for assist selection
+                    home_roster = {p.id: p for p in home_team.roster}
+                    away_roster = {p.id: p for p in away_team.roster}
+
+                    # Identify starting goalies for save tracking
+                    def get_starting_goalie(team):
+                        goalies = [p for p in team.roster
+                                  if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
+                        return goalies[0] if goalies else None
+
+                    home_goalie = get_starting_goalie(home_team)
+                    away_goalie = get_starting_goalie(away_team)
+
+                    for event in notable_events:
+                        event_type = event.get('event')
+                        player = event.get('player')
+                        team_name = event.get('team')
+
+                        # A stat line needs a real player object with a stat
+                        # sheet; anything else is uninterpretable data, not a
+                        # reason to abort the whole game.
+                        if not player or getattr(player, 'stats', None) is None:
+                            continue
+
+                        if event_type == 'Goal':
+                            # Scorer gets goal + shot
+                            player.stats.goals += 1
+                            player.stats.shots += 1
+
+                            # Assists: up to 2 teammates, selected by the SHARED
+                            # attribute-weighted decision (mesh_system.assist_weight)
+                            # -- the same call both engines make. BUG-023: the old
+                            # filter checked .name != "G" but the enum member name is
+                            # "GOALIE" ("G" is the value), so goalies were never
+                            # excluded; and uniform random.sample bypassed the entire
+                            # multi-attribute assist rework for user-team games
+                            # (backup goalie at 8 assists in October S1).
+                            team_roster = home_roster if team_name == home_team.team_name else away_roster
+                            potential_assisters = [
+                                p for p in team_roster.values()
+                                if p.id != player.id
+                                and getattr(p, 'primary_position', None)
+                                and p.primary_position.name != "GOALIE"
+                            ]
+                            # P2 (scoring calibration 2026-09-29): trust the sim's
+                            # own attribute-weighted assist ledger when the Goal
+                            # event carries one -- this is the same single source of
+                            # truth the box score uses, so the season log agrees with
+                            # it and star playmakers are no longer diluted by a
+                            # uniform re-roll. Legacy events without an assist ledger
+                            # fall back to the BUG-023 attribute-weighted re-roll
+                            # (never uniform, never goalies) at the P1 rate so the
+                            # user's team credits assists at league intensity.
+                            event_assists = event.get('assists', None)
+                            # Only a real list/tuple ledger is trustworthy; a
+                            # malformed ledger falls back to the re-roll below.
+                            if isinstance(event_assists, (list, tuple)):
+                                for assister in event_assists:
+                                    pos_name = getattr(getattr(assister, 'primary_position', None), 'name', '')
+                                    if (assister is not None
+                                            and getattr(assister, 'id', None) != player.id
+                                            and pos_name not in ("GOALIE", "G")
+                                            and getattr(assister, 'stats', None) is not None):
+                                        assister.stats.assists += 1
+                            else:
+                                num_assists = random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                                if potential_assisters and num_assists > 0:
+                                    try:
+                                        from mesh_system import assist_weight as _aw_ev
+                                        _tm_ev = home_team if team_name == home_team.team_name else away_team
+                                        _ws = [max(0.05, _aw_ev(p, player, _tm_ev))
+                                               for p in potential_assisters]
+                                        assisters = []
+                                        _pool = list(potential_assisters)
+                                        _wp = list(_ws)
+                                        for _ in range(min(num_assists, len(_pool))):
+                                            _pick = random.choices(_pool, weights=_wp, k=1)[0]
+                                            _i = _pool.index(_pick)
+                                            assisters.append(_pick)
+                                            del _pool[_i]
+                                            del _wp[_i]
+                                    except Exception:
+                                        assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                                    for assister in assisters:
+                                        assister.stats.assists += 1
+
+                            # Opposing goalie: shot against (goal counts as shot faced, not a save)
+                            opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                            if opp_goalie:
+                                opp_goalie.stats.shots_against += 1
+                                opp_goalie.stats.goals_against += 1
+
+                        elif event_type == 'Shootout Goal':
+                            # NHL rule: shootout goals don't count in player stats
+                            pass
+
+                        elif event_type == 'Shot':
+                            # Shooter gets a shot on goal
+                            player.stats.shots += 1
+                            # Opposing goalie gets a save + shot against
+                            opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
+                            if opp_goalie:
+                                opp_goalie.stats.saves += 1
+                                opp_goalie.stats.shots_against += 1
+
+                        elif event_type == 'Penalty':
+                            # Standard minor penalty: 2 PIM
+                            player.stats.penalties += 1
+                            player.stats.penalties_in_minutes += 2
+
+                # Games played: all roster players get credit -- but only when stats
+                # are derived from events (quick sim). GameSim already credited GP
+                # to dressed players itself; running this too would double-count.
+                if stats_from_events:
+                    # (In real NHL only dressed players get GP, but sim doesn't track scratches)
                     for team in [home_team, away_team]:
                         for player in team.roster:
-                            try:
-                                if getattr(getattr(player, "primary_position",
-                                                   None), "name", "") == "GOALIE":
-                                    continue
-                                _gs = game_stats.get(getattr(player, "id", None), {})
-                                _roll = _gs.get("_def_roll") if isinstance(_gs, dict) else None
-                                if _roll is None:
-                                    _roll = _rdg(player)
-                                _h, _t, _b = _roll
-                                player.stats.hits += _h
-                                player.stats.takeaways += _t
-                                player.stats.blocked_shots += _b
-                            except Exception:
+                            player.stats.games_played += 1
+                    # Goalie decisions: the events path credits goals/saves above
+                    # but not W/L/SO. GameSim and the lightweight path credit them,
+                    # so do it here too -- monthly awards and the record book must
+                    # see the same numbers on every sim path.
+                    if not preseason:
+                        for _team, _opp_score, _won in (
+                                (home_team, away_score, winner is home_team),
+                                (away_team, home_score, winner is away_team)):
+                            _g = get_starting_goalie(_team)
+                            if _g is None:
                                 continue
-                except Exception:
-                    pass
-                # Goalie saves: quick-sim notable_events carry goals only
-                # ('Shot' save events never make the notable list), so derive
-                # saves from the engine's full event log, whose SHOT entries
-                # carry a result. Shootout attempts never log SHOT entries,
-                # so no shootout contamination by construction.
+                            if _won:
+                                _g.stats.wins += 1
+                            else:
+                                _g.stats.losses += 1
+                            if _opp_score == 0:
+                                _g.stats.shutouts += 1
+                    # Defensive record: the per-game roll already happened once in
+                    # the flattening above (stored as _def_roll on each game_stats
+                    # entry) -- reuse those exact values so the season totals agree
+                    # with the box score. Fall back to a fresh shared roll only if
+                    # the flattening didn't run (shouldn't happen on this path).
+                    try:
+                        from game_classes import roll_defensive_game_stats as _rdg
+                        for team in [home_team, away_team]:
+                            for player in team.roster:
+                                try:
+                                    if getattr(getattr(player, "primary_position",
+                                                       None), "name", "") == "GOALIE":
+                                        continue
+                                    _gs = game_stats.get(getattr(player, "id", None), {})
+                                    _roll = _gs.get("_def_roll") if isinstance(_gs, dict) else None
+                                    if _roll is None:
+                                        _roll = _rdg(player)
+                                    _h, _t, _b = _roll
+                                    player.stats.hits += _h
+                                    player.stats.takeaways += _t
+                                    player.stats.blocked_shots += _b
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+                    # Goalie saves: quick-sim notable_events carry goals only
+                    # ('Shot' save events never make the notable list), so derive
+                    # saves from the engine's full event log, whose SHOT entries
+                    # carry a result. Shootout attempts never log SHOT entries,
+                    # so no shootout contamination by construction.
+                    try:
+                        for _le in getattr(sim_engine, 'event_log', []) or []:
+                            if not isinstance(_le, dict) or _le.get('type') != 'SHOT':
+                                continue
+                            _det = _le.get('details') or {}
+                            if _det.get('result') != 'SAVE':
+                                continue
+                            _shooter = home_roster.get(_det.get('shooter_id'))
+                            _opp = away_goalie if _shooter is not None else home_goalie
+                            if _shooter is None:
+                                _shooter = away_roster.get(_det.get('shooter_id'))
+                                _opp = home_goalie
+                            if _shooter is None or _opp is None:
+                                continue
+                            _opp.stats.saves += 1
+                            _opp.stats.shots_against += 1
+                    except Exception:
+                        pass
+
+                # Strip the internal _def_roll bookkeeping (used above to sync
+                # season totals with the per-game box score) before storing.
                 try:
-                    for _le in getattr(sim_engine, 'event_log', []) or []:
-                        if not isinstance(_le, dict) or _le.get('type') != 'SHOT':
-                            continue
-                        _det = _le.get('details') or {}
-                        if _det.get('result') != 'SAVE':
-                            continue
-                        _shooter = home_roster.get(_det.get('shooter_id'))
-                        _opp = away_goalie if _shooter is not None else home_goalie
-                        if _shooter is None:
-                            _shooter = away_roster.get(_det.get('shooter_id'))
-                            _opp = home_goalie
-                        if _shooter is None or _opp is None:
-                            continue
-                        _opp.stats.saves += 1
-                        _opp.stats.shots_against += 1
+                    for _gs in game_stats.values():
+                        if isinstance(_gs, dict):
+                            _gs.pop("_def_roll", None)
                 except Exception:
                     pass
 
-            # Strip the internal _def_roll bookkeeping (used above to sync
-            # season totals with the per-game box score) before storing.
-            try:
-                for _gs in game_stats.values():
-                    if isinstance(_gs, dict):
-                        _gs.pop("_def_roll", None)
-            except Exception:
-                pass
+                # Update news log for user team games
+                if self.user_team in (home_team, away_team):
+                    opponent = away_team if self.user_team == home_team else home_team
+                    result = "won" if (winner == self.user_team) else "lost"
+                    # Format score from user team perspective (user score first)
+                    if self.user_team == home_team:
+                        user_score = home_score
+                        opp_score = away_score
+                    else:
+                        user_score = away_score
+                        opp_score = home_score
 
-            # Update news log for user team games
-            if self.user_team in (home_team, away_team):
-                opponent = away_team if self.user_team == home_team else home_team
-                result = "won" if (winner == self.user_team) else "lost"
-                # Format score from user team perspective (user score first)
-                if self.user_team == home_team:
-                    user_score = home_score
-                    opp_score = away_score
-                else:
-                    user_score = away_score
-                    opp_score = home_score
+                    self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
 
-                self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
+                    # Generate post-game emails for user team games
+                    # Post-game emails are best-effort: a failure here must never
+                    # unwind an already-recorded game.
+                    try:
+                        self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
+                    except Exception as _pge_e:
+                        print(f"Post-game emails error (non-fatal, game kept): {_pge_e}")
 
-                # Generate post-game emails for user team games
-                self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
+            except Exception as _psr_e:
+                # Roll back every mutation above, in place (object identity
+                # preserved for live references), then re-raise: the caller
+                # sees the failure and the game can be re-processed cleanly.
+                try:
+                    for _tn, _srow in _standings_snap.items():
+                        _live = self.league.standings.get(_tn)
+                        if isinstance(_live, dict):
+                            _live.clear()
+                            _live.update(_srow)
+                    for _tn, _rec in _teamrec_snap.items():
+                        _tm = (home_team if
+                               getattr(home_team, 'team_name', None) == _tn
+                               else away_team)
+                        for _a, _v in _rec.items():
+                            try:
+                                setattr(_tm, _a, _v)
+                            except Exception:
+                                pass
+                    for _pso, _sv in _statline_snap.values():
+                        try:
+                            vars(_pso).clear()
+                            vars(_pso).update(_sv)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                import traceback as _tb_psr
+                print(f"CRITICAL: _process_single_game_result failed; "
+                      f"standings/stats rolled back for "
+                      f"{getattr(home_team, 'team_name', '?')} vs "
+                      f"{getattr(away_team, 'team_name', '?')} on "
+                      f"{game_date}: {_psr_e}")
+                _tb_psr.print_exc()
+                raise
 
     def _process_training_programs(self):
             """Run one weekly session for each active Development-Center program.
@@ -8489,6 +8582,14 @@ NHL League Office""",
                           f"{game_date} -- missing "
                           f"{'home' if home_team is None else 'away'} team; "
                           f"entry skipped")
+                    continue
+                # Watched games were already simmed through the game viewer:
+                # the result is recorded and stats are updated. Skip
+                # re-simming to avoid double-counting -- mirrors the
+                # user-team branch's `game.get('watched')` skip in
+                # _process_todays_games. Tuple entries are immutable and
+                # never carry the flag; only dicts can be watched.
+                if isinstance(game, dict) and game.get('watched'):
                     continue
                 # Preseason exhibitions: quick-simmed with no footprint --
                 # no stats, no standings, no career GP, no lore.
@@ -10272,12 +10373,22 @@ NHL League Office""",
                 out = rs.unfeature_player(coach, pl, team)
             elif action == "team_event":
                 ev = str(params.get("event", ""))
-                fn = {"bag_skate": rs.apply_bag_skate,
-                      "inspiring_speech": rs.apply_inspiring_speech,
-                      "great_practice": rs.apply_great_practice}.get(ev)
-                if fn is None:
-                    return False, f"unknown team event: {ev!r}"
-                out = fn(team, coach, roster)
+                if ev == "gm_backing":
+                    # Public vote of confidence: mirrors the local
+                    # Morale-window path (media_engine.gm_public_backing(
+                    # league, team, "room", user_triggered=True)). Mainline
+                    # morale_window.py has this same gap -- wiring it here
+                    # is a strict improvement over mainline.
+                    import media_engine as _me
+                    out = _me.gm_public_backing(self.league, team, "room",
+                                                user_triggered=True)
+                else:
+                    fn = {"bag_skate": rs.apply_bag_skate,
+                          "inspiring_speech": rs.apply_inspiring_speech,
+                          "great_practice": rs.apply_great_practice}.get(ev)
+                    if fn is None:
+                        return False, f"unknown team event: {ev!r}"
+                    out = fn(team, coach, roster)
             elif action == "set_line_control":
                 holder = str(params.get("holder", ""))
                 if holder not in ("coach", "gm"):
@@ -13477,10 +13588,19 @@ NHL League Office""",
     def _calculate_player_ratings(self, game_stats, events):
         """Calculate player ratings out of 10 based on game performance"""
         ratings = {}
-        
+
+        # Input-safe: sim engines may hand back None or a malformed shape;
+        # a missing rating sheet must never abort result processing.
+        if not isinstance(game_stats, dict):
+            return ratings
+
         for team_name, team_stats in game_stats.items():
+            if not isinstance(team_stats, dict):
+                continue
             ratings[team_name] = {}
             for player_id, stats in team_stats.items():
+                if not isinstance(stats, dict):
+                    continue
                 # Base rating starts at 5.0
                 rating = 5.0
                 
