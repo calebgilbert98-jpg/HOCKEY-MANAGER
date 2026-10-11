@@ -19,24 +19,20 @@ from PySide6.QtCore import Qt
 
 from .base import BaseScreen
 
+from native_ui.safe import safe_call
+
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="stats/get_game_manager") or game
 
 
 def _league(game):
-    return _safe(lambda: _resolve_gm(game).league)
+    return safe_call(lambda: _resolve_gm(game).league, context="stats/load_league")
 
 
 def _clean_position(pos):
@@ -88,14 +84,14 @@ def _leader_players(game):
     league = _league(game)
     if league is None:
         return [], {}
-    teams = _safe(lambda: list(league.teams), []) or []
+    teams = safe_call(lambda: list(league.teams), [], context="stats/load_teams") or []
     pairs, team_map = [], {}
     for t in teams:
         try:
-            tname = _safe(lambda: t.team_name, "")
+            tname = safe_call(lambda: t.team_name, "", context="stats/get_team_name")
             if tname:
                 team_map[tname] = t
-            for p in _safe(lambda: list(t.roster), []) or []:
+            for p in safe_call(lambda: list(t.roster), [], context="stats/load_roster") or []:
                 pairs.append((p, tname))
         except Exception:
             continue
@@ -120,14 +116,14 @@ def _apply_leader_filters(pairs, pos="All", min_gp=0, team="All"):
 
 
 def _leader_row(p, tname, extra=None):
-    pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
+    pos = safe_call(lambda: _clean_position(getattr(p, "primary_position", "")), "?", context="stats/get_position")
     gp = int(_pstat(p, "games_played") or 0)
     g = int(_pstat(p, "goals") or 0)
     a = int(_pstat(p, "assists") or 0)
     row = {
         "player": p,
-        "id": _safe(lambda: str(getattr(p, "id", id(p))), ""),
-        "name": _safe(lambda: getattr(p, "full_name", "?"), "?") or "?",
+        "id": safe_call(lambda: str(getattr(p, "id", id(p))), "", context="stats/get_player_id"),
+        "name": safe_call(lambda: getattr(p, "full_name", "?"), "?", context="stats/get_full_name") or "?",
         "team": tname, "pos": pos, "gp": gp, "g": g, "a": a,
         "pts": g + a,
         "ppg": round((g + a) / gp, 2) if gp else 0.0,
@@ -614,13 +610,14 @@ class StatsScreen(BaseScreen):
             return
         pairs, _ = _leader_players(self.game)
         players = [p for p, _ in pairs]
-        d = _safe(lambda: _resolve_gm(self.game).current_date)
+        d = safe_call(lambda: _resolve_gm(self.game).current_date, context="stats/get_current_date")
         syr = ar.calder_season_year(d) if d is not None else None
 
         def _row(r, goalie=False):
             p = r["player"]
-            tname = (_safe(lambda: p.team.team_name, "")
-                     or _safe(lambda: getattr(p, "team_name", ""), ""))
+            tname = (safe_call(lambda: p.team.team_name, "", context="stats/get_team_name")
+                     or safe_call(lambda: getattr(p, "team_name", ""), "",
+                                  context="stats/get_team_name"))
             base = _leader_row(p, tname)
             if goalie:
                 base["sv_pct"] = round(float(r.get("sv_pct", 0) or 0), 3)
@@ -681,7 +678,7 @@ class StatsScreen(BaseScreen):
             gp = getattr(t, "games_played", 0) or 0
             pts = getattr(t, "points", 0) or 0
             team_pct[tname] = (pts / (2 * gp)) if gp else 0.5
-        d = _safe(lambda: _resolve_gm(self.game).current_date)
+        d = safe_call(lambda: _resolve_gm(self.game).current_date, context="stats/get_current_date")
 
         race = []
         try:
@@ -718,9 +715,9 @@ class StatsScreen(BaseScreen):
             if p is not None:
                 pid = int(getattr(p, "id", -1) or -1)
                 tname = roster_map.get(pid, "") or \
-                    _safe(lambda: getattr(p, "team_name", ""), "")
+                    safe_call(lambda: getattr(p, "team_name", ""), "", context="stats/get_team_name")
             nm = (r.get("name")
-                  or (_safe(lambda: getattr(p, "full_name", "?"), "?")
+                  or (safe_call(lambda: getattr(p, "full_name", "?"), "?", context="stats/get_full_name")
                       if p is not None else "?"))
             rows.append({"player": p, "rank": i, "name": nm, "team": tname,
                          "score": round(float(r.get("score", 0) or 0), 1),
@@ -766,7 +763,7 @@ class StatsScreen(BaseScreen):
                     if needed <= within:
                         watch.append({
                             "player": p,
-                            "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                            "name": safe_call(lambda: getattr(p, "full_name", "?"), "?", context="stats/get_full_name"),
                             "team": tname, "pos": pos,
                             "milestone": f"{target} {label}",
                             "current": int(current), "needed": int(needed),
@@ -829,11 +826,13 @@ class StatsScreen(BaseScreen):
                     return float(getattr(ledger, a, d) or 0)
                 except Exception:
                     return d
-            pos = _safe(lambda: _clean_position(
-                getattr(p, "primary_position", "")), "?")
+            pos = safe_call(lambda: _clean_position(
+                getattr(p, "primary_position", "")), "?",
+                context="stats/get_position")
             gp = int(_n("games_played"))
-            base = {"player": p, "name": _safe(
-                lambda: getattr(p, "full_name", "?"), "?") or "?",
+            base = {"player": p, "name": safe_call(
+                lambda: getattr(p, "full_name", "?"), "?",
+                context="stats/get_full_name") or "?",
                 "team": team_name, "pos": pos, "gp": gp}
             if goalie:
                 sv = _n("saves"); sa = _n("shots_against")
@@ -918,12 +917,12 @@ class StatsScreen(BaseScreen):
 
     def _records_payload(self):
         live = self.game
-        hist = _safe(lambda: getattr(live, "league_history", None))
+        hist = safe_call(lambda: getattr(live, "league_history", None), context="stats/get_league_history")
         if hist is None:
-            hist = _safe(lambda: getattr(_resolve_gm(live), "league_history", None))
+            hist = safe_call(lambda: getattr(_resolve_gm(live), "league_history", None), context="stats/get_league_history")
         if hist is None:
             return {"teams": [], "champions": [], "empty": True}
-        fr = _safe(lambda: hist.franchise_records)
+        fr = safe_call(lambda: hist.franchise_records, context="stats/get_franchise_records")
         if fr is None:
             return {"teams": [], "champions": [], "empty": True}
 
@@ -948,15 +947,16 @@ class StatsScreen(BaseScreen):
                       ("goalie_season_records", "Goalie — Single Season")]
             all_teams = set()
             for attr, _ in stores:
-                all_teams |= set(_safe(lambda: getattr(fr, attr, {}).keys(),
-                                       []) or [])
-            all_teams |= set(_safe(lambda: getattr(
-                fr, "team_season_records", {}).keys(), []) or [])
+                all_teams |= set(safe_call(lambda: getattr(fr, attr, {}).keys(), [],
+                                       context="stats/get_record_teams") or [])
+            all_teams |= set(safe_call(lambda: getattr(
+                fr, "team_season_records", {}).keys(), [],
+                context="stats/get_record_teams") or [])
             for tname in sorted(all_teams):
                 groups = []
                 for attr, label in stores:
-                    store = _safe(lambda: getattr(fr, attr, {}).get(tname, {}),
-                                  {}) or {}
+                    store = safe_call(lambda: getattr(fr, attr, {}).get(tname, {}), {},
+                                  context="stats/get_record_store") or {}
                     cats = []
                     for cat, rec in store.items():
                         r = _fmt_rec(rec)
@@ -966,8 +966,9 @@ class StatsScreen(BaseScreen):
                             cats.append(r)
                     if cats:
                         groups.append({"label": label, "records": cats})
-                tstore = _safe(lambda: getattr(
-                    fr, "team_season_records", {}).get(tname, {}), {}) or {}
+                tstore = safe_call(lambda: getattr(
+                    fr, "team_season_records", {}).get(tname, {}), {},
+                    context="stats/get_team_record_store") or {}
                 tcats = []
                 for cat, rec in tstore.items():
                     r = _fmt_rec(rec)
@@ -1070,10 +1071,10 @@ class StatsScreen(BaseScreen):
 
     def _nhl_records_payload(self):
         gm = _resolve_gm(self.game)
-        rm = _safe(lambda: getattr(gm, "record_manager", None))
-        nhl = _safe(lambda: getattr(rm, "nhl_records", None))
-        records = _safe(lambda: dict(getattr(nhl, "records", None) or {}),
-                        {}) or {}
+        rm = safe_call(lambda: getattr(gm, "record_manager", None), context="stats/get_record_manager")
+        nhl = safe_call(lambda: getattr(rm, "nhl_records", None), context="stats/get_nhl_records")
+        records = safe_call(lambda: dict(getattr(nhl, "records", None) or {}), {},
+                        context="stats/get_nhl_record_dict") or {}
         if not records:
             return {"empty": True, "season": [], "career": [], "team": [],
                     "special": [], "chase": [], "achievements": [], "total": 0}
@@ -1147,8 +1148,9 @@ class StatsScreen(BaseScreen):
                         if pct >= 25.0:
                             chase.append({
                                 "player": p,
-                                "name": _safe(lambda: getattr(
-                                    p, "full_name", "?"), "?"),
+                                "name": safe_call(lambda: getattr(
+                                    p, "full_name", "?"), "?",
+                                    context="stats/get_full_name"),
                                 "team": tname,
                                 "pos": _clean_position(
                                     getattr(p, "primary_position", "")),
@@ -1164,7 +1166,7 @@ class StatsScreen(BaseScreen):
 
         achievements = []
         try:
-            for r in _safe(lambda: rm.get_recent_records(20), []) or []:
+            for r in safe_call(lambda: rm.get_recent_records(20), [], context="stats/get_recent_records") or []:
                 if isinstance(r, dict):
                     achievements.append({
                         "date": str(r.get("date", "") or ""),
@@ -1295,8 +1297,8 @@ class StatsScreen(BaseScreen):
             if w:
                 w.deleteLater()
         gm = _resolve_gm(self.game)
-        store = _safe(lambda: getattr(gm, "shot_chart_store", None))
-        games = _safe(lambda: list(getattr(store, "games", []) or []), []) or []
+        store = safe_call(lambda: getattr(gm, "shot_chart_store", None), context="stats/get_shot_chart_store")
+        games = safe_call(lambda: list(getattr(store, "games", []) or []), [], context="stats/load_shot_chart_games") or []
         if not games:
             self._xg_layout.addWidget(self._empty(
                 "No tracked games yet — watch a game to generate analytics."))

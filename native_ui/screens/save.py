@@ -33,12 +33,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 
 from .base import BaseScreen
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _save_manager(game):
@@ -47,7 +42,7 @@ def _save_manager(game):
     for fn in (lambda: getattr(game, "save_manager", None),
                lambda: getattr(getattr(game, "game_manager", None),
                                "save_manager", None)):
-        sm = _safe(fn)
+        sm = safe_call(fn, context="save/get_save_manager")
         if sm is not None:
             return sm
     return None
@@ -281,10 +276,13 @@ class SaveScreen(BaseScreen):
 
     def _load_header(self):
         gm = _gm(self.game)
-        cur = _safe(lambda: getattr(gm, "current_date", None))
-        date_str = _safe(lambda: cur.strftime("%B %d, %Y")) if cur else None
-        team = _safe(lambda: getattr(getattr(self.game, "user_team", None),
-                                     "team_name", None))
+        cur = safe_call(lambda: getattr(gm, "current_date", None),
+                        context="save/get_current_date")
+        date_str = safe_call(lambda: cur.strftime("%B %d, %Y"),
+                             context="save/format_date") if cur else None
+        team = safe_call(lambda: getattr(getattr(self.game, "user_team", None),
+                                         "team_name", None),
+                         context="save/get_team_name")
         self._info_team.setText(team or "No team")
         self._info_date.setText(date_str or "")
 
@@ -295,7 +293,8 @@ class SaveScreen(BaseScreen):
         if sm is not None:
             try:
                 base = _saves_dir(sm)
-                files = _safe(lambda: sm.get_save_files(), []) or []
+                files = safe_call(lambda: sm.get_save_files(), [],
+                                  context="save/get_save_files") or []
                 for f in files:
                     try:
                         if not isinstance(f, dict):
@@ -356,10 +355,13 @@ class SaveScreen(BaseScreen):
         sm = self._sm
         if sm is None:
             return {"enabled": False}
-        last_auto = _safe(lambda: sm.last_autosave)
+        last_auto = safe_call(lambda: sm.last_autosave,
+                                context="save/get_last_autosave")
         return {
-            "enabled": bool(_safe(lambda: sm.autosave_enabled, False)),
-            "frequency_days": int(_safe(lambda: sm.autosave_frequency, 0)
+            "enabled": bool(safe_call(lambda: sm.autosave_enabled, False,
+                                      context="save/get_autosave_enabled")),
+            "frequency_days": int(safe_call(lambda: sm.autosave_frequency, 0,
+                                            context="save/get_autosave_frequency")
                                   or 0),
             "last": (last_auto.strftime("%Y-%m-%d %H:%M")
                      if hasattr(last_auto, "strftime") else None),
@@ -382,8 +384,9 @@ class SaveScreen(BaseScreen):
                         try:
                             st = os.stat(fp)
                             mod = _dt.datetime.fromtimestamp(st.st_mtime)
-                            meta = _safe(
-                                lambda: sm._load_save_metadata(fp), {}) or {}
+                            meta = safe_call(
+                                lambda: sm._load_save_metadata(fp), {},
+                                context="save/load_save_metadata") or {}
                             slot.update(
                                 occupied=True,
                                 modified=mod.strftime("%Y-%m-%d %H:%M"),
@@ -618,8 +621,8 @@ class SaveScreen(BaseScreen):
         if sm is not None and path:
             try:
                 import datetime as _dt
-                meta = _safe(lambda: sm._load_save_metadata(path),
-                             {}) or {}
+                meta = safe_call(lambda: sm._load_save_metadata(path), {},
+                                 context="save/load_save_metadata") or {}
                 st = os.stat(path)
                 props.update(
                     filename=os.path.basename(path),

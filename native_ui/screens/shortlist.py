@@ -19,12 +19,7 @@ from PySide6.QtCore import Qt
 from .base import BaseScreen
 from ..widgets.player_table import PlayerTable
 
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 CATEGORIES = [
@@ -83,13 +78,15 @@ class AddPlayerDialog(QDialog):
         self._load_players()
 
     def _load_players(self):
-        gm = _safe(lambda: getattr(self.game, "game_manager", None)) or self.game
-        league = _safe(lambda: gm.league)
+        gm = safe_call(lambda: getattr(self.game, "game_manager", None),
+                       context="shortlist/get_game_manager") or self.game
+        league = safe_call(lambda: gm.league, context="shortlist/load_league")
         players = []
         # Free agents + prospects are the main shortlist sources
         for src in ("free_agents", "draft_prospects"):
             players.extend(
-                _safe(lambda: list(getattr(league, src, None) or []), []))
+                safe_call(lambda: list(getattr(league, src, None) or []), [],
+                          context="shortlist/load_player_pool"))
         # Dedupe
         seen, uniq = set(), []
         for p in players:
@@ -150,12 +147,13 @@ class ShortlistScreen(BaseScreen):
     def _manager(self):
         try:
             import shortlist_system as _ss
-            gm = _safe(lambda: getattr(self.game, "game_manager", None)) \
-                or self.game
+            gm = safe_call(lambda: getattr(self.game, "game_manager", None),
+                           context="shortlist/get_game_manager") or self.game
             save_key = None
             try:
                 import trade_market as _tm
-                league = _safe(lambda: gm.league)
+                league = safe_call(lambda: gm.league,
+                                   context="shortlist/load_league")
                 if league is not None and hasattr(
                         _tm, "league_shortlist_key"):
                     save_key = _tm.league_shortlist_key(league)
@@ -250,9 +248,12 @@ class ShortlistScreen(BaseScreen):
                 try:
                     pid = getattr(e, "player_id", "")
                     if pid and hasattr(self, "game"):
-                        gm = _safe(lambda: getattr(self.game, "game_manager",
-                                                   None)) or self.game
-                        league = _safe(lambda: getattr(gm, "league", None)) or \
+                        gm = safe_call(lambda: getattr(self.game, "game_manager",
+                                                       None),
+                                       context="shortlist/get_game_manager") \
+                            or self.game
+                        league = safe_call(lambda: getattr(gm, "league", None),
+                                           context="shortlist/load_league") or \
                             getattr(self.game, "league", None)
                         if league:
                             pools = []
