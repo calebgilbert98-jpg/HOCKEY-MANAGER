@@ -37,7 +37,7 @@ from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return safe_call(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None), context="lottery/resolve_gm") or game
 
 
 def _reaction_line(pick, team, movement):
@@ -61,15 +61,16 @@ def get_lottery_data(game):
     """Lottery rows: pending reveal first, else the stored league result
     for the latest year (port of _lottery_rows + api_lottery)."""
     gm = _resolve_gm(game)
-    pending = safe_call(lambda: getattr(gm, "_pending_lottery_reveal", None))
+    pending = safe_call(lambda: getattr(gm, "_pending_lottery_reveal", None), context="lottery/pending_reveal")
     year, rows = 0, []
     if pending:
-        year = safe_call(lambda: int(pending.get("year", 0)) or 0, 0)
+        year = safe_call(lambda: int(pending.get("year", 0)) or 0, 0, context="lottery/pending_year")
         rows = [dict(r) for r in (pending.get("rows") or [])]
     else:
-        league = safe_call(lambda: gm.league) if gm else None
+        league = safe_call(lambda: gm.league, context="lottery/stored_league") if gm else None
         stored = safe_call(lambda: getattr(league, "lottery_results",
-                                      None) or {}, {}) or {}
+                                      None) or {}, {},
+                           context="lottery/stored_results") or {}
         years = [y for y in stored.keys() if stored.get(y)]
         if years:
             year = max(years)
