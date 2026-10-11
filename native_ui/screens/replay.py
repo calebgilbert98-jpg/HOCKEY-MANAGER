@@ -174,7 +174,7 @@ def _roster_lookup(result):
 def _side_lookup(result):
     """str(pid) -> 0 (home) / 1 (away), from each team's own roster."""
     side = {}
-    for idx, key in (("home_team", 0), ("away_team", 1)):
+    for key, s in (("home_team", 0), ("away_team", 1)):
         try:
             team = result.get(key)
             for p in safe_call(
@@ -183,7 +183,7 @@ def _side_lookup(result):
                 try:
                     pid = getattr(p, "id", None)
                     if pid is not None:
-                        side.setdefault(str(pid), idx)
+                        side.setdefault(str(pid), s)
                 except Exception:
                     continue
         except Exception:
