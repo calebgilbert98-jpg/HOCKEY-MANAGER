@@ -1037,6 +1037,39 @@ class TradesScreen(BaseScreen):
         self._schedule_evaluate()
 
     def _prune_terms(self):
+        # Evict staged outgoing assets that are no longer tradable (the
+        # asset lists refresh under us -- e.g. a player moved off-roster
+        # while the screen sat open). Without this, _mp_propose builds the
+        # human-to-human offer from raw staged sets and a stale pid goes
+        # out as a phantom asset.
+        try:
+            _players = self._my_players
+            if _players is not None:
+                _valid_pids = set()
+                for _entry in _players:
+                    try:
+                        _valid_pids.add(_pid(_entry[0]))
+                    except Exception:
+                        continue
+                for k in list(self._give_pids):
+                    if k not in _valid_pids:
+                        self._give_pids.discard(k)
+        except Exception:
+            pass
+        try:
+            _picks = self._my_picks
+            if _picks is not None:
+                _valid_picks = set()
+                for _pk in _picks:
+                    try:
+                        _valid_picks.add(_pid(_pk))
+                    except Exception:
+                        continue
+                for k in list(self._give_picks):
+                    if k not in _valid_picks:
+                        self._give_picks.discard(k)
+        except Exception:
+            pass
         for k in list(self._retention):
             if k not in self._give_pids:
                 del self._retention[k]
