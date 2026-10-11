@@ -175,17 +175,18 @@ class ShortlistScreen(BaseScreen):
         try:
             mgr = self._manager()
             if mgr is not None:
-                import shortlist_system as _ss
-                e = _ss.ShortlistEntry(
-                    player_id=str(getattr(entry["player"], "id", "")),
-                    player_name=getattr(
-                        entry["player"], "full_name", "?"),
-                    category=entry["category"],
-                    priority=entry["priority"],
+                ok = mgr.add_player(
+                    str(getattr(entry["player"], "id", "")),
+                    getattr(entry["player"], "full_name", "?"),
+                    entry["category"],
                     notes=entry["notes"],
+                    priority=entry["priority"],
                 )
-                mgr.entries.append(e)
-                mgr.save_shortlist()
+                if not ok:
+                    QMessageBox.warning(
+                        self, "Already on Shortlist",
+                        f"{getattr(entry['player'], 'full_name', '?')} "
+                        f"is already in {entry['category']}.")
             self.refresh()
         except Exception as ex:
             QMessageBox.warning(self, "Shortlist", f"Failed: {ex}")
