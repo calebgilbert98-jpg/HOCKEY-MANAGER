@@ -279,10 +279,80 @@ def _mark_recent(app, entity_key, story_type, game_date):
         pass
 
 
+# Scratch-gate GP-delta window (REV-B2 follow-up): cumulative GP alone
+# cannot tell "currently scratched" from "recently returned" -- an 86 OVR
+# star back from a 20-game suspension plays every night, yet gp*2 < team_gp
+# still fires "can't crack the lineup" for weeks (and ir_status resets on
+# return, so _unavailable can't see the past either). Player.days_missed is
+# never incremented anywhere and there is no per-player game log, so
+# instead we track per-player (date, gp) snapshots on the app -- mirroring
+# the _recent_ok/_mark_recent pattern -- and demand GP be essentially
+# static over the trailing window: a genuine scratch accrues nothing, while
+# a returned regular accrues ~3-4/week.
+SCRATCH_GP_WINDOW_DAYS = 7
+SCRATCH_GP_MAX_DELTA = 1
+
+
+def _gp_static(app, entity_key, game_date, gp):
+    """True only if the player has dressed for ~no games in the trailing
+    SCRATCH_GP_WINDOW_DAYS days -- evidence they are sitting NOW.
+
+    Sliding snapshot: the first sighting seeds (date, gp) and returns False
+    (no history yet, so no scratch claim can be made). Once a full window
+    has elapsed since the snapshot, gp is compared against it: advancing by
+    more than SCRATCH_GP_MAX_DELTA means he's dressing, so the verdict is
+    False and the baseline refreshes for the next window. Callers must pass
+    EVERY evaluated candidate through here -- including injured/suspended
+    ones -- so baselines stay fresh across an absence; otherwise a stale
+    pre-suspension snapshot would read as "hasn't played in weeks" the day
+    he returns. A backward clock (season rewind / new save) reseeds.
+    Fail-open (True) on unexpected errors, matching _recent_ok.
+    """
+    try:
+        seen = getattr(app, "_daily_news_gp_seen", None)
+        if not isinstance(seen, dict):
+            seen = {}
+            app._daily_news_gp_seen = seen
+        entry = seen.get(entity_key)
+        last = (entry if isinstance(entry, (tuple, list)) and len(entry) == 2
+                else None)
+        delta_days = (_safe(lambda: (game_date - last[0]).days, None)
+                      if last is not None else None)
+        if delta_days is None or delta_days < 0:
+            # No usable history, malformed entry, or the clock moved
+            # backward: reseed the baseline, no verdict yet.
+            seen[entity_key] = (game_date, gp)
+            _prune_gp_seen(seen, game_date)
+            return False
+        if delta_days < SCRATCH_GP_WINDOW_DAYS:
+            return False  # window not elapsed yet -- no verdict
+        gp_delta = _safe(lambda: int(gp) - int(last[1]), 999)
+        seen[entity_key] = (game_date, gp)
+        _prune_gp_seen(seen, game_date)
+        return gp_delta is not None and gp_delta <= SCRATCH_GP_MAX_DELTA
+    except Exception:
+        return True
+
+
+def _prune_gp_seen(seen, game_date):
+    """Bound the GP-snapshot dict (same 2000-entry policy as _mark_recent)."""
+    try:
+        if len(seen) > 2000:
+            cutoff = _safe(lambda: game_date.toordinal() - 60, 0)
+            for k in [k for k, v in seen.items()
+                      if _safe(lambda: v[0].toordinal(), 0) < cutoff]:
+                del seen[k]
+    except Exception:
+        pass
+
+
 def _team_record(t):
     w = _safe(lambda: int(t.wins), 0) or 0
     l = _safe(lambda: int(t.losses), 0) or 0
-    otl = _safe(lambda: int(t.otl), 0) or 0
+    # REV-B2 root cause: Team uses ot_losses (game_classes.py ~4060);
+    # t.otl never existed, so _safe silently yielded 0 and every OT loss
+    # was dropped from the record string and the games-played sum.
+    otl = _safe(lambda: int(t.ot_losses), 0) or 0
     return w, l, otl
 
 
@@ -455,17 +525,21 @@ def _controversies(app, game_date, rng):
     stories = []
     players = _all_players(app)
     # Healthy scratches: high-OVR players with very few games played --
-    # gated on REAL scratch candidacy (REV-A3 follow-up to F-1). The bare
-    # "gp <= 3" gate fired for every 78+ OVR player in week 1 (everyone has
-    # gp <= 3 when the season just started) and for injured stars -- false
-    # premises. A scratch story now requires ALL of:
+    # gated on REAL scratch candidacy (REV-A3 follow-up to F-1, REV-B2
+    # follow-up to the REV-A3 gate). The bare "gp <= 3" gate fired for every
+    # 78+ OVR player in week 1 (everyone has gp <= 3 when the season just
+    # started) and for injured stars -- false premises. A scratch story now
+    # requires ALL of:
     #   * the player's TEAM has played >= 10 games (season-progress floor:
     #     nobody is "scratched" two games into the season),
     #   * the player is not sidelined by injury/IR/suspension
     #     (_unavailable: a known absence is not a coach's message),
     #   * the player is a skater (backup goalies sit by roster design),
     #   * the player has dressed for fewer than HALF the team's games
-    #     (a star who dressed 2 of 2 is not scratched; 2 of 12 might be).
+    #     (a star who dressed 2 of 2 is not scratched; 2 of 12 might be),
+    #   * the player's GP is essentially STATIC over the trailing ~7 days
+    #     (_gp_static: evidence he is sitting NOW, not a star who just
+    #     returned from suspension/IR and dresses every night).
     for p, t in players:
         try:
             ovr = _ovr(p)
@@ -474,20 +548,30 @@ def _controversies(app, game_date, rng):
             if not (_ovr_ok(ovr) and ovr >= 78):
                 continue
             w, l, otl = _team_record(t)
-            team_gp = w + l + otl
+            # REV-B2: games_played is exact (Team.update_record maintains
+            # it); W+L+OTL+ties is the fallback for duck-typed team-likes.
+            ties = _safe(lambda: int(t.ties), 0) or 0
+            team_gp = (_safe(lambda: int(t.games_played), 0)
+                       or (w + l + otl + ties))
             if team_gp < 10:
-                continue
-            if _unavailable(p):
                 continue
             if _pos(p).upper() in ("G", "GOALIE"):
                 continue
+            key = f"player:{_safe(lambda: p.id, id(p))}"
+            # REV-B2: pass every candidate through _gp_static (even
+            # unavailable ones) so baselines stay fresh across absences;
+            # the verdict gates the story below.
+            sitting_now = _gp_static(app, key, game_date, gp)
+            if _unavailable(p):
+                continue
             if gp * 2 >= team_gp:
                 continue
-            key = f"player:{_safe(lambda: p.id, id(p))}"
+            if not sitting_now:
+                continue
             if not _recent_ok(app, key, "scratch", game_date):
                 continue
             story = rng.choice([
-                "SCRATCH WATCH: {name} ({ovr} OVR) has dressed for just {gp} games. Is {coach} sending a message in {team}?",
+                "SCRATCH WATCH: {name} ({ovr} OVR) has dressed for just {gp} {games_word}. Is {coach} sending a message in {team}?",
                 "{name} can't crack the {team} lineup -- {gp} games for a {ovr} OVR talent is hard to justify.",
                 "SCRATCH WATCH: {name} watched again -- {gp} games for a {ovr} OVR player is raising eyebrows in {team}.",
                 "{coach} keeps going back to the same lineup card, and {name} ({ovr} OVR) keeps sitting -- {gp} games and counting.",
@@ -508,6 +592,7 @@ def _controversies(app, game_date, rng):
                 "SCRATCH WATCH: {name} keeps sitting -- that's the {team} story at {gp} games.",
                 "If {name} isn't in {coach}'s plans, {team} owes it to a {ovr} OVR asset to find him a new home.",
             ]).format(name=_pname(p), ovr=int(ovr), gp=gp,
+                      games_word="game" if gp == 1 else "games",
                       team=_tname(t),
                       coach=_coach_name(_head_coach(t)) or "the coach")
             stories.append(story)
