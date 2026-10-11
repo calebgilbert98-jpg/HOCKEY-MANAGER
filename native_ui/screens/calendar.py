@@ -426,7 +426,7 @@ class _DayDetailDialog(QDialog):
         layout.addWidget(score)
 
         self._cards.append(
-            {"matchup": matchup, "score": score, "mine": mine})
+            {"matchup_row": matchup_row, "score": score, "mine": mine})
         return card
 
 
