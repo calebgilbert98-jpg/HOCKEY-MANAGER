@@ -33,17 +33,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _reaction_line(pick, team, movement):
@@ -67,14 +61,14 @@ def get_lottery_data(game):
     """Lottery rows: pending reveal first, else the stored league result
     for the latest year (port of _lottery_rows + api_lottery)."""
     gm = _resolve_gm(game)
-    pending = _safe(lambda: getattr(gm, "_pending_lottery_reveal", None))
+    pending = safe_call(lambda: getattr(gm, "_pending_lottery_reveal", None))
     year, rows = 0, []
     if pending:
-        year = _safe(lambda: int(pending.get("year", 0)) or 0, 0)
+        year = safe_call(lambda: int(pending.get("year", 0)) or 0, 0)
         rows = [dict(r) for r in (pending.get("rows") or [])]
     else:
-        league = _safe(lambda: gm.league) if gm else None
-        stored = _safe(lambda: getattr(league, "lottery_results",
+        league = safe_call(lambda: gm.league) if gm else None
+        stored = safe_call(lambda: getattr(league, "lottery_results",
                                       None) or {}, {}) or {}
         years = [y for y in stored.keys() if stored.get(y)]
         if years:

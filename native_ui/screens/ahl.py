@@ -14,21 +14,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _league(game):
-    return _safe(lambda: _gm(game).league)
+    return safe_call(lambda: _gm(game).league)
 
 
 def _ahl_teams(league):
@@ -77,9 +71,9 @@ def _user_farm_idx(league, game):
     """Index of the user's farm club (desktop _user_farm_idx)."""
     try:
         gm = _gm(game)
-        user = (_safe(lambda: gm.user_team)
-                or _safe(lambda: getattr(game, "user_team", None)))
-        uname = _safe(lambda: user.team_name, "")
+        user = (safe_call(lambda: gm.user_team)
+                or safe_call(lambda: getattr(game, "user_team", None)))
+        uname = safe_call(lambda: user.team_name, "")
         teams = _ahl_teams(league)
         for i, t in enumerate(teams):
             parent = getattr(t, "parent_team", None)
@@ -278,7 +272,7 @@ class AhIScreen(BaseScreen):
                                    an, final, hn))
                 except Exception:
                     continue
-            today = _safe(lambda: _gm(self.game).current_date)
+            today = safe_call(lambda: _gm(self.game).current_date)
             for g in get_ahl_upcoming(league, today, n=20):
                 try:
                     upcoming.append((str(g.get("date", ""))[5:],
@@ -308,8 +302,8 @@ class AhIScreen(BaseScreen):
         layout = self._calder_layout
         self._clear_layout(layout)
         teams = _ahl_teams(league)
-        bracket = _safe(lambda: getattr(league, "ahl_bracket", None))
-        champs = _safe(lambda: list(getattr(league, "ahl_champions", None)
+        bracket = safe_call(lambda: getattr(league, "ahl_bracket", None))
+        champs = safe_call(lambda: list(getattr(league, "ahl_champions", None)
                                     or []), []) or []
         made = False
         if isinstance(bracket, dict) and bracket.get("rounds"):
@@ -468,7 +462,7 @@ class AhIScreen(BaseScreen):
                         a = int(getattr(led, "assists", 0) or 0)
                     roster_rows.append((
                         _pname(p), _pos_str(p), str(getattr(p, "age", "")),
-                        str(_safe(lambda: int(p.overall_rating()), "")),
+                        str(safe_call(lambda: int(p.overall_rating()), "")),
                         str(gp), str(g), str(a), str(g + a)))
                 except Exception:
                     continue
@@ -506,7 +500,7 @@ class AhIScreen(BaseScreen):
         sched = []
         try:
             from ahl_league import get_ahl_team_schedule
-            today = _safe(lambda: _gm(self.game).current_date)
+            today = safe_call(lambda: _gm(self.game).current_date)
             for g in get_ahl_team_schedule(league, idx, today, n=12):
                 sched.append((
                     str(g.get("date", ""))[5:],

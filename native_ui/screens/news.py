@@ -30,39 +30,34 @@ from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
 from ..widgets.attribute_bar import AttributeBar
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _league(game):
     gm = _resolve_gm(game)
-    league = _safe(lambda: getattr(gm, "league", None))
+    league = safe_call(lambda: getattr(gm, "league", None))
     if league is None:
-        league = _safe(lambda: getattr(game, "league", None))
+        league = safe_call(lambda: getattr(game, "league", None))
     return league
 
 
 def _teams(league):
     if league is None:
         return []
-    return _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+    return safe_call(lambda: list(getattr(league, "teams", None) or []), []) or []
 
 
 def _team_name(t):
-    return _safe(lambda: str(getattr(t, "team_name", "") or ""), "") or ""
+    return safe_call(lambda: str(getattr(t, "team_name", "") or ""), "") or ""
 
 
 def _fnum(v, default=0.0):
@@ -110,7 +105,7 @@ def _cat_color(c):
 
 def _news_payload(game):
     """app.news_log -> newest-first list of dicts. Never raises."""
-    raw = _safe(lambda: list(getattr(game, "news_log", None) or []), []) or []
+    raw = safe_call(lambda: list(getattr(game, "news_log", None) or []), []) or []
     items = []
     for entry in raw:
         try:
@@ -119,13 +114,13 @@ def _news_payload(game):
                 story = entry.get("story", "")
             else:
                 d, story = None, entry
-            story_text = _safe(lambda: str(story), "") or ""
+            story_text = safe_call(lambda: str(story), "") or ""
             if isinstance(d, (date, datetime)):
                 date_iso = d.isoformat()
                 date_label = d.strftime("%b %d, %Y")
             else:
                 date_iso = ""
-                date_label = _safe(lambda: str(d), "") or ""
+                date_label = safe_call(lambda: str(d), "") or ""
             items.append({"date": date_iso, "date_label": date_label,
                           "story": story_text})
         except Exception:
@@ -240,10 +235,10 @@ def _journalists_payload(game):
             reps = me.reporters_for(market, league) or []
             reporters = []
             for r in reps:
-                arch = _safe(lambda: str(getattr(r, "archetype", "") or ""),
+                arch = safe_call(lambda: str(getattr(r, "archetype", "") or ""),
                              "") or "neutral"
                 reporters.append({
-                    "name": _safe(lambda: str(getattr(r, "name", "") or ""),
+                    "name": safe_call(lambda: str(getattr(r, "name", "") or ""),
                                   "") or "Unknown",
                     "archetype": arch,
                     "archetype_blurb": _ARCHETYPE_BLURB.get(arch, ""),
@@ -288,16 +283,16 @@ def _player_index(league):
     try:
         for t in _teams(league):
             for coll in ("roster", "prospects"):
-                for p in _safe(lambda: list(getattr(t, coll, None) or []),
+                for p in safe_call(lambda: list(getattr(t, coll, None) or []),
                                []) or []:
                     try:
                         pid = getattr(p, "id", None)
                         if pid is None or pid in idx:
                             continue
-                        name = (_safe(lambda: str(
+                        name = (safe_call(lambda: str(
                             getattr(p, "full_name", "") or ""), "")
-                                or (f"{_safe(lambda: str(getattr(p, 'first_name', '') or ''), '')} "
-                                    f"{_safe(lambda: str(getattr(p, 'last_name', '') or ''), '')}".strip())
+                                or (f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '')} "
+                                    f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '')}".strip())
                                 or "Unknown Player")
                         idx[pid] = name
                     except Exception:
@@ -318,15 +313,15 @@ def _narratives_payload(game):
         return [], []
     try:
         names = _player_index(league)
-        raw_narrs = _safe(lambda: list(
+        raw_narrs = safe_call(lambda: list(
             getattr(league, "media_narratives", None) or []), []) or []
         narratives = []
         for n in raw_narrs:
             try:
-                kind = _safe(lambda: str(getattr(n, "kind", "") or ""), "")
+                kind = safe_call(lambda: str(getattr(n, "kind", "") or ""), "")
                 heat = _fnum(getattr(n, "heat", 0), 0.0)
                 subjects = []
-                for s in _safe(lambda: list(
+                for s in safe_call(lambda: list(
                         getattr(n, "subjects", None) or []), []) or []:
                     if s:
                         subjects.append({
@@ -338,9 +333,9 @@ def _narratives_payload(game):
                     "kind": kind,
                     "kind_label": _NARR_KINDS.get(
                         kind, kind.replace("_", " ").title() or "Storyline"),
-                    "team": _safe(lambda: str(
+                    "team": safe_call(lambda: str(
                         getattr(n, "team_name", "") or ""), ""),
-                    "title": _safe(lambda: str(
+                    "title": safe_call(lambda: str(
                         getattr(n, "title", "") or ""), ""),
                     "subjects": subjects,
                     "heat": round(max(0.0, min(100.0, heat)), 1),
@@ -349,18 +344,18 @@ def _narratives_payload(game):
                 continue
         narratives.sort(key=lambda x: -x["heat"])
 
-        raw_beefs = _safe(lambda: list(
+        raw_beefs = safe_call(lambda: list(
             getattr(league, "coach_media_beefs", None) or []), []) or []
         beefs = []
         for b in raw_beefs:
             try:
                 level = int(_fnum(getattr(b, "level", 1), 1))
                 beefs.append({
-                    "coach": _safe(lambda: str(
+                    "coach": safe_call(lambda: str(
                         getattr(b, "coach_name", "") or ""), ""),
-                    "reporter": _safe(lambda: str(
+                    "reporter": safe_call(lambda: str(
                         getattr(b, "reporter_name", "") or ""), ""),
-                    "team": _safe(lambda: str(
+                    "team": safe_call(lambda: str(
                         getattr(b, "team_name", "") or ""), ""),
                     "level": level,
                     "level_label": _BEEF_LEVELS.get(level,
@@ -384,7 +379,7 @@ def _fines_payload(game):
     if league is None:
         return [], 0
     try:
-        raw = _safe(lambda: list(
+        raw = safe_call(lambda: list(
             getattr(league, "media_fines", None) or []), []) or []
         fines = []
         for f in raw:
@@ -397,16 +392,16 @@ def _fines_payload(game):
                     date_label = d.strftime("%b %d, %Y")
                 else:
                     date_iso = ""
-                    date_label = _safe(lambda: str(d), "") or ""
+                    date_label = safe_call(lambda: str(d), "") or ""
                 amount = int(_fnum(f.get("amount", 0), 0))
                 fines.append({
                     "date": date_iso, "date_label": date_label,
-                    "name": _safe(lambda: str(f.get("name", "") or ""), ""),
-                    "team": _safe(lambda: str(f.get("team", "") or ""), ""),
+                    "name": safe_call(lambda: str(f.get("name", "") or ""), ""),
+                    "team": safe_call(lambda: str(f.get("team", "") or ""), ""),
                     "amount": amount,
-                    "reason": _safe(lambda: str(
+                    "reason": safe_call(lambda: str(
                         f.get("reason", "") or ""), ""),
-                    "role": _safe(lambda: str(f.get("role", "") or ""), ""),
+                    "role": safe_call(lambda: str(f.get("role", "") or ""), ""),
                 })
             except Exception:
                 continue
@@ -436,7 +431,7 @@ def _fanbuzz_payload(game):
     except Exception:
         return [], {}
     try:
-        current = _safe(lambda: getattr(game, "current_date", None))
+        current = safe_call(lambda: getattr(game, "current_date", None))
         teams = []
         for t in _teams(league):
             try:
@@ -445,25 +440,25 @@ def _fanbuzz_payload(game):
                     continue
                 value = max(0.0, min(100.0, _fnum(
                     fs.get_fan_sentiment(t, current), 60.0)))
-                label = _safe(lambda: str(fs.sentiment_label(value) or ""),
+                label = safe_call(lambda: str(fs.sentiment_label(value) or ""),
                               "") or "Content"
-                tier = _safe(lambda: str(fn.sentiment_tier(value) or ""),
+                tier = safe_call(lambda: str(fn.sentiment_tier(value) or ""),
                              "") or "content"
-                tone = _safe(lambda: str(
+                tone = safe_call(lambda: str(
                     fn.media_tone_for_sentiment(t, current) or ""),
                     "") or "neutral"
-                trail = _safe(lambda: list(
+                trail = safe_call(lambda: list(
                     getattr(t, "fan_sentiment_trail", None) or []), []) or []
                 drivers = []
                 for entry in reversed(trail[-4:]):
                     try:
                         if isinstance(entry, dict):
                             drivers.append({
-                                "date": _safe(lambda: str(
+                                "date": safe_call(lambda: str(
                                     entry.get("date", "") or ""), ""),
                                 "delta": round(_fnum(
                                     entry.get("delta", 0.0), 0.0), 1),
-                                "reason": _safe(lambda: str(
+                                "reason": safe_call(lambda: str(
                                     entry.get("reason", "") or ""), ""),
                             })
                     except Exception:
@@ -505,16 +500,16 @@ _ON_RISE_THRESHOLD = 55
 
 
 def _player_full_name(p):
-    return _safe(lambda: str(getattr(p, "full_name", "") or ""), "") or (
-        f"{_safe(lambda: str(getattr(p, 'first_name', '') or ''), '')} "
-        f"{_safe(lambda: str(getattr(p, 'last_name', '') or ''), '')}"
+    return safe_call(lambda: str(getattr(p, "full_name", "") or ""), "") or (
+        f"{safe_call(lambda: str(getattr(p, 'first_name', '') or ''), '')} "
+        f"{safe_call(lambda: str(getattr(p, 'last_name', '') or ''), '')}"
         .strip()) or "Unknown Player"
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team)
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 def _playerbuzz_payload(game):

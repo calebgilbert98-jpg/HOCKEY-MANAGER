@@ -26,27 +26,22 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
 # generic helpers
 # ---------------------------------------------------------------------------
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _user_team(game):
     gm = _resolve_gm(game)
-    return (_safe(lambda: gm.user_team)
-            or _safe(lambda: getattr(game, "user_team", None)))
+    return (safe_call(lambda: gm.user_team)
+            or safe_call(lambda: getattr(game, "user_team", None)))
 
 
 _POSITION_ABBR = {
@@ -57,7 +52,7 @@ _POSITION_ABBR = {
 
 
 def _pos_str(p):
-    pos = _safe(lambda: getattr(p, "primary_position", ""), "")
+    pos = safe_call(lambda: getattr(p, "primary_position", ""), "")
     raw = getattr(pos, "value", pos)
     try:
         s = str(raw or "")
@@ -70,9 +65,9 @@ def _pos_str(p):
 
 
 def _player_name(p):
-    first = _safe(lambda: getattr(p, "first_name", ""), "") or ""
-    last = _safe(lambda: getattr(p, "last_name", ""), "") or ""
-    full = _safe(lambda: getattr(p, "full_name", ""), "") or ""
+    first = safe_call(lambda: getattr(p, "first_name", ""), "") or ""
+    last = safe_call(lambda: getattr(p, "last_name", ""), "") or ""
+    full = safe_call(lambda: getattr(p, "full_name", ""), "") or ""
     name = full or (first + " " + last).strip()
     return name or "?"
 
@@ -228,7 +223,7 @@ class RecallPickerScreen(BaseScreen):
             lay.addWidget(ovr)
 
             sal = _rl._player_nhl_salary(p)
-            two_way = bool(_safe(
+            two_way = bool(safe_call(
                 lambda: getattr(getattr(p, "contract", None),
                                 "two_way", False), False))
             fits = _rl._recall_fits_cap(team, p)

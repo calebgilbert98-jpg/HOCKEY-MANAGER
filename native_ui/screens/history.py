@@ -13,44 +13,38 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 _HISTORY_CATS = ["points", "goals", "assists", "wins", "shutouts", "save_pct"]
 
 
 def _gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _league(game):
     gm = _gm(game)
-    return (_safe(lambda: gm.league)
-            or _safe(lambda: getattr(game, "league", None)))
+    return (safe_call(lambda: gm.league)
+            or safe_call(lambda: getattr(game, "league", None)))
 
 
 def _hist(game):
     """LeagueHistory with the same defensive fallbacks as the web bridge."""
-    h = _safe(lambda: getattr(_gm(game), "league_history", None))
+    h = safe_call(lambda: getattr(_gm(game), "league_history", None))
     if h is None:
-        h = _safe(lambda: getattr(game, "league_history", None))
+        h = safe_call(lambda: getattr(game, "league_history", None))
     if h is None:
         league = _league(game)
-        h = _safe(lambda: getattr(league, "history", None)) if league else None
+        h = safe_call(lambda: getattr(league, "history", None)) if league else None
     return h
 
 
 def _league_players(game):
     out = []
     league = _league(game)
-    for t in (_safe(lambda: list(league.teams), []) or []):
-        out.extend(_safe(lambda: list(t.roster), []) or [])
+    for t in (safe_call(lambda: list(league.teams), []) or []):
+        out.extend(safe_call(lambda: list(t.roster), []) or [])
     return out
 
 
@@ -111,7 +105,7 @@ class HistoryScreen(BaseScreen):
 
     def _load_champions(self):
         hist = _hist(self.game)
-        seasons = _safe(lambda: hist.champions_list(), []) or []
+        seasons = safe_call(lambda: hist.champions_list(), []) or []
         layout = self._champions_layout
         self._clear_layout(layout)
         if not seasons:
@@ -174,7 +168,7 @@ class HistoryScreen(BaseScreen):
         combo = self._awards_year
         years = []
         if hist is not None:
-            seasons = _safe(lambda: list(getattr(hist, "seasons", None) or []),
+            seasons = safe_call(lambda: list(getattr(hist, "seasons", None) or []),
                             []) or []
             years = sorted({s.get("year") for s in seasons
                             if isinstance(s, dict) and s.get("year")},
@@ -197,7 +191,7 @@ class HistoryScreen(BaseScreen):
                 "No awards recorded yet."))
             return
         year = combo.currentData() if combo.count() else years[0]
-        season = _safe(lambda: hist.get_season(year), {}) or {}
+        season = safe_call(lambda: hist.get_season(year), {}) or {}
         awards = dict(season.get("awards", {}) or {})
         if season.get("conn_smythe"):
             awards = dict(awards)
@@ -309,7 +303,7 @@ class HistoryScreen(BaseScreen):
 
     def _load_hof(self):
         hist = _hist(self.game)
-        inds = _safe(lambda: list(getattr(hist, "hall_of_fame", None)
+        inds = safe_call(lambda: list(getattr(hist, "hall_of_fame", None)
                                   or []), []) or []
         inds = sorted(inds,
                       key=lambda x: x.get("year_inducted", 0), reverse=True)
@@ -403,13 +397,13 @@ class HistoryScreen(BaseScreen):
             self._adv_note.setText("Advanced metrics module unavailable.")
             return
         league = _league(self.game)
-        teams = _safe(lambda: list(league.teams), []) or []
+        teams = safe_call(lambda: list(league.teams), []) or []
         rows = []
         for t in teams:
             try:
                 m = team_advanced(t)
                 rows.append((
-                    _safe(lambda: t.team_name, "?"),
+                    safe_call(lambda: t.team_name, "?"),
                     round(float(getattr(m, "cf_pct", 0) or 0), 1),
                     round(float(getattr(m, "ff_pct", 0) or 0), 1),
                     round(float(getattr(m, "xgf_pct", 0) or 0), 1),
@@ -522,11 +516,11 @@ class HistoryScreen(BaseScreen):
 
     def _reviews_teams(self):
         league = _league(self.game)
-        clubs = [t for t in (_safe(lambda: list(league.teams), []) or [])
+        clubs = [t for t in (safe_call(lambda: list(league.teams), []) or [])
                  if getattr(t, "league_name", "") == "National Hockey League"]
-        names = sorted({_safe(lambda: t.team_name, "?") for t in clubs})
-        user = _safe(lambda: getattr(_gm(self.game), "user_team", None))
-        user_name = _safe(lambda: getattr(user, "team_name", ""), "")
+        names = sorted({safe_call(lambda: t.team_name, "?") for t in clubs})
+        user = safe_call(lambda: getattr(_gm(self.game), "user_team", None))
+        user_name = safe_call(lambda: getattr(user, "team_name", ""), "")
         return clubs, names, user_name
 
     def _load_reviews(self, init=True):
@@ -544,7 +538,7 @@ class HistoryScreen(BaseScreen):
             tcombo.blockSignals(False)
         team = tcombo.currentData() or ""
         club = next((t for t in clubs
-                     if _safe(lambda: t.team_name, "") == team), None)
+                     if safe_call(lambda: t.team_name, "") == team), None)
         archive = dict(getattr(club, "season_reviews", None) or {}) \
             if club is not None else {}
         years = sorted(archive.keys(), reverse=True)
@@ -571,7 +565,7 @@ class HistoryScreen(BaseScreen):
 
     def _load_records(self):
         hist = _hist(self.game)
-        fr = _safe(lambda: getattr(hist, "franchise_records", None))
+        fr = safe_call(lambda: getattr(hist, "franchise_records", None))
         layout = self._records_layout
         self._clear_layout(layout)
         cards = [
@@ -585,7 +579,7 @@ class HistoryScreen(BaseScreen):
         any_data = False
         for label, attr in cards:
             try:
-                store = _safe(lambda: getattr(fr, attr, None), None) \
+                store = safe_call(lambda: getattr(fr, attr, None), None) \
                     if fr is not None else None
                 d = dict(store or {})
                 franchises = len(d)

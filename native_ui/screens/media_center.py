@@ -45,22 +45,16 @@ from PySide6.QtCore import Qt
 
 from ..dialogs import modal as _modal
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 def _resolve_gm(game):
-    return _safe(lambda: getattr(game, "game_manager", None)) or game
+    return safe_call(lambda: getattr(game, "game_manager", None)) or game
 
 
 def _media_system(gm):
     """Resolve (or lazily create) the MediaSystem for this game manager."""
-    ms = _safe(lambda: getattr(gm, "media_system", None))
+    ms = safe_call(lambda: getattr(gm, "media_system", None))
     if ms is not None:
         return ms
     try:
@@ -159,7 +153,7 @@ def _is_completed(event):
     if isinstance(event, dict):
         return (event.get("status") == "completed"
                 or bool(event.get("completed")))
-    return bool(_safe(lambda: getattr(event, "completed", False), False))
+    return bool(safe_call(lambda: getattr(event, "completed", False), False))
 
 
 def _mark_completed(event, response_choice):
@@ -247,12 +241,12 @@ class InterviewView(QDialog):
         if journalist is not None:
             name = getattr(journalist, "name", "?")
             outlet = getattr(journalist, "outlet", "?")
-            jtype = _safe(
+            jtype = safe_call(
                 lambda: journalist.type.value, "?")
             header = QLabel(f"{name} ({outlet}) — {jtype}")
             header.setStyleSheet("font-weight: bold; font-size: 14px;")
             layout.addWidget(header)
-            rel = _safe(lambda: int(getattr(journalist, "relationship", 0)),
+            rel = safe_call(lambda: int(getattr(journalist, "relationship", 0)),
                         0)
             rel_lbl = QLabel(f"Relationship: {rel:+d}")
             rel_lbl.setStyleSheet("color: #8b95ab;")
@@ -478,21 +472,21 @@ class MediaCenterScreen(BaseScreen):
         if isinstance(event, dict):
             return dict(event)
         ms = _media_system(_resolve_gm(self.game))
-        details = _safe(lambda: getattr(event, "details", None), None) or {}
+        details = safe_call(lambda: getattr(event, "details", None), None) or {}
         questions = []
         if ms is not None and hasattr(ms, "get_interview_questions"):
             try:
                 questions = ms.get_interview_questions(event) or []
             except Exception:
                 questions = []
-        importance = _safe(lambda: getattr(event, "importance", 5), 5) or 5
+        importance = safe_call(lambda: getattr(event, "importance", 5), 5) or 5
         return {
-            "type": _safe(lambda: getattr(event, "type", "media_event"),
+            "type": safe_call(lambda: getattr(event, "type", "media_event"),
                           "media_event"),
             "journalist": details.get("journalist"),
             "questions": questions,
             "optional": bool(
-                _safe(lambda: getattr(event, "auto_handled", False), False)),
+                safe_call(lambda: getattr(event, "auto_handled", False), False)),
             "impact_level": ("low" if importance < 4 else
                              "medium" if importance < 7 else "high"),
             "details": details,
@@ -556,9 +550,9 @@ class MediaCenterScreen(BaseScreen):
             elif response_choice in ["uncertain", "critical"]:
                 morale_change = -5
             if morale_change:
-                team = _safe(
+                team = safe_call(
                     lambda: getattr(ms.game_manager, "user_team", None))
-                for player in _safe(
+                for player in safe_call(
                         lambda: list(getattr(team, "roster", None) or []),
                         []) if team is not None else []:
                     if hasattr(player, "morale"):
@@ -572,7 +566,7 @@ class MediaCenterScreen(BaseScreen):
         """Dressing-room cascade the backend runs for dict events only."""
         try:
             import dressing_room as _dr
-            team = _safe(lambda: getattr(ms.game_manager, "user_team", None))
+            team = safe_call(lambda: getattr(ms.game_manager, "user_team", None))
             if team is not None:
                 _dr.cascade_on_press(team, event, response_choice)
         except Exception:
@@ -687,7 +681,7 @@ class MediaCenterScreen(BaseScreen):
         ms = _media_system(_resolve_gm(self.game))
         if ms is None:
             return
-        pending = _safe(lambda: list(ms.get_pending_media_events()), [])
+        pending = safe_call(lambda: list(ms.get_pending_media_events()), [])
         if not pending:
             _modal.information(self, "No Events",
                                "There are no pending media events.")
@@ -735,13 +729,13 @@ class MediaCenterScreen(BaseScreen):
             except ValueError:
                 pos = 2
             self._engagement_slider.setValue(pos)
-            level_value = _safe(lambda: ms.engagement_level.value,
+            level_value = safe_call(lambda: ms.engagement_level.value,
                                 str(ms.engagement_level))
             self._engagement_desc.setText(
                 _ENGAGEMENT_DESCRIPTIONS.get(level_value, ""))
             self._auto_handle_check.setChecked(
                 bool(getattr(ms, "auto_handle_minor_events", True)))
-            status = _safe(lambda: ms.get_system_status(), {}) or {}
+            status = safe_call(lambda: ms.get_system_status(), {}) or {}
             self._status_lbl.setText(
                 f"Level: {status.get('engagement_level', '?')} | "
                 f"Pending: {status.get('pending_events', 0)} | "
@@ -763,10 +757,10 @@ class MediaCenterScreen(BaseScreen):
             if w is not None:
                 w.deleteLater()
 
-        pending = _safe(lambda: list(ms.get_pending_media_events()), [])
+        pending = safe_call(lambda: list(ms.get_pending_media_events()), [])
         if not pending:
             note = ("Media system disabled — no events will be generated."
-                    if _safe(lambda: ms.engagement_level.value) == "Disabled"
+                    if safe_call(lambda: ms.engagement_level.value) == "Disabled"
                     else "No pending media events.\nEvents will appear here "
                          "based on your engagement level and recent team "
                          "activities.")
@@ -803,8 +797,8 @@ class MediaCenterScreen(BaseScreen):
             if journalist is not None:
                 jname = getattr(journalist, "name", "?")
                 joutlet = getattr(journalist, "outlet", "?")
-                jtype = _safe(lambda: journalist.type.value, "")
-                rel = _safe(lambda: int(getattr(journalist,
+                jtype = safe_call(lambda: journalist.type.value, "")
+                rel = safe_call(lambda: int(getattr(journalist,
                                                 "relationship", 0)), 0)
                 j_lbl = QLabel(f"{jname} ({joutlet})"
                                + (f" — {jtype}" if jtype else ""))
@@ -857,8 +851,8 @@ class MediaCenterScreen(BaseScreen):
 
     def refresh(self):
         gm = _resolve_gm(self.game)
-        league = _safe(lambda: gm.league)
-        team = _safe(lambda: gm.user_team)
+        league = safe_call(lambda: gm.league)
+        team = safe_call(lambda: gm.user_team)
         ms = _media_system(gm)
 
         # Ensure media state exists
@@ -882,12 +876,12 @@ class MediaCenterScreen(BaseScreen):
             if hasattr(me, "reporters_for") and team is not None:
                 reporters = me.reporters_for(team) or []
             elif league is not None:
-                reporters = _safe(
+                reporters = safe_call(
                     lambda: list(getattr(league, "reporters", None) or []), [])
         except Exception:
             pass
         if not reporters and ms is not None:
-            reporters = _safe(lambda: list(ms.journalists or []), [])
+            reporters = safe_call(lambda: list(ms.journalists or []), [])
         self._journalist_table.setRowCount(len(reporters))
         for i, r in enumerate(reporters):
             self._journalist_table.setItem(
@@ -906,10 +900,10 @@ class MediaCenterScreen(BaseScreen):
 
         # Narratives & beefs
         self._narr_list.clear()
-        narrs = _safe(lambda: list(
+        narrs = safe_call(lambda: list(
             getattr(league, "media_narratives", None) or []), []) \
             if league is not None else []
-        beefs = _safe(lambda: list(
+        beefs = safe_call(lambda: list(
             getattr(league, "coach_media_beefs", None) or []), []) \
             if league is not None else []
         for n in narrs:
@@ -921,7 +915,7 @@ class MediaCenterScreen(BaseScreen):
             self._narr_list.addItem("No active storylines.")
 
         # Fines ledger
-        fines = _safe(lambda: list(
+        fines = safe_call(lambda: list(
             getattr(league, "media_fines", None) or []), []) \
             if league is not None else []
         self._fines_table.setRowCount(len(fines))

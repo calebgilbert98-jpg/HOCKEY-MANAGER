@@ -16,13 +16,6 @@ from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPolygon
 from .base import BaseScreen
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 class RinkWidget(QWidget):
     """Custom widget that paints a rink with shot markers."""
 

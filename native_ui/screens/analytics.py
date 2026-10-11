@@ -20,13 +20,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 
 from .base import BaseScreen
-
-
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
+from native_ui.safe import safe_call
 
 
 # ---------------------------------------------------------------------------
@@ -650,19 +644,19 @@ class AnalyticsScreen(BaseScreen):
         return name.lower().replace(" & ", "_").replace(" ", "_")
 
     def _team(self):
-        return _safe(lambda: self.game.user_team)
+        return safe_call(lambda: self.game.user_team)
 
     def _games(self):
         team = self._team()
         if team is None:
             return []
-        return _safe(lambda: _team_games(team), []) or []
+        return safe_call(lambda: _team_games(team), []) or []
 
     # -- refresh -------------------------------------------------------------
     def refresh(self):
         team = self._team()
         games = self._games()
-        name = _safe(lambda: team.team_name, "?") if team else "?"
+        name = safe_call(lambda: team.team_name, "?") if team else "?"
 
         # Populate game selector
         self._game_combo.blockSignals(True)
@@ -880,10 +874,10 @@ class AnalyticsScreen(BaseScreen):
         # Assist pairs (line-combination effectiveness)
         name_lookup = {}
         if team is not None:
-            for t in _safe(lambda: self.game.league.teams, []) or []:
-                for p in _safe(lambda: t.roster, []) or []:
-                    pid = _safe(lambda: p.player_id)
-                    pname = _safe(lambda: p.name)
+            for t in safe_call(lambda: self.game.league.teams, []) or []:
+                for p in safe_call(lambda: t.roster, []) or []:
+                    pid = safe_call(lambda: p.player_id)
+                    pname = safe_call(lambda: p.name)
                     if pid and pname:
                         name_lookup[str(pid)] = pname
         pairs = _assist_pair_rows(self._games(), name_lookup)
