@@ -490,6 +490,22 @@ class SeasonFlowScreen(BaseScreen):
         except Exception as e:
             print(f"[season_flow] refresh failed: {e}")
 
+    def is_background_sim_running(self) -> bool:
+        """True while a season-flow simulation is in flight.
+
+        Covers the automation day worker (also while an abandoned dialog
+        is being reclaimed), the quick-advance dialog path, and the
+        legacy automation busy latch. main_window.py consumes this to
+        guard Continue while a season-flow worker is in flight.
+        Pure read -- no side effects.
+        """
+        return bool(
+            getattr(self, "_quick_dlg", None) is not None
+            or getattr(self, "_sim_in_progress", False)
+            or getattr(self, "_running", False)
+            or getattr(self, "_day_worker_in_flight", False)
+        )
+
     # ------------------------------------------------------------------
     # controls
     # ------------------------------------------------------------------
