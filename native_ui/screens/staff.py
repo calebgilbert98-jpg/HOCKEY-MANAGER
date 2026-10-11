@@ -135,19 +135,22 @@ def _staff_status(s):
 #
 # Native port: the same session schema lives on the game manager's
 # pending_sessions dict (the object GameSaveManager wraps). Root-cause
-# note: GameSaveManager._serializable_team_talk_sessions() and
-# _restore_team_talk_sessions() read self.app.pending_sessions, but
-# GameSaveManager.app is never assigned anywhere in mainline, so the
-# whitelisted chain kind could never actually survive save/load there.
-# Two in-file repairs (save_load_system.py itself is untouched):
+# note: GameSaveManager's session serializer/restorer read
+# self.app.pending_sessions, but GameSaveManager.app was never assigned
+# anywhere in mainline, so the whitelisted chain kind could never
+# actually survive save/load there. Commit 872f6d7 fixed this at the
+# source by wiring GameSaveManager.app at construction in
+# save_load_system.py (preferring the GUI-app back-reference the game
+# manager carries, else falling back to the wrapped game manager
+# itself -- the session owner). The two in-file repairs below are now
+# harmless no-op fallbacks, kept for safety:
 #   _ensure_save_bridge() assigns save_manager.app to the session owner
 #     (only when unset) on every chain write;
 #   _install_pending_session_repair() runs at import and falls back to
 #     self.game_manager inside both save/load functions, so a fresh
 #     process that loads a save (no staff interaction yet) still
-#     restores the chain. The proper 2-line fix belongs in
-#     save_load_system.py (another dev's file) and is flagged in the
-#     D-16 report.
+#     restores the chain. Both short-circuit when app is already
+#     assigned, which is now always the case.
 #
 # The in-progress multi-round step is part of the session ("step"):
 # round number, offer history, half-typed draft offer, and the staffer's
@@ -471,8 +474,9 @@ def _install_pending_session_repair():
     when .app is properly assigned, behavior is untouched. In mainline
     tkinter the fallback is behavior-preserving (the GUI app keeps no
     pending_sessions on the game manager, so saves still carry {}).
-    save_load_system.py itself is not edited (owned by another dev);
-    the proper 2-line fix there is flagged in the D-16 report.
+    save_load_system.py is no longer edited by another dev for this:
+    commit 872f6d7 now assigns GameSaveManager.app at construction, so
+    this patch is a harmless no-op fallback (left in place, untouched).
     Idempotent; runs at import (this module loads at app startup via
     the screen registry, i.e. before any load).
     """
@@ -742,16 +746,14 @@ class StaffScreen(BaseScreen):
             "QPushButton:hover { background-color: #4d2329; }")
         release_btn.clicked.connect(
             lambda _=False, staff=s: self._release_staff(staff))
-        rival_btn = QPushButton("Declare Rival")
-        rival_btn.setCursor(Qt.PointingHandCursor)
-        rival_btn.setToolTip(
-            "Declare a personal rivalry with this staffer")
-        rival_btn.clicked.connect(
-            lambda _=False, staff=s: self._declare_rival_staff(staff))
+        # No "Declare Rival" button here by design: these cards show the
+        # user's OWN staff and _declare_rival_staff refuses own staff
+        # (mainline parity: rivalries are declared from an OPPOSING
+        # staffer's card, e.g. the Morale window's opposing-staff
+        # popup). A button here would be dead, misleading UI.
         row.addWidget(negotiate_btn)
         row.addWidget(reassign_btn)
         row.addWidget(release_btn)
-        row.addWidget(rival_btn)
         row.addStretch()
         v.addLayout(row)
         return card
@@ -1647,7 +1649,11 @@ class StaffScreen(BaseScreen):
         self._resume_asked = True
         remaining = [str(i)
                      for i in (sess.get("remaining_staff_ids") or [])]
-        total = int(sess.get("total") or len(remaining) or 0)
+        try:
+            total = int(sess.get("total") or len(remaining) or 0)
+        except (TypeError, ValueError):
+            # Corrupt/hand-edited save: fall back to the live list.
+            total = len(remaining)
         names = dict(sess.get("staff_names") or {})
         first = ", ".join(str(names.get(sid, sid)) for sid in remaining[:3])
         detail = f"{len(remaining)} of {total} negotiations remaining"
