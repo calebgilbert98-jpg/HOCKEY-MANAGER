@@ -335,7 +335,8 @@ class SeasonFlowScreen(BaseScreen):
         self._quick_restore_notify = None
         self._quick_on_done_fired = False
         self._quick_cleaned = False
-        # FIX-3: set by closeEvent; once True no widget/dialog work happens.
+        # FIX-3: set by teardown_inflight_automation (the closeEvent path);
+        # once True no widget/dialog work happens.
         self._closed = False
 
         if not _ENGINE_OK:
@@ -553,8 +554,17 @@ class SeasonFlowScreen(BaseScreen):
         self._hide_auto_overlay()
         self.refresh()
 
-    def closeEvent(self, event):
-        """Tear down automation when the screen closes mid-sim (FIX-3).
+    def teardown_inflight_automation(self):
+        """Stop automation and mark the screen closed (FIX-3, defense-in-depth).
+
+        DEFENSE-IN-DEPTH: in production SeasonFlowScreen lives in a
+        QScrollArea inside MainWindow's QStackedWidget and navigation uses
+        setCurrentWidget, so the screen is never closed or destroyed --
+        closeEvent never fires in production and this runs only if the
+        screen is explicitly closed. Nothing calls it on navigation;
+        automation intentionally survives navigation (the automation
+        instance is cached on the main window and the QTimer loop is
+        driven by the app event loop).
 
         Stops the timer and automation state immediately. An in-flight day
         worker still drains through _poll_day_worker, which skips all
@@ -568,6 +578,17 @@ class SeasonFlowScreen(BaseScreen):
             self._stop_automation()
         except Exception:
             pass
+
+    def closeEvent(self, event):
+        """Delegate to teardown_inflight_automation (defense-in-depth).
+
+        Production note: MainWindow.show_screen wraps screens in a
+        QScrollArea inside a QStackedWidget and navigates with
+        setCurrentWidget -- Qt delivers no closeEvent to a screen on
+        navigation or app shutdown, and nothing ever calls screen.close().
+        This fires only if the screen is explicitly closed.
+        """
+        self.teardown_inflight_automation()
         super().closeEvent(event)
 
     def _open_settings(self):
@@ -882,8 +903,18 @@ class SeasonFlowScreen(BaseScreen):
             return
         # FIX-1: also refuse while a season-flow day worker is in flight
         # (the busy latch may have been cleared by _stop_automation).
+        # FIX-B (latch-independent quick-advance guard): _quick_dlg is set
+        # only after run_threaded() returns successfully and cleared only
+        # by _finish_quick_advance(), so a non-None _quick_dlg precisely
+        # means "quick advance in flight" -- the quick path never sets
+        # _day_worker_in_flight. Without this disjunct, a mid-advance
+        # latch clear (e.g. via _stop_automation) would let a second
+        # _advance_days clobber _quick_dlg / _quick_result_q /
+        # _quick_restore_notify and strand the first run's notify-guard
+        # restore.
         if (self._sim_in_progress or self._running
-                or getattr(self, "_day_worker_in_flight", False)):
+                or getattr(self, "_day_worker_in_flight", False)
+                or getattr(self, "_quick_dlg", None) is not None):
             QMessageBox.information(
                 self, "Busy",
                 "A simulation is already running. "
