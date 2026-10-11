@@ -279,34 +279,59 @@ def _mark_recent(app, entity_key, story_type, game_date):
         pass
 
 
-# Scratch-gate GP-delta window (REV-B2 follow-up): cumulative GP alone
-# cannot tell "currently scratched" from "recently returned" -- an 86 OVR
-# star back from a 20-game suspension plays every night, yet gp*2 < team_gp
-# still fires "can't crack the lineup" for weeks (and ir_status resets on
-# return, so _unavailable can't see the past either). Player.days_missed is
-# never incremented anywhere and there is no per-player game log, so
-# instead we track per-player (date, gp) snapshots on the app -- mirroring
-# the _recent_ok/_mark_recent pattern -- and demand GP be essentially
-# static over the trailing window: a genuine scratch accrues nothing, while
-# a returned regular accrues ~3-4/week.
+# Scratch-gate GP-delta window (REV-B2 follow-up, FIX-BACK): cumulative GP
+# alone cannot tell "currently scratched" from "recently returned" -- an 86
+# OVR star back from a 20-game suspension plays every night, yet
+# gp*2 < team_gp still fires "can't crack the lineup" for weeks (and
+# ir_status resets on return, so _unavailable can't see the past either).
+# Player.days_missed is never incremented anywhere and there is no
+# per-player game log, so instead we track per-player
+# (date, gp, team_gp, unavailable) snapshots on the app -- mirroring the
+# _recent_ok/_mark_recent pattern -- and demand GP be essentially static
+# over the trailing window while the TEAM played real games: a genuine
+# scratch accrues nothing while his team plays, whereas a returned regular
+# accrues ~3-4/week. Measuring the evidence window in TEAM GAMES (not
+# calendar days) closes the residual hole where a star returning into a
+# 1-game week read as scratched: gp_delta <= 1 over 7 days is evidence of
+# nothing when the team only played ~1 game.
 SCRATCH_GP_WINDOW_DAYS = 7
 SCRATCH_GP_MAX_DELTA = 1
+# Minimum team games inside the evidence window before any scratch verdict.
+SCRATCH_MIN_TEAM_GAMES = 2
 
 
-def _gp_static(app, entity_key, game_date, gp):
-    """True only if the player has dressed for ~no games in the trailing
-    SCRATCH_GP_WINDOW_DAYS days -- evidence they are sitting NOW.
+def _gp_static(app, entity_key, game_date, gp, team_gp, unavailable):
+    """True only if the player dressed for ~no games while his TEAM played
+    >= SCRATCH_MIN_TEAM_GAMES games in the trailing SCRATCH_GP_WINDOW_DAYS
+    days -- evidence he is sitting NOW.
 
-    Sliding snapshot: the first sighting seeds (date, gp) and returns False
-    (no history yet, so no scratch claim can be made). Once a full window
-    has elapsed since the snapshot, gp is compared against it: advancing by
-    more than SCRATCH_GP_MAX_DELTA means he's dressing, so the verdict is
-    False and the baseline refreshes for the next window. Callers must pass
-    EVERY evaluated candidate through here -- including injured/suspended
-    ones -- so baselines stay fresh across an absence; otherwise a stale
-    pre-suspension snapshot would read as "hasn't played in weeks" the day
-    he returns. A backward clock (season rewind / new save) reseeds.
-    Fail-open (True) on unexpected errors, matching _recent_ok.
+    Sliding snapshot: the first sighting seeds (date, gp, team_gp,
+    unavailable) and returns False (no history yet, so no scratch claim can
+    be made). A verdict requires BOTH a full window elapsed AND enough team
+    games inside it; until the team-games floor is met the baseline is kept
+    (not refreshed) and there is no verdict, so the window extends
+    gracefully through light weeks. Once both gates pass, gp is compared
+    against the snapshot: advancing by more than SCRATCH_GP_MAX_DELTA means
+    he's dressing, so the verdict is False; either way the baseline then
+    refreshes for the next window.
+
+    Any availability transition (suspension/injury began or ended) reseeds:
+    the absence tail can never be evidence again -- the window restarts at
+    the transition, so every team game in it is one the player was
+    available for. A backward team-game clock (trade to a team with fewer
+    games played, season rollover via reset_season_record) reseeds the same
+    way a backward calendar clock does. Legacy 2-tuple entries (pre-upgrade
+    saves) are tolerated by reseeding -- verdicts just start ~7 days later,
+    no crash.
+
+    Callers must pass EVERY evaluated candidate through here -- including
+    injured/suspended ones -- so baselines stay fresh across an absence;
+    otherwise a stale pre-suspension snapshot would read as "hasn't played
+    in weeks" the day he returns.
+    Fail-closed (False) on unexpected errors: this is an EVIDENCE gate, and
+    failing open would assert "sitting" with no evidence -- the exact bug
+    class being fixed. (The inner _safe calls already fail closed, so the
+    outer except is effectively dead.)
     """
     try:
         seen = getattr(app, "_daily_news_gp_seen", None)
@@ -314,24 +339,39 @@ def _gp_static(app, entity_key, game_date, gp):
             seen = {}
             app._daily_news_gp_seen = seen
         entry = seen.get(entity_key)
-        last = (entry if isinstance(entry, (tuple, list)) and len(entry) == 2
+        last = (entry if isinstance(entry, (tuple, list)) and len(entry) == 4
                 else None)
         delta_days = (_safe(lambda: (game_date - last[0]).days, None)
                       if last is not None else None)
         if delta_days is None or delta_days < 0:
-            # No usable history, malformed entry, or the clock moved
-            # backward: reseed the baseline, no verdict yet.
-            seen[entity_key] = (game_date, gp)
+            # No usable history, legacy 2-tuple / malformed entry, or the
+            # calendar clock moved backward: reseed, no verdict yet.
+            seen[entity_key] = (game_date, gp, team_gp, unavailable)
+            _prune_gp_seen(seen, game_date)
+            return False
+        team_delta = _safe(lambda: int(team_gp) - int(last[2]), None)
+        if unavailable != last[3] or (team_delta is not None
+                                      and team_delta < 0):
+            # Availability flipped, or the team-game clock moved backward
+            # (trade to a team with fewer games played / season rollover):
+            # the old baseline is meaningless -- reseed, no verdict yet.
+            seen[entity_key] = (game_date, gp, team_gp, unavailable)
             _prune_gp_seen(seen, game_date)
             return False
         if delta_days < SCRATCH_GP_WINDOW_DAYS:
             return False  # window not elapsed yet -- no verdict
+        if team_delta is None or team_delta < SCRATCH_MIN_TEAM_GAMES:
+            # Too few team games in the window for a verdict (light
+            # schedule / post-return week): keep the OLD baseline (don't
+            # refresh) so the window extends until real evidence
+            # accumulates.
+            return False
         gp_delta = _safe(lambda: int(gp) - int(last[1]), 999)
-        seen[entity_key] = (game_date, gp)
+        seen[entity_key] = (game_date, gp, team_gp, unavailable)
         _prune_gp_seen(seen, game_date)
         return gp_delta is not None and gp_delta <= SCRATCH_GP_MAX_DELTA
     except Exception:
-        return True
+        return False
 
 
 def _prune_gp_seen(seen, game_date):
@@ -560,9 +600,12 @@ def _controversies(app, game_date, rng):
             key = f"player:{_safe(lambda: p.id, id(p))}"
             # REV-B2: pass every candidate through _gp_static (even
             # unavailable ones) so baselines stay fresh across absences;
-            # the verdict gates the story below.
-            sitting_now = _gp_static(app, key, game_date, gp)
-            if _unavailable(p):
+            # the verdict gates the story below. FIX-BACK: the evidence
+            # window is measured in team games, so pass team_gp and the
+            # availability flag (reseeds on transition) in.
+            unav = _unavailable(p)
+            sitting_now = _gp_static(app, key, game_date, gp, team_gp, unav)
+            if unav:
                 continue
             if gp * 2 >= team_gp:
                 continue
