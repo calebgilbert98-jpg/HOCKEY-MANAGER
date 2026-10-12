@@ -435,6 +435,17 @@ class GameManager:
             print(f"Error generating database: {e}")
             import traceback
             traceback.print_exc()
+            # LOUD fallback warning: the legacy path below (setup_new_game ->
+            # initialize_game_database) has NO generational rarity gates, so
+            # elite players will be vastly overrepresented. This must never
+            # happen silently (e.g. a headless TclError from the progress
+            # window once caused exactly that).
+            print("!" * 78)
+            print("!!! FALLING BACK TO LEGACY UNGATED DATABASE GENERATOR !!!")
+            print("!!! Rarity gates (2% elite gate, top-8-at-95+ normalization) are BYPASSED.")
+            print("!!! Draft pools from this league will have inflated talent.")
+            print(f"!!! Cause: {type(e).__name__}: {e}")
+            print("!" * 78)
             debug_print("DEBUG: Falling back to old system...")
             
             # Initialize a basic league if none exists

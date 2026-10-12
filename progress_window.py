@@ -147,9 +147,28 @@ class DatabaseGenerationProgress:
         self.parent = parent
         self.progress_window = None
         self.is_cancelled = False
-        
+        self.headless = False
+        self._last_logged_pct = -1
+
     def __enter__(self):
-        self.progress_window = ProgressWindow(self.parent)
+        try:
+            self.progress_window = ProgressWindow(self.parent)
+        except Exception as e:
+            # Headless environment (no $DISPLAY): tkinter cannot create a
+            # window and raises TclError. Degrade to a logging-only progress
+            # reporter instead of crashing, so callers (e.g. database
+            # generation) keep running the full gated pipeline instead of
+            # silently falling back to the legacy ungated generator.
+            self.headless = True
+            self.progress_window = None
+            print(f"[DatabaseGenerationProgress] No display available "
+                  f"({type(e).__name__}: {e}); running headless, "
+                  f"progress will be logged to stdout.")
+            if not isinstance(e, tk.TclError):
+                # Not the expected headless failure: a real bug may be
+                # hiding in the constructor. Make it visible in the log.
+                import traceback
+                traceback.print_exc()
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -160,6 +179,16 @@ class DatabaseGenerationProgress:
         """Update progress"""
         if self.progress_window:
             self.progress_window.update_progress(percentage, status, detail)
+        elif self.headless:
+            # Log progress milestones to stdout when headless so long
+            # database generations remain observable in server/sim logs.
+            pct = int(percentage or 0)
+            if pct >= self._last_logged_pct + 10 or pct >= 100:
+                self._last_logged_pct = (pct // 10) * 10
+                msg = f"[dbgen] {pct}% - {status}"
+                if detail:
+                    msg += f" ({detail})"
+                print(msg)
             
     def set_status(self, status, detail=""):
         """Set status without changing percentage"""
