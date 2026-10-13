@@ -49,10 +49,17 @@ AGE_DISTRIBUTIONS = {
 CONTRACT_VALUES = {
     "ENTRY_LEVEL": {"min": 850000, "max": 1025000, "years": [3]},
     "BRIDGE": {"min": 1200000, "max": 5000000, "years": [2, 3]},
-    "STANDARD": {"min": 1000000, "max": 6500000, "years": [3, 4, 5, 6]},
+    # STANDARD max raised 6.5M -> 9.0M (2026-10-13): the OVR normalization
+    # fix (217f329) capped generated OVRs at ~89, leaving the old 95/90
+    # superstar/premium gates unreachable and the pool unable to reach the
+    # $78M salary floor (top-736 salaries summed $1674M vs $2496M needed).
+    # The middle class must carry more of the payroll.
+    "STANDARD": {"min": 1000000, "max": 9000000, "years": [3, 4, 5, 6]},
     "PREMIUM": {"min": 9000000, "max": 13500000, "years": [5, 6, 7, 8]},
     "SUPERSTAR": {"min": 14000000, "max": 19000000, "years": [6, 7, 8]},
-    "VETERAN": {"min": 775000, "max": 3750000, "years": [1, 2]},
+    # VETERAN max $3.75M -> $5.5M (2026-10-13): softens the cliff for aging
+    # 76-81 OVR players (real comps: Tavares $4.38M, Marchand $5.25M).
+    "VETERAN": {"min": 775000, "max": 5500000, "years": [1, 2]},
     "AHL": {"min": 85000, "max": 200000, "years": [1, 2]}
 }
 
@@ -286,10 +293,11 @@ class PlayerGenerator:
 
         # Determine contract category (overall on the native 100-point scale).
         # Caleb's tier structure, with star thresholds calibrated to the
-        # generated curve (median 78) and the 2026 summer market: 95+ is a
-        # franchise player (the Kaprizov/Celebrini/McDavid tier -- 22 in
-        # the league), 90+ a first-line star (the Draisaitl/Matthews/
-        # MacKinnon/Eichel tier). Kids sign entry-level deals regardless
+        # post-normalization generated curve (max ~89, median ~72) and the
+        # 2026 summer market: 86+ is a franchise player (the
+        # Kaprizov/Celebrini/McDavid tier -- ~6 in the league), 82+ a
+        # first-line star (the Draisaitl/Matthews/MacKinnon/Eichel tier,
+        # ~20 in the league). Kids sign entry-level deals regardless
         # of rating -- a 21-year-old stud is still on his ELC in real life.
         # The gate is the real 3/2/1 signing-age table (CBA 9.1(b)):
         # 24-and-under first-SPC signers are Group 1; 25+ is not
@@ -302,13 +310,20 @@ class PlayerGenerator:
             _entry_years = 3 if age <= 21 else (2 if age <= 23 else 0)
         if _entry_years > 0:
             contract_type = "ENTRY_LEVEL"
-        elif overall >= 95:
+        # Thresholds recalibrated 2026-10-13 for the post-normalization OVR
+        # distribution (max ~89, 10 at 85+). The old 95/90 gates were set for
+        # the inflated pre-fix scale and became unreachable, collapsing the
+        # salary pool below the $78M floor.
+        elif overall >= 86:
             contract_type = "SUPERSTAR"
-        elif overall >= 90:
+        elif overall >= 82:
             contract_type = "PREMIUM"
         elif age <= 25 and overall < 80:
             contract_type = "BRIDGE"
-        elif age >= 33 and overall < 84:
+        # VETERAN: age 33+ below the PREMIUM gate (82). At 82+ OVR a 33yo
+        # is a star (routes to PREMIUM above), not a bargain veteran.
+        # Max raised $3.75M -> $5.5M (2026-10-13) to soften the 81/82 cliff.
+        elif age >= 33 and overall < 82:
             contract_type = "VETERAN"
         elif "AHL" in skill_tier:
             contract_type = "AHL"
@@ -341,11 +356,16 @@ class PlayerGenerator:
 
         # Calculate salary based on overall rating. Star tiers normalize
         # within their own overall band so franchise players spread across
-        # the gate instead of all pinning at the max.
+        # the gate instead of all pinning at the max. Bands recalibrated
+        # 2026-10-13 for post-normalization OVRs (superstar 86+, premium 82+).
+        # STANDARD uses a generous curve (58 baseline) so the thin 70-80 OVR
+        # middle class can carry payrolls to the $78M floor.
         if contract_type == "SUPERSTAR":
-            salary_factor = (overall - 94) / 6
+            salary_factor = (overall - 85) / 5
         elif contract_type == "PREMIUM":
-            salary_factor = (overall - 89) / 6
+            salary_factor = (overall - 81) / 5
+        elif contract_type == "STANDARD":
+            salary_factor = (overall - 58) / 24
         else:
             salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))

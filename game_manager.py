@@ -541,6 +541,14 @@ class GameManager:
 
         from fantasy_draft import FantasyDraftManager
         mgr = FantasyDraftManager(nhl_teams, all_nhl_players)
+        # Propagate the game's salary-cap setting into the draft config so
+        # the cap/floor guards respect it (the default config always has it
+        # enabled, which would make the guards fire even with the cap off).
+        try:
+            mgr.config.salary_cap_enabled = bool(
+                getattr(self, 'salary_cap_enabled', True))
+        except Exception:
+            pass
         # League-owned, like the live path (get_fantasy_draft_manager
         # reads it back).
         try:
@@ -605,6 +613,11 @@ class GameManager:
             # Return player if affordable, else the best affordable
             # alternative. Never raises; falls back to the original pick.
             try:
+                try:
+                    if not getattr(mgr.config, 'salary_cap_enabled', True):
+                        return player
+                except Exception:
+                    pass
                 if _is_goalie(player) and _goalies_drafted(team) < 2:
                     return player
                 if _committed(team) + _salary(player) <= _cap_limit + _CAP_TOLERANCE:
@@ -639,6 +652,165 @@ class GameManager:
             except Exception:
                 return player
 
+        # --- Salary-floor guard (headless draft only) ---
+        # Mirror of _cap_guard: the headless draft must not produce a
+        # sub-floor roster. The AI draft valuation has ceiling pressure
+        # but no floor pressure, so a value-drafting club can assemble a
+        # $57.3M roster against a $78M floor (2026-10-12: day-1
+        # perma-freeze). The floor auto-action does run in that state --
+        # the incident moved payroll from $57.33M to $67.13M over the
+        # stuck days -- but it plateaus: the post-draft FA pool is
+        # leftovers, the sign/upgrade loop is bounded (5 upgrades + 12
+        # iterations), and the 50-contract gate is hard. A multi-million
+        # gap cannot be relied on to close from leftovers, and the floor
+        # is a hard day-advance gate -- a human drafter faces the same
+        # thin pool and hard gate. This is a game-logic hole, not a
+        # bot-logic hole.
+        try:
+            from salary_cap_system import SALARY_CAP_FLOOR as _SCF
+            _floor_limit = int(_SCF or 0)
+        except Exception:
+            _floor_limit = 0
+        if not _floor_limit:
+            _floor_limit = 78_000_000
+        # Post-draft normalization keeps best-23 by OVR with position
+        # floors (2-3 G, 4C/6W/7D), and the hard gate measures that
+        # roster's cap charge -- so the guard ranks by OVR too and sums
+        # those players' salaries (optimizing salary-top-23 instead would
+        # systematically overstate for value-drafting clubs that
+        # accumulate high-OVR/low-salary players). Buried one-way deals
+        # shave the burial exemption, so guard to floor + margin, not the
+        # bare floor. The real gate (total_cap_charge = NHL roster AAV +
+        # buried AHL one-way charges + dead cap) usually reads higher
+        # than this guard's pure-salary projection, but forced position-
+        # floor swaps can displace a higher-paid player for a cheaper
+        # one -- that is why the margin exists and why it must be proven
+        # by test, not asserted here. Margin is $1M: the OVR-based
+        # projection models the gate accurately, so only the burial shave
+        # needs cover (was $4M for the old salary-top-23 projection).
+        _FLOOR_MARGIN = 1_000_000
+        _floor_target = _floor_limit + _FLOOR_MARGIN
+        # Depth fill rate: $3M (not the valuation model's $4.5M). The AI
+        # drafts for value (cheap high-OVR players), so assuming $4.5M per
+        # unfilled slot lets the guard sleep through the early/mid draft
+        # while the team accumulates cheap players -- by the late draft the
+        # expensive players are gone and it's too late. $3M forces earlier
+        # intervention when high-salary candidates are still available.
+        _FLOOR_FILL_RATE = 3_000_000
+        _FLOOR_CORE = 23
+
+        def _floor_guard(team, player, round_num):
+            # Return player if the team's projected post-draft NHL payroll
+            # clears the floor target; else the best-valued alternative
+            # that clears it, or the biggest improvement available.
+            # Never raises; falls back to the original pick.
+            try:
+                try:
+                    if not getattr(mgr.config, 'salary_cap_enabled', True):
+                        return player
+                except Exception:
+                    pass
+                # Inelastic need (mirror of _cap_guard): a club with fewer
+                # than 2 goalies drafted MUST keep its goalie pick -- real
+                # GMs don't skip the position to chase the floor (they
+                # manage the floor elsewhere).
+                try:
+                    if _is_goalie(player) and _goalies_drafted(team) < 2:
+                        return player
+                except Exception:
+                    pass
+                # Project the post-normalization NHL payroll. The normalizer
+                # keeps best-23 by OVR (not salary), and the hard gate
+                # measures that roster's cap charge -- so rank by OVR here,
+                # then sum salaries. (Salary-top-23 systematically overstates
+                # for value-drafting clubs that accumulate high-OVR/low-
+                # salary players; the guard must optimize what the gate
+                # actually measures.)
+                def _ovr(p):
+                    try:
+                        return float(p.overall_rating())
+                    except Exception:
+                        return 0.0
+                try:
+                    _drafted = list(mgr._team_drafted_players(team) or [])
+                except Exception:
+                    _drafted = []
+                try:
+                    _ranked = sorted(_drafted + [player],
+                                    key=_ovr, reverse=True)[:_FLOOR_CORE]
+                    _r23_sal = sum(_salary(p) for p in _ranked)
+                except Exception:
+                    _ranked, _r23_sal = [], 0.0
+                slots_to_fill = max(0, _FLOOR_CORE - len(_ranked))
+                projected = _r23_sal + _FLOOR_FILL_RATE * slots_to_fill
+                if projected >= _floor_target:
+                    return player
+                try:
+                    avail = mgr.get_available_players()
+                except Exception:
+                    return player
+                # Hoist loop invariants: the organization's committed payroll
+                # (the cap guard's basis) and the drafted goalie count.
+                try:
+                    _committed_now = _committed(team)
+                except Exception:
+                    _committed_now = 0.0
+                try:
+                    _g_drafted = _goalies_drafted(team)
+                except Exception:
+                    _g_drafted = 0
+                best_clear, best_clear_key = None, None
+                best_effort, best_effort_proj = None, -1.0
+                for cand in avail:
+                    try:
+                        csal = _salary(cand)
+                    except Exception:
+                        continue
+                    # Ceiling composition: skip candidates whose AAV would
+                    # push committed payroll over the cap. (Late draft: the
+                    # 40-man committed can sit near the cap while the top-23
+                    # projection is under the floor -- without this, a floor
+                    # substitute reintroduces the over-cap rosters the cap
+                    # guard was built to kill.)
+                    if (_committed_now + csal
+                            > _cap_limit + _CAP_TOLERANCE):
+                        continue
+                    # Don't hoard goalies chasing salary (the post-draft
+                    # normalizer fixes roster shape anyway).
+                    if _is_goalie(cand) and _g_drafted >= 3:
+                        continue
+                    # OVR-based projection with this candidate: rank by OVR
+                    # (what the normalizer keeps), sum salaries (what the
+                    # gate measures).
+                    try:
+                        _c_ranked = sorted(
+                            _drafted + [cand],
+                            key=_ovr, reverse=True)[:_FLOOR_CORE]
+                        _c_sal = sum(_salary(p) for p in _c_ranked)
+                    except Exception:
+                        continue
+                    cand_slots = max(0, _FLOOR_CORE - len(_c_ranked))
+                    proj_c = _c_sal + _FLOOR_FILL_RATE * cand_slots
+                    try:
+                        score = mgr.calculate_player_draft_value(
+                            cand, team, round_num)
+                    except Exception:
+                        continue
+                    if proj_c >= _floor_target:
+                        key = (score, csal)
+                        if best_clear_key is None or key > best_clear_key:
+                            best_clear, best_clear_key = cand, key
+                    elif proj_c > best_effort_proj:
+                        best_effort, best_effort_proj = cand, proj_c
+                if best_clear is not None:
+                    return best_clear
+                if (best_effort is not None
+                        and best_effort_proj > projected):
+                    return best_effort
+                return player
+            except Exception:
+                return player
+
         _picks = 0
         while not mgr.is_draft_complete():
             pick = mgr.get_current_pick()
@@ -655,6 +827,7 @@ class GameManager:
             except Exception:
                 _rn = 1
             player = _cap_guard(pick.team, player, _rn)
+            player = _floor_guard(pick.team, player, _rn)
             try:
                 ok = mgr.make_pick(player)
             except Exception:
@@ -7076,7 +7249,7 @@ NHL League Office""",
                         except Exception:
                             pass
                         _n = _aim._enforce_salary_floor(
-                            _t, _a.free_agents,
+                            _t, _a.free_agents(),
                             getattr(_a, 'current_date', None))
                         _a.add_news(f"Auto-signed {_n} free agent(s) to "
                                     f"reach the salary floor.")

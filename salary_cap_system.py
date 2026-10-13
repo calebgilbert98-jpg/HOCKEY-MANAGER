@@ -393,8 +393,8 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
     """Base annual salary a player asks for, BEFORE market-setter premium.
 
     The 2026 summer market reset, shared by every negotiation path (user
-    contract talks, AI free agency, AI extensions): superstar 95+ asks
-    $14-19M, premium 90+ asks $9-13.5M -- the same bands the league's
+    contract talks, AI free agency, AI extensions): superstar 86+ asks
+    $14-19M, premium 82+ asks $9-13.5M -- the same bands the league's
     contracts were generated on and the AI's own estimate mirrors. Below
     the star tiers the regular youth / veteran / middle-class curves
     apply. A player can only sign one ELC, so a player currently on an
@@ -412,10 +412,10 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
         age = int(age)
     except Exception:
         age = 27
-    if ovr100 >= 95:
-        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
-    elif ovr100 >= 90:
-        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
+    if ovr100 >= 86:
+        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 85) / 5
+    elif ovr100 >= 82:
+        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 81) / 5
     elif age <= 22 and not on_elc:
         # ELC-aged player asking for his (first) NHL deal.
         try:
@@ -426,14 +426,19 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
         f = (ovr100 - 62) / 28
     elif age <= 25 and ovr100 < 80:
         lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
-    elif age >= 33 and ovr100 < 84:
+    elif age >= 33 and ovr100 < 82:
+        # VETERAN band recalibrated 2026-10-13: was <84, now <82 to match
+        # the PREMIUM gate (82+). A 33yo at 82+ OVR is a star, not a
+        # veteran bargain -- routes to PREMIUM instead.
         try:
             _vlo = int(league_minimum_salary())
         except Exception:
             _vlo = 775_000
         lo, hi, f = _vlo, 3_750_000, (ovr100 - 62) / 28
     else:
-        lo, hi, f = 1_000_000, 6_500_000, (ovr100 - 62) / 28
+        # STANDARD: 1-9M with generous (ovr-58)/24 curve, mirroring
+        # player_generator.py recalibration (2026-10-13).
+        lo, hi, f = 1_000_000, 9_000_000, (ovr100 - 58) / 24
     f = max(0.0, min(1.0, f))
     base = lo + (hi - lo) * f
     # Generation is position-blind; the established estimate carries a
