@@ -435,6 +435,20 @@ class GameManager:
             print(f"Error generating database: {e}")
             import traceback
             traceback.print_exc()
+            # R1 (2026-10-13): headless mode FAILS LOUD instead of falling
+            # back. The legacy fallback below has NO rarity gates (the 2%
+            # elite gate and top-8-at-95+ normalization are bypassed), and
+            # headless sims never read stdout — so the banner would be
+            # invisible there and every downstream realism probe (R2-R4)
+            # would silently measure the wrong pool. An interactive user
+            # still gets the banner + legacy fallback (a degraded game
+            # beats no game when a human is watching).
+            if getattr(self, '_headless_sim', False):
+                print("!" * 78)
+                print("!!! HEADLESS: gated DB generation failed -- refusing legacy fallback !!!")
+                print(f"!!! Cause: {type(e).__name__}: {e}")
+                print("!" * 78)
+                raise
             # LOUD fallback warning: the legacy path below (setup_new_game ->
             # initialize_game_database) has NO generational rarity gates, so
             # elite players will be vastly overrepresented. This must never
