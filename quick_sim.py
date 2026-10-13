@@ -1020,6 +1020,37 @@ class AdvancedGameSim:
             home_team.team_name: ensure_lineup(home_team),
             away_team.team_name: ensure_lineup(away_team)
         }
+        # R2 (2026-10-13): backup-goalie rotation. NHL backups start
+        # ~20-25% of games; without it the #2 goalie never dresses and
+        # there is no starter-vs-backup SV% spread at all. Per-game coin
+        # flip -- the stateless fast approximation of the streak-based
+        # rotation game_manager runs for season sims (same average
+        # share). Coach-managed teams only: the GM's set lines are law,
+        # and the stored lineup dict is never mutated in place (shallow
+        # copy before the swap).
+        # Team names whose #2 goalie got the start (for SV% spread reads).
+        self._goalie_rotated = set()
+        for _tm in (home_team, away_team):
+            try:
+                if user_controlled_lines(_tm) is not None:
+                    continue
+                _lu0 = self.lineups.get(_tm.team_name) or {}
+                _gs = list(_lu0.get("Goalies") or [])
+                if len(_gs) >= 2 and random.random() < 0.22:
+                    _lu = dict(_lu0)
+                    _new_order = [_gs[1], _gs[0]] + _gs[2:]
+                    _lu["Goalies"] = _new_order
+                    # Keep the flat G1/G2 keys consistent with the rotated
+                    # order -- deployment_policy prefers the flat keys, so
+                    # a stale G1 would credit TOI to the wrong goalie.
+                    if "G1" in _lu:
+                        _lu["G1"] = _new_order[0]
+                    if "G2" in _lu and len(_new_order) > 1:
+                        _lu["G2"] = _new_order[1]
+                    self.lineups[_tm.team_name] = _lu
+                    self._goalie_rotated.add(_tm.team_name)
+            except Exception:
+                pass
         # WS1 parity: the canonical per-game energy pool starts at 100 for
         # both clubs -- the shared reset_game_fatigue GameSim calls on its
         # first tick (simulation._update_fatigue). Without it, a previous
@@ -2361,12 +2392,20 @@ class AdvancedGameSim:
         passing = getattr(player, 'passing', 10)
         
         # Base probabilities - tuned for realistic NHL game flow
-        # Target: ~70-75 shot attempts from ~225 events per game (~32% shots)
-        # Hockey is mostly passing and puck battles, not constant shooting
-        # Calibrated 2026-10-04: reduced from 0.32 to align with GameSim
-        # (visualizer engine) output -- both engines must produce the same
-        # scoring distribution whether the user watches or quick-sims.
-        shot_prob = 0.24
+        # Target: ~58 shot attempts/team/game from ~225 events (~52% of
+        # team events are shots after the tactic/pace multipliers below),
+        # yielding ~28-30 SOG and ~3.0 GPG/team at ~.897 SV%.
+        # Calibrated 2026-10-13 (R2): the 2026-10-04 cut to 0.24 (meant to
+        # "align with GameSim") actually DIVERGED the engines -- GameSim
+        # produces ~3.0 GPG/team while the quick sim fell to ~2.06 on
+        # ~17.5 SOG. Restoring volume here re-converges the fidelities on
+        # real NHL volume. Hockey is still mostly passing and puck
+        # battles; the gate below (tactics/pace/PP) keeps team-to-team
+        # spread. (R2 2026-10-13: recalibrated against VARIED fixtures,
+        # not just Carolina/Columbus -- the league-average system mix
+        # generates ~18% fewer shots than that pair, so the base moves
+        # 0.40 -> 0.51 to hold ~28 SOG / ~3.0 GPG on average.)
+        shot_prob = 0.51
         pass_prob = 0.40 if len(shooters) > 1 else 0.0
         deke_prob = 0.08
         battle_prob = 0.12
@@ -2544,6 +2583,33 @@ class AdvancedGameSim:
                     opp_team_name, "opp_shot_volume_mult", 1.0)
         except Exception:
             pass
+
+        # Home-ice volume edge (R2, 2026-10-13): the home coach's last-
+        # change matchup wins real ice time. NOTE (adversarial review):
+        # this partially compensates a PRE-EXISTING fatigue asymmetry --
+        # home skaters measure ~9% more fatigued than away (the directed
+        # matchup in _select_home_lines favors matchup over freshness),
+        # which suppresses home volume through the fatigue gate. The
+        # +5%/-2% here nets to roughly neutral ice plus a small true home
+        # edge. If the fatigue asymmetry is ever root-caused, re-tune
+        # this -- it will double-count. Lives on the volume gate (not
+        # conversion) because grade ceilings absorb conversion-side edges.
+        try:
+            _htn = getattr(self.home_team, "team_name", "")
+            if team is not None and getattr(team, "team_name", "") == _htn:
+                shot_prob *= 1.05
+            else:
+                shot_prob *= 0.98
+        except Exception:
+            pass
+
+        # R2 (2026-10-13): clamp the volume gate. Stacked multipliers (OT
+        # 2.5x, 6v5 ~1.9x, SHOT_LIFT, home edge) can push shot_prob past
+        # 1.0, collapsing the event-type chain to all-SHOT (no passes,
+        # dekes, or battles in OT/6v5). Cap at 0.90 -- those states stay
+        # shot-heavy by design, but the gate remains a valid probability.
+        if shot_prob > 0.90:
+            shot_prob = 0.90
 
         # Random selection based on probabilities
         rand = random.random()
@@ -4765,6 +4831,15 @@ class AdvancedGameSim:
                         flags_by_team={opp_team_name: {"goal_against"}})
                 except Exception:
                     pass
+                # R2 (2026-10-13): a deflected goal beats the goalie -- it
+                # must charge his GA like any other goal. (Empty net is
+                # possible here via 6v5 -- goalie=None skips the charge.)
+                if goalie is not None:
+                    try:
+                        _gd = self.stats[opp_team_name][goalie.id]
+                        _gd['goals_against'] = _gd.get('goals_against', 0) + 1
+                    except Exception:
+                        pass
                 self.stats[puck_team_name][deflector.id]['goals'] = self.stats[puck_team_name][deflector.id].get('goals', 0) + 1
                 # Net-front goals are a tracked category (QA: netfront_goals)
                 try:
@@ -4796,9 +4871,12 @@ class AdvancedGameSim:
         discipline_rating = getattr(penalized, 'discipline', 10)
         aggressiveness = getattr(penalized, 'aggressiveness', 10)
 
-        # Base ~2.2% per check (~250 checks/game -> ~6-8 penalties/game, NHL rate);
-        # tired/undisciplined/aggressive players foul more
-        base = 0.022 * (2.0 - fatigue_factor)
+        # Base ~4.0% per check (~225 checks/game -> ~6-7 penalties/game
+        # after the discipline/aggressiveness/system discounts, NHL rate);
+        # tired/undisciplined/aggressive players foul more.
+        # R2 (2026-10-13): was 0.022, measured only ~3.2 penalties/game
+        # (half the NHL ~6) -- the stated intent above never materialized.
+        base = 0.040 * (2.0 - fatigue_factor)
         discipline_mod = (10 - discipline_rating) * 0.001
         aggr_mod = (aggressiveness - 10) * 0.0008
         penalty_chance = min(0.06, max(0.005, base + discipline_mod + aggr_mod))

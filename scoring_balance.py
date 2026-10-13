@@ -10,6 +10,9 @@ goalie SV% slightly toward .900):
   - BASE_SAVE_TUNE: multiplicative goal-suppression applied at each engine's
     base save calculation. 0.95 ~= -5% goals, SV% .892 -> ~.897, GPG stays
     inside the 2.70-3.60 band.
+    R2 recalibration (2026-10-13): 0.95 -> 0.93. With real NHL shot volume
+    restored, league SV% sat at ~.890 (band floor); -7% goals lifts it to
+    ~.894 while GPG holds mid-band on both engines.
   - tie_late_factor(): "protect the point" is real hockey -- tied in the 3rd
     with under 10:00 left, both teams trade chances for structure. Applied on
     the xG/shot-chance gate (finishing), own channel, never overrides agreed
@@ -19,7 +22,7 @@ Perf: pure arithmetic, called per shot. No state, no I/O.
 Kill switch: set both constants to 1.0 to restore prior behavior exactly.
 """
 
-BASE_SAVE_TUNE = 0.95
+BASE_SAVE_TUNE = 0.93
 
 TIE_LATE_WINDOW_SECONDS = 600
 TIE_LATE_XG_MULT = 0.80
