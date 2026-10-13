@@ -662,11 +662,15 @@ class DatabaseGenerator:
                 _promoted = 0
                 for _ovr, _p in _near[:_need]:
                     self._scale_player_to_overall(_p, 95)
-                    # A promoted 95 must carry a generational grade, or the
-                    # development engine grinds him back down (R3 melt fix).
-                    _p.potential_grade = "A+"
-                    _p.true_potential_grade = "A+"
-                    _promoted += 1
+                    # Count only players that ACTUALLY reach 95 (Copilot
+                    # R3 review: truncation could strand one at 94).
+                    if _p.overall_rating() >= 95:
+                        # A promoted 95 must carry a generational grade,
+                        # or the development engine grinds him back down
+                        # (R3 melt fix).
+                        _p.potential_grade = "A+"
+                        _p.true_potential_grade = "A+"
+                        _promoted += 1
                 debug_print(
                     f"R3 generational backstop: promoted {_promoted} "
                     f"93-94s to 95 (had {len(_gen)} at 95+)")
@@ -693,23 +697,49 @@ class DatabaseGenerator:
         target/current. A partial-attribute scaling would not move the
         overall with the fixed quality dial, since the untouched inputs
         would hold it up.
+
+        The proportional step truncates (int), which can leave the
+        overall a point short of the target (e.g. 94 -> 95); the nudge
+        loop then verifies the actual overall and bumps attributes until
+        the target is REALLY reached (bounded; attrs cap at 100). Callers
+        that count promotions must still verify the final overall.
         """
         from game_classes import PlayerPosition as _PP
         _ovr = max(1, int(player.overall_rating()))
         if _ovr == target:
             return
-        _scale = target / _ovr
         _group = ("goalie" if player.primary_position == _PP.GOALIE
                   else "skater")
         _seen = set()
+        _attrs = []
         for _attr in _R3_QUALITY_ATTRS[_group] + _R3_QUALITY_ATTRS_FLAVOR:
-            if _attr in _seen:
-                continue
-            _seen.add(_attr)
-            _v = getattr(player, _attr, None)
+            if _attr not in _seen:
+                _seen.add(_attr)
+                _attrs.append(_attr)
+
+        def _num(_a):
+            _v = getattr(player, _a, None)
             if isinstance(_v, bool) or not isinstance(_v, (int, float)):
+                return None
+            return _v
+
+        _scale = target / _ovr
+        for _attr in _attrs:
+            _v = _num(_attr)
+            if _v is None:
                 continue
             setattr(player, _attr, max(1, min(100, int(_v * _scale))))
+        # Verify and nudge: truncation can strand the overall a point
+        # short (Copilot R3 review). Bounded; a player already at all-100
+        # is at overall 100 >= target by construction.
+        for _ in range(10):
+            if int(player.overall_rating()) >= target:
+                break
+            for _attr in _attrs:
+                _v = _num(_attr)
+                if _v is None or _v >= 100:
+                    continue
+                setattr(player, _attr, int(_v) + 1)
     
     # Two roster salary-share curves for a 23-man NHL roster, largest to
     # smallest, blended per club by payroll target (see
