@@ -393,12 +393,17 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
     """Base annual salary a player asks for, BEFORE market-setter premium.
 
     The 2026 summer market reset, shared by every negotiation path (user
-    contract talks, AI free agency, AI extensions): superstar 86+ asks
-    $14-19M, premium 82+ asks $9-13.5M -- the same bands the league's
+    contract talks, AI free agency, AI extensions): superstar 95+ asks
+    $14-19M, premium 90+ asks $9-13.5M -- the same bands the league's
     contracts were generated on and the AI's own estimate mirrors. Below
     the star tiers the regular youth / veteran / middle-class curves
     apply. A player can only sign one ELC, so a player currently on an
     ELC asks second-contract money, not the ELC band.
+
+    R3 (2026-10-13): star bands restored to 95/90. The 2026-10-13
+    recalibration (86+/82+) was a bandaid for the broken quality dial;
+    with the R3 dial fix the original 2026-market bands are reachable
+    again.
 
     Bands are fractions of the 2026 $104M cap, so callers dividing by
     the live cap get demands that scale as the cap climbs. Callers feed
@@ -412,10 +417,10 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
         age = int(age)
     except Exception:
         age = 27
-    if ovr100 >= 86:
-        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 85) / 5
-    elif ovr100 >= 82:
-        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 81) / 5
+    if ovr100 >= 95:
+        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
+    elif ovr100 >= 90:
+        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
     elif age <= 22 and not on_elc:
         # ELC-aged player asking for his (first) NHL deal.
         try:
@@ -427,9 +432,9 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
     elif age <= 25 and ovr100 < 80:
         lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
     elif age >= 33 and ovr100 < 82:
-        # VETERAN band recalibrated 2026-10-13: was <84, now <82 to match
-        # the PREMIUM gate (82+). A 33yo at 82+ OVR is a star, not a
-        # veteran bargain -- routes to PREMIUM instead.
+        # VETERAN band: 33+ below the star tiers. Kept at <82 (not <90):
+        # an 82-89 veteran prices on the STANDARD middle-class curve,
+        # not as a bargain -- matches player_generator.py.
         try:
             _vlo = int(league_minimum_salary())
         except Exception:

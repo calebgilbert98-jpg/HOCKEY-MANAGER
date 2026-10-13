@@ -379,6 +379,53 @@ LEAGUE_STRUCTURES = {
     ]
 }
 
+# R3 (2026-10-13): share of $12M+ franchise slots that may hold a
+# generational (95+) player. The old 2% gate was calibrated for the
+# broken dial (90+ unreachable, so 2% of nothing = nothing). With the
+# fixed dial a drawn slot re-rolls hot dice until one lands 95+; the
+# top-8 normalization still caps the league and a min-5 backstop there
+# tops up from 93-94 if the dice run cold. Tuned so a fresh league
+# lands 4-8 at 95+ (real NHL: ~5-8).
+_R3_GENERATIONAL_SHARE = 0.60
+
+# R3 (2026-10-13): EVERY attribute that feeds Player.overall_rating()
+# (game_classes.py) must scale with quality_modifier, by position group.
+# Previously only ~half the overall weight was scaled (the "core" list in
+# _set_enhanced_attributes); the rest kept the fixed 50-90 constructor
+# defaults, so even max-quality rolls topped out ~87 and the generational
+# gates had nothing to gate. These lists MIRROR overall_rating's inputs
+# exactly -- if overall_rating gains an attribute, add it here too (the
+# test_r3_quality_dial.py anti-rot test enforces the mirror).
+_R3_QUALITY_ATTRS = {
+    # Skaters: union of the CENTER / WING / DEFENSE overall inputs.
+    # Position-specific precision is unnecessary: quality is quality, and
+    # the overall formula simply ignores the attrs it doesn't read.
+    "skater": [
+        'skating', 'shooting', 'shooting_accuracy', 'shooting_power',
+        'passing', 'passing_accuracy', 'passing_creativity',
+        'deking', 'stickhandling', 'vision', 'hockey_iq',
+        'offensive_awareness', 'defensive_awareness',
+        'faceoffs', 'faceoff_wins', 'composure', 'endurance',
+        'determination', 'off_the_puck', 'one_timer', 'loose_puck',
+        'wristshot', 'slapshot', 'backhand', 'screen_shots',
+        'strength', 'checking', 'bodycheck', 'shot_blocking',
+        'pokecheck', 'anticipation', 'aggressiveness', 'balance',
+        'pressure_player',
+    ],
+    "goalie": [
+        'goaltending', 'reflexes', 'positioning', 'rebound_control',
+        'puck_handling', 'glove_hand', 'stick_side', 'breakaway_skill',
+        'confidence', 'focus', 'composure',
+    ],
+}
+# Non-overall attributes that were already quality-scaled before R3 --
+# kept scaled for continuity (personality/flavor, not ratings).
+_R3_QUALITY_ATTRS_FLAVOR = [
+    'teamwork', 'leadership', 'discipline', 'flair',
+    'puck_control', 'puck_protection', 'stamina',
+]
+
+
 class DatabaseGenerator:
     """Enhanced database generator with multiple realism levels"""
     
@@ -574,39 +621,125 @@ class DatabaseGenerator:
         # True 95+ players should be <10 league-wide (McDavid-level rarity).
         # If generation produced too many, scale the excess down to 92-94
         # (Superstar range). Keep the top 8 by overall; scale the rest.
+        # R3 (2026-10-13): FAIL LOUD (was try/except: pass). A silent skip
+        # here poisons the pool headless with no trace -- the R1 lesson.
+        # The scale-down covers EVERY overall input (not the old 17-attr
+        # subset); with the fixed quality dial a partial scaling would
+        # leave the player at 95+.
         try:
             _all_nhl = []
             for _t in main_league.teams:
                 for _p in (_t.roster or []):
                     try:
                         _all_nhl.append((_p.overall_rating(), _p))
-                    except Exception:
-                        pass
+                    except Exception as _e1:
+                        debug_print(
+                            f"R3 rarity normalization: skipping player "
+                            f"{getattr(_p, 'id', '?')}: {_e1}")
             _all_nhl.sort(key=lambda x: -x[0])
             _gen = [(ovr, p) for ovr, p in _all_nhl if ovr >= 95]
             if len(_gen) > 8:
                 # Keep top 8, scale down the rest to 92-94
                 for _ovr, _p in _gen[8:]:
                     try:
-                        _target = 93  # Middle of Superstar range
-                        _scale = _target / max(_ovr, 1)
-                        for _attr in ['skating', 'shooting', 'passing', 'checking',
-                                      'determination', 'teamwork', 'offensive_awareness',
-                                      'defensive_awareness', 'deking', 'strength',
-                                      'vision', 'puck_control', 'stamina',
-                                      'shooting_accuracy', 'shooting_power',
-                                      'passing_accuracy', 'stickhandling']:
-                            try:
-                                _v = getattr(_p, _attr, 50)
-                                setattr(_p, _attr, max(1, min(100, int(_v * _scale))))
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                        self._scale_player_to_overall(_p, 93)
+                    except Exception as _e2:
+                        debug_print(
+                            f"R3 rarity normalization: failed to scale "
+                            f"player {getattr(_p, 'id', '?')}: {_e2}")
+                        raise
+            elif len(_gen) < 5:
+                # R3 min-5 backstop: the league should hold 5-8 generational
+                # players (real NHL: ~5-8). If the franchise-slot dice ran
+                # cold, promote the best 93-94 veterans to 95 -- this tops
+                # up the existing elite, never fabricates stars from depth.
+                # (The quality dial itself is verified organic by the
+                # independent max-quality-roll check; this is a count
+                # normalization, symmetric with the top-8 cap above.)
+                _need = 5 - len(_gen)
+                _near = [(ovr, p) for ovr, p in _all_nhl
+                         if 93 <= ovr < 95 and getattr(p, "age", 99) > 22]
+                _promoted = 0
+                for _ovr, _p in _near[:_need]:
+                    self._scale_player_to_overall(_p, 95)
+                    # Count only players that ACTUALLY reach 95 (Copilot
+                    # R3 review: truncation could strand one at 94).
+                    if _p.overall_rating() >= 95:
+                        # A promoted 95 must carry a generational grade,
+                        # or the development engine grinds him back down
+                        # (R3 melt fix).
+                        _p.potential_grade = "A+"
+                        _p.true_potential_grade = "A+"
+                        _promoted += 1
+                debug_print(
+                    f"R3 generational backstop: promoted {_promoted} "
+                    f"93-94s to 95 (had {len(_gen)} at 95+)")
+        except Exception as _e:
+            print("!" * 78)
+            print("!!! R3 rarity normalization FAILED -- pool may exceed "
+                  "8 players at 95+ !!!")
+            print(f"!!! Cause: {type(_e).__name__}: {_e}")
+            print("!" * 78)
+            # R1 philosophy: headless probes must never silently measure a
+            # poisoned pool; an interactive user gets the banner and a
+            # playable (if over-stacked) league.
+            if getattr(self, '_headless_sim', False):
+                raise
 
         return main_league
+
+    @staticmethod
+    def _scale_player_to_overall(player, target: int) -> None:
+        """Scale a player's overall toward `target` (R3 helper).
+
+        Multiplies EVERY attribute feeding overall_rating() for the
+        player's position group (plus the quality flavor attrs) by
+        target/current. A partial-attribute scaling would not move the
+        overall with the fixed quality dial, since the untouched inputs
+        would hold it up.
+
+        The proportional step truncates (int), which can leave the
+        overall a point short of the target (e.g. 94 -> 95); the nudge
+        loop then verifies the actual overall and bumps attributes until
+        the target is REALLY reached (bounded; attrs cap at 100). Callers
+        that count promotions must still verify the final overall.
+        """
+        from game_classes import PlayerPosition as _PP
+        _ovr = max(1, int(player.overall_rating()))
+        if _ovr == target:
+            return
+        _group = ("goalie" if player.primary_position == _PP.GOALIE
+                  else "skater")
+        _seen = set()
+        _attrs = []
+        for _attr in _R3_QUALITY_ATTRS[_group] + _R3_QUALITY_ATTRS_FLAVOR:
+            if _attr not in _seen:
+                _seen.add(_attr)
+                _attrs.append(_attr)
+
+        def _num(_a):
+            _v = getattr(player, _a, None)
+            if isinstance(_v, bool) or not isinstance(_v, (int, float)):
+                return None
+            return _v
+
+        _scale = target / _ovr
+        for _attr in _attrs:
+            _v = _num(_attr)
+            if _v is None:
+                continue
+            setattr(player, _attr, max(1, min(100, int(_v * _scale))))
+        # Verify and nudge: truncation can strand the overall a point
+        # short (Copilot R3 review). Bounded; a player already at all-100
+        # is at overall 100 >= target by construction.
+        for _ in range(10):
+            if int(player.overall_rating()) >= target:
+                break
+            for _attr in _attrs:
+                _v = _num(_attr)
+                if _v is None or _v >= 100:
+                    continue
+                setattr(player, _attr, int(_v) + 1)
     
     # Two roster salary-share curves for a 23-man NHL roster, largest to
     # smallest, blended per club by payroll target (see
@@ -742,26 +875,92 @@ class DatabaseGenerator:
                 age_lo, age_hi = 18, 24
             if target_sal < 9_000_000:
                 tier_cap = 89
+                _generational_draw = False
             elif target_sal < 12_000_000:
                 tier_cap = 94
+                _generational_draw = False
             else:
-                # 95+ (Generational) is extremely rare even for top slots.
-                # Only 2% of $12M+ slots can even roll generational; the rest
-                # cap at 94 (Superstar). This keeps league-wide Generational
-                # count low (McDavid-level rarity) -- typically a handful,
-                # never more than the 8-player normalization cap.
-                tier_cap = 100 if random.random() < 0.02 else 94
+                # $12M+ franchise slot.
+                # R3 (2026-10-13): the old 2% generational draw was
+                # calibrated for the broken dial (90+ unreachable, so the
+                # gate had nothing to gate). With the fixed dial a drawn
+                # slot rolls franchise dice until one lands a true 95+
+                # (see the generational pre-roll below); the rest cap at
+                # 94 (Superstar). The top-8 normalization still caps the
+                # league; a min-5 backstop there covers cold dice.
+                _generational_draw = random.random() < _R3_GENERATIONAL_SHARE
+                tier_cap = 100 if _generational_draw else 94
             # Franchise premium: a capped-out club's #1 pick is where the
             # $15M+ deals live in real life (Makar $20.4M, Celebrini
             # $18.8M). The fatter slot plus an open superstar tier lets
             # the dice land a true franchise player; the loop's
             # self-correction keeps the payroll on target either way.
-            # (Generational rarity still applies: 95+ only 2% of the time.)
             if i == 0 and _t >= 0.85:
                 target_sal *= 1.15
-                tier_cap = 100 if random.random() < 0.02 else 94
+                if random.random() < _R3_GENERATIONAL_SHARE:
+                    _generational_draw = True
+                    tier_cap = 100
             best, best_miss = None, None
             qm = self._quality_for_salary(target_sal)
+            if _generational_draw:
+                # Franchise slot: hot dice until one lands a true 95+.
+                # The fixed dial reaches 95+ organically (capped at qm 1.7
+                # the floor is 95); this just selects franchise dice for a
+                # franchise slot. Peak ages only -- the 30+ age factor
+                # would drag even max dice under 95. Salary fit is
+                # secondary here: the payroll self-corrects on later slots
+                # and the compliance backstop protects the cap.
+                for _ga in range(15):
+                    _gc = self._create_enhanced_player(
+                        random.randint(26, 29), pos, 1.70)
+                    _go = _gc.overall_rating()
+                    if _go >= 95:
+                        best = _gc
+                        break
+                    if best is None or _go > best.overall_rating():
+                        best = _gc
+                players.append(best)
+                committed += int(getattr(
+                    getattr(best, "contract", None), "salary", 0) or 0)
+                continue
+            if tier_cap == 94 and target_sal >= 9_000_000:
+                # R3 (2026-10-13): premium slot. The dice must land 90-94
+                # (Superstar/PREMIUM tier). The PREMIUM salary band
+                # ($9-13.5M) matches these slots, so the salary follows the
+                # tier -- among 90-94 rolls the closest salary fit wins.
+                # A 90+ always beats a sub-90, whatever the salary says.
+                # Peak ages only (the 30+ factor would drag hot dice down).
+                _best90, _best90_miss = None, None
+                _best_sub, _best_sub_d = None, None
+                for _pa in range(20):
+                    _pc = self._create_enhanced_player(
+                        random.randint(26, 29), pos,
+                        max(0.50, min(1.70,
+                                      qm * random.uniform(0.97, 1.03))))
+                    _po = _pc.overall_rating()
+                    _ps = int(getattr(
+                        getattr(_pc, "contract", None), "salary", 0) or 0)
+                    if 90 <= _po <= 94:
+                        _pm = abs(_ps - target_sal)
+                        if _best90 is None or _pm < _best90_miss:
+                            _best90, _best90_miss = _pc, _pm
+                        if _pm <= target_sal * 0.20:
+                            break
+                    else:
+                        # Steer toward the 90-94 window; track the
+                        # closest miss as a fallback.
+                        if _po < 90:
+                            qm = min(1.70, qm * 1.05)
+                        else:
+                            qm *= 0.96
+                        _d = abs(_po - 92)
+                        if _best_sub is None or _d < _best_sub_d:
+                            _best_sub, _best_sub_d = _pc, _d
+                best = _best90 if _best90 is not None else _best_sub
+                players.append(best)
+                committed += int(getattr(
+                    getattr(best, "contract", None), "salary", 0) or 0)
+                continue
             for attempt in range(12):
                 age = random.randint(age_lo, age_hi)
                 q = max(0.50, min(1.70, qm * random.uniform(0.96, 1.04)))
@@ -798,24 +997,13 @@ class DatabaseGenerator:
                         best = _c
                         break
                 if best is None:
-                    # Last resort: take the last candidate and force-scale down
+                    # Last resort: take the last candidate and force-scale
+                    # down. R3: scale EVERY overall input (helper), not the
+                    # old 17-attr subset -- a partial scaling would not
+                    # move the overall with the fixed quality dial.
                     best = _c
-                    try:
-                        _ovr = best.overall_rating()
-                        if _ovr > tier_cap:
-                            _scale = tier_cap / max(_ovr, 1)
-                            for _attr in ['skating', 'shooting', 'passing', 'checking',
-                                          'determination', 'teamwork', 'offensive_awareness',
-                                          'defensive_awareness', 'deking', 'strength',
-                                          'vision', 'puck_control', 'stamina',
-                                          'shooting_accuracy', 'passing_accuracy']:
-                                try:
-                                    _v = getattr(best, _attr, 50)
-                                    setattr(best, _attr, max(1, min(100, int(_v * _scale))))
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
+                    if best.overall_rating() > tier_cap:
+                        self._scale_player_to_overall(best, tier_cap)
             players.append(best)
             committed += int(getattr(getattr(best, "contract", None),
                                      "salary", 0) or 0)
@@ -1437,27 +1625,20 @@ class DatabaseGenerator:
                 # Young players (22 and under) are exempt -- they can be
                 # high-potential prospects. Final normalization caps the
                 # league at the top 8.
+                # R3 (2026-10-13): FAIL LOUD (was try/except: pass) -- a
+                # silent skip poisons the pool headless with no trace.
                 try:
                     if age > 22 and player.overall_rating() >= 95:
                         if random.random() >= 0.02:
-                            _ovr = player.overall_rating()
-                            _scale = 94 / max(_ovr, 1)
-                            for _attr in ['skating', 'shooting', 'passing',
-                                          'checking', 'determination',
-                                          'teamwork', 'offensive_awareness',
-                                          'defensive_awareness', 'deking',
-                                          'strength', 'vision', 'puck_control',
-                                          'stamina', 'shooting_accuracy',
-                                          'shooting_power', 'passing_accuracy',
-                                          'stickhandling']:
-                                try:
-                                    _v = getattr(player, _attr, 50)
-                                    setattr(player, _attr,
-                                            max(1, min(100, int(_v * _scale))))
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
+                            self._scale_player_to_overall(player, 94)
+                except Exception as _e:
+                    print("!" * 78)
+                    print("!!! R3 generational gate FAILED for a player -- "
+                          "95+ may leak through !!!")
+                    print(f"!!! Cause: {type(_e).__name__}: {_e}")
+                    print("!" * 78)
+                    if getattr(self, '_headless_sim', False):
+                        raise
                 players.append(player)
 
         return players
@@ -1669,64 +1850,61 @@ class DatabaseGenerator:
         Uses the native 100-point attribute scale (same as player_generator
         and the sim engine): NHL-quality players land roughly 56-92 before
         age adjustment.
+
+        R3 (2026-10-13): EVERY attribute feeding overall_rating() scales
+        with quality_modifier (see _R3_QUALITY_ATTRS). Previously ~45% of
+        the overall weight (shooting_power, passing_accuracy/creativity,
+        stickhandling, hockey_iq, composure, endurance, off_the_puck,
+        one_timer, loose_puck, ...) kept the fixed 50-90 constructor
+        defaults, so even max-quality rolls topped out ~87 and the
+        generational rarity gates had nothing to gate.
         """
 
         # Base attribute ranges adjusted by quality (100-point scale)
         base_min = max(10, int(56 * quality_modifier))
         base_max = min(100, int(88 * quality_modifier))
-        
+
         # Age-based adjustments
         if age < 20:
             # Young players: lower current, higher potential
             current_factor = 0.7
-            potential_boost = 1.3
         elif age < 25:
             # Prime development years
             current_factor = 0.9
-            potential_boost = 1.1
         elif age < 30:
             # Peak years
             current_factor = 1.0
-            potential_boost = 1.0
         else:
             # Veteran years
             current_factor = 0.9
-            potential_boost = 0.8
-        
-        # Set core attributes
-        core_attributes = ['skating', 'shooting', 'passing', 'checking', 'faceoffs', 
-                          'determination', 'teamwork', 'leadership', 'discipline', 'flair',
-                          'offensive_awareness', 'defensive_awareness', 'deking', 'strength']
-        
-        for attr in core_attributes:
-            base_value = random.randint(base_min, base_max)
-            adjusted_value = int(base_value * current_factor)
-            adjusted_value = max(1, min(100, adjusted_value))
-            setattr(player, attr, adjusted_value)
-        
-        # Position-specific attributes
-        if player.primary_position == PlayerPosition.GOALIE:
-            goalie_attrs = ['goaltending', 'reflexes', 'positioning', 'rebound_control', 'puck_handling']
-            for attr in goalie_attrs:
-                base_value = random.randint(min(100, base_min + 8), min(100, base_max + 12))
-                adjusted_value = int(base_value * current_factor)
-                adjusted_value = max(1, min(100, adjusted_value))
-                setattr(player, attr, adjusted_value)
-        
-        # Advanced attributes
-        advanced_attrs = ['vision', 'puck_control', 'shooting_accuracy', 'puck_protection', 
-                         'stamina', 'shot_blocking', 'injury_proneness']
-        
-        for attr in advanced_attrs:
-            if attr == 'injury_proneness':
-                # Lower is better for injury proneness (1-100 scale)
-                value = random.randint(5, 50)
+
+        def _roll(lo: int, hi: int) -> int:
+            if lo > hi:
+                lo, hi = hi, lo
+            return max(1, min(100, int(random.randint(lo, hi) * current_factor)))
+
+        is_goalie = player.primary_position == PlayerPosition.GOALIE
+        _group = "goalie" if is_goalie else "skater"
+        # Deduplicated, order-preserving: every overall input for the
+        # position group plus the (non-overall) flavor attrs.
+        _seen = set()
+        quality_attrs = []
+        for _a in _R3_QUALITY_ATTRS[_group] + _R3_QUALITY_ATTRS_FLAVOR:
+            if _a not in _seen:
+                _seen.add(_a)
+                quality_attrs.append(_a)
+
+        for attr in quality_attrs:
+            if is_goalie and attr in _R3_QUALITY_ATTRS["goalie"]:
+                # Goalies roll their crease attributes a touch higher.
+                lo, hi = min(100, base_min + 8), min(100, base_max + 12)
             else:
-                base_value = random.randint(base_min, base_max)
-                value = int(base_value * current_factor)
-                value = max(1, min(100, value))
-            setattr(player, attr, value)
-        
+                lo, hi = base_min, base_max
+            setattr(player, attr, _roll(lo, hi))
+
+        # injury_proneness: lower is better (1-100 scale) -- not quality-scaled.
+        player.injury_proneness = random.randint(5, 50)
+
         # Set playing tendencies
         player.shooting_tendency = random.randint(20, 80)
         player.hitting_tendency = random.randint(20, 80)
@@ -1763,8 +1941,34 @@ class DatabaseGenerator:
             # Older players have lower potential for growth
             potential_grades = ["B-", "C+", "C", "C-", "D", "F"]
             weights = [5, 15, 25, 30, 20, 5]
-        
+
         player.potential_grade = random.choices(potential_grades, weights=weights)[0]
+
+        # R3 (2026-10-13): truthful grades. A generated player's grade cap
+        # must cover his actual overall -- otherwise the monthly
+        # development engine treats him as over-potential and grinds him
+        # down toward the cap (a 96 OVR with a "C" grade melts). Prospects
+        # keep their rolled ceiling: grades only ever move UP here, never
+        # down, so an 18-year-old's A+ still means "can reach 96".
+        try:
+            _ovr = int(player.overall_rating())
+            if int(player._potential_cap()) < _ovr:
+                _ladder = list(Player.POTENTIAL_LADDER)
+                try:
+                    _idx = _ladder.index(
+                        (player.potential_grade or "C").strip().upper())
+                except ValueError:
+                    _idx = _ladder.index("C")
+                while (_idx < len(_ladder) - 1
+                       and int(player._potential_cap()) < _ovr):
+                    _idx += 1
+                    player.potential_grade = _ladder[_idx]
+                # The displayed ceiling is the truth for generated players;
+                # the hidden-gem machinery assigns divergent true grades
+                # later (draft/scouting), never at generation.
+                player.true_potential_grade = player.potential_grade
+        except Exception:
+            pass  # grade stays as rolled; never break generation on this
     
     def _generate_contract(self, player: Player, age: int) -> Contract:
         """Generate a realistic contract for a player.

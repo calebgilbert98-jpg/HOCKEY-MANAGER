@@ -356,12 +356,12 @@ class FantasyDraftManager:
         except Exception:
             salary = 0.0
         salary_m = max(salary, 750_000) / 1_000_000  # in millions
-        # Expected salaries recalibrated 2026-10-13 for post-normalization
-        # OVRs and the new salary tiers (superstar 86+ at $14-19M, premium
-        # 82+ at $9-13.5M, standard up to $9M).
-        if base >= 86:
+        # Expected salaries: superstar 95+ at ~$16M, premium 90+ at ~$11M,
+        # standard curve below -- mirroring player_generator.py tiers
+        # (R3 2026-10-13: top bands restored to 95/90).
+        if base >= 95:
             expected_m = 16.0
-        elif base >= 82:
+        elif base >= 90:
             expected_m = 11.0
         elif base >= 80:
             expected_m = 7.0
@@ -717,11 +717,11 @@ class FantasyDraftManager:
                 c = Contract()
                 try: o = float(o)
                 except: o = 70.0
-                # Bands recalibrated 2026-10-13 for post-normalization OVRs,
-                # mirroring player_generator.py tiers (superstar 86+,
-                # premium 82+). Only applies to contract-less players.
-                if o >= 86: ch = _rand.uniform(14, 19)
-                elif o >= 82: ch = _rand.uniform(9, 13.5)
+                # Bands mirror player_generator.py tiers (R3 2026-10-13:
+                # superstar 95+, premium 90+). Only applies to
+                # contract-less players.
+                if o >= 95: ch = _rand.uniform(14, 19)
+                elif o >= 90: ch = _rand.uniform(9, 13.5)
                 elif o >= 80: ch = _rand.uniform(6, 9)
                 elif o >= 76: ch = _rand.uniform(4, 6)
                 elif o >= 72: ch = _rand.uniform(2.5, 4)

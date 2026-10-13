@@ -721,7 +721,7 @@ class AITeamManager:
         except Exception:
             _cap = DEFAULT_CAP
         # Base demand follows the 2026 market-reset bands (superstar
-        # 86+ $14-19M, premium 82+ $9-13.5M) -- the same logic the
+        # 95+ $14-19M, premium 90+ $9-13.5M) -- the same logic the
         # league's contracts were generated on -- expressed as % of cap
         # so it scales, with any market-setter premium on top.
         from salary_cap_system import base_ask_dollars as _bad
@@ -3075,17 +3075,18 @@ class AITeamManager:
         # A player can only sign one ELC: if his current deal is
         # entry-level, the ELC band below does not apply -- the extension
         # is a second contract priced on the regular youth curve.
-        # Thresholds recalibrated 2026-10-13 for post-normalization OVRs
-        # (max ~89): superstar 86+, premium 82+, mirroring player_generator.
+        # R3 (2026-10-13): star bands restored to 95/90, mirroring
+        # player_generator (the 86+/82+ recalibration was a bandaid for
+        # the broken quality dial).
         try:
             _on_elc = bool(getattr(getattr(player, "contract", None),
                                    "entry_level", False))
         except Exception:
             _on_elc = False
-        if ovr100 >= 86:
-            lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 85) / 5
-        elif ovr100 >= 82:
-            lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 81) / 5
+        if ovr100 >= 95:
+            lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
+        elif ovr100 >= 90:
+            lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
         elif age <= 22 and not _on_elc:
             # New-CBA ELC band: floor = signing-season league minimum,
             # ceiling = max flat-salary equivalent (AAV) for the deal

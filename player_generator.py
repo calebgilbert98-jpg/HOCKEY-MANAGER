@@ -293,16 +293,22 @@ class PlayerGenerator:
 
         # Determine contract category (overall on the native 100-point scale).
         # Caleb's tier structure, with star thresholds calibrated to the
-        # post-normalization generated curve (max ~89, median ~72) and the
-        # 2026 summer market: 86+ is a franchise player (the
-        # Kaprizov/Celebrini/McDavid tier -- ~6 in the league), 82+ a
+        # 2026 summer market: 95+ is a franchise player (the
+        # McDavid/Celebrini/Makar tier -- ~6 in the league), 90+ a
         # first-line star (the Draisaitl/Matthews/MacKinnon/Eichel tier,
-        # ~20 in the league). Kids sign entry-level deals regardless
+        # ~30 in the league). Kids sign entry-level deals regardless
         # of rating -- a 21-year-old stud is still on his ELC in real life.
         # The gate is the real 3/2/1 signing-age table (CBA 9.1(b)):
         # 24-and-under first-SPC signers are Group 1; 25+ is not
         # ELC-eligible at all (the new CBA removed the old European
         # 25-27 exception).
+        #
+        # R3 (2026-10-13): gates restored to 95/90. The 2026-10-13
+        # recalibration (86+/82+) was a bandaid for the broken quality
+        # dial, which capped generated overalls at ~89 and made 95/90
+        # unreachable -- collapsing the salary pool below the $78M floor.
+        # With the R3 dial fix the original 2026-market gates are reachable
+        # again, so the compensation is reverted (root cause, not bandaid).
         try:
             from salary_cap_system import elc_years_for_age as _elc_yrs
             _entry_years = _elc_yrs(age)
@@ -310,13 +316,9 @@ class PlayerGenerator:
             _entry_years = 3 if age <= 21 else (2 if age <= 23 else 0)
         if _entry_years > 0:
             contract_type = "ENTRY_LEVEL"
-        # Thresholds recalibrated 2026-10-13 for the post-normalization OVR
-        # distribution (max ~89, 10 at 85+). The old 95/90 gates were set for
-        # the inflated pre-fix scale and became unreachable, collapsing the
-        # salary pool below the $78M floor.
-        elif overall >= 86:
+        elif overall >= 95:
             contract_type = "SUPERSTAR"
-        elif overall >= 82:
+        elif overall >= 90:
             contract_type = "PREMIUM"
         elif age <= 25 and overall < 80:
             contract_type = "BRIDGE"
@@ -356,14 +358,16 @@ class PlayerGenerator:
 
         # Calculate salary based on overall rating. Star tiers normalize
         # within their own overall band so franchise players spread across
-        # the gate instead of all pinning at the max. Bands recalibrated
-        # 2026-10-13 for post-normalization OVRs (superstar 86+, premium 82+).
-        # STANDARD uses a generous curve (58 baseline) so the thin 70-80 OVR
-        # middle class can carry payrolls to the $78M floor.
+        # the gate instead of all pinning at the max.
+        # R3 (2026-10-13): factors restored to the 95/90 design (2026 summer
+        # market): superstar 95+ spreads $14-19M, premium 90+ spreads
+        # $9-13.5M. STANDARD keeps the generous 2026-10-13 curve
+        # ((ovr-58)/24, max $9M) so the 80s middle class carries payrolls
+        # to the $78M floor.
         if contract_type == "SUPERSTAR":
-            salary_factor = (overall - 85) / 5
+            salary_factor = (overall - 94) / 6
         elif contract_type == "PREMIUM":
-            salary_factor = (overall - 81) / 5
+            salary_factor = (overall - 89) / 6
         elif contract_type == "STANDARD":
             salary_factor = (overall - 58) / 24
         else:

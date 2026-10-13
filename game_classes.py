@@ -1163,8 +1163,8 @@ class Player:
         """Overall-rating ceiling implied by the player's potential grade.
 
         Grades map onto the live overall scale (generated players sit
-        ~62-83; generational talents reach ~90). Tier gaps preserve the
-        original design's spacing (a full grade ~ 6-7 points).
+        ~62-83; generational (A+) talents reach 95+). Tier gaps preserve
+        the original design's spacing (a full grade ~ 6-7 points).
 
         Uses the TRUE (hidden) grade: a late-round gem develops toward what
         he really is, not what the scouts think. Falls back to the displayed
@@ -1174,7 +1174,14 @@ class Player:
               self.potential_grade) or 'C').strip().upper()
         base = {'A': 87, 'B': 82, 'C': 76, 'D': 69, 'F': 62}
         cap = base.get(g[:1], 76)
-        if len(g) > 1:
+        if g == 'A+':
+            # R3 (2026-10-13): generational ceiling. The quality-dial fix
+            # lets true 95+ talent generate; an A+ prospect must be ABLE
+            # to reach the top of the scale (McDavid/Celebrini tier) --
+            # otherwise the monthly development engine would grind every
+            # generational player back down toward the cap.
+            cap = 99
+        elif len(g) > 1:
             if g[1] == '+':
                 cap += 3
             elif g[1] == '-':
