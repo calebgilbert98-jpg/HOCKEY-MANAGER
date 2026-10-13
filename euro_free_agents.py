@@ -159,26 +159,25 @@ def _roll_tier(rng: random.Random) -> str:
     return rng.choices(tiers, weights=weights, k=1)[0]
 
 
-# overall_rating() is NOT a plain average: each position formula's weights
-# sum to more than 1 (measured from game_classes.py: CENTER 1.10,
-# LW/RW 1.20, LD/RD/D 1.16, GOALIE 1.00). To land a target overall, the
-# underlying attributes must be divided by the position's weight sum.
+# overall_rating() is a true weighted mean: each position formula's weights
+# sum to exactly 1.0 (normalized in game_classes.py, Oct 2026). To land a
+# target overall, the underlying attributes are set to the target directly.
 POSITION_WEIGHT_SUM = {
-    PlayerPosition.CENTER: 1.10,
-    PlayerPosition.LEFT_WING: 1.20,
-    PlayerPosition.RIGHT_WING: 1.20,
-    PlayerPosition.LEFT_DEFENSE: 1.16,
-    PlayerPosition.RIGHT_DEFENSE: 1.16,
-    PlayerPosition.DEFENSE: 1.16,
-    PlayerPosition.GOALIE: 1.00,
+    PlayerPosition.CENTER: 1.0,
+    PlayerPosition.LEFT_WING: 1.0,
+    PlayerPosition.RIGHT_WING: 1.0,
+    PlayerPosition.LEFT_DEFENSE: 1.0,
+    PlayerPosition.RIGHT_DEFENSE: 1.0,
+    PlayerPosition.DEFENSE: 1.0,
+    PlayerPosition.GOALIE: 1.0,
 }
 
 
 def _set_attributes(player: Player, target: int, rng: random.Random) -> None:
     """Pin rating attributes so overall_rating() lands at `target`.
 
-    The rating formulas are weighted sums whose weights exceed 1, so the
-    attributes are set to target / weight_sum (+/- small jitter)."""
+    The rating formulas are weighted sums whose weights total 1.0, so the
+    attributes are set to the target (+/- small jitter)."""
     wsum = POSITION_WEIGHT_SUM.get(player.primary_position, 1.0)
     base = target / wsum
     for attr in RATING_ATTRS:

@@ -1068,95 +1068,95 @@ class Player:
             )
         elif self.primary_position == PlayerPosition.CENTER:
             rating = (
-                self.skating * 0.08 +
-                self.shooting * 0.06 +
-                self.shooting_accuracy * 0.06 +
-                self.shooting_power * 0.05 +
-                self.passing * 0.07 +
-                self.passing_accuracy * 0.06 +
-                self.passing_creativity * 0.06 +
-                self.deking * 0.05 +
-                self.stickhandling * 0.06 +
-                self.vision * 0.06 +
-                self.hockey_iq * 0.06 +
-                self.offensive_awareness * 0.06 +
-                self.defensive_awareness * 0.05 +
-                self.faceoffs * 0.07 +
-                self.faceoff_wins * 0.04 +
-                self.composure * 0.04 +
-                self.endurance * 0.04 +
-                self.determination * 0.04 +
-                self.off_the_puck * 0.04 +
-                self.one_timer * 0.03 +
-                self.loose_puck * 0.02
+                self.skating * 0.07272727272727272 +
+                self.shooting * 0.054545454545454536 +
+                self.shooting_accuracy * 0.054545454545454536 +
+                self.shooting_power * 0.045454545454545456 +
+                self.passing * 0.06363636363636364 +
+                self.passing_accuracy * 0.054545454545454536 +
+                self.passing_creativity * 0.054545454545454536 +
+                self.deking * 0.045454545454545456 +
+                self.stickhandling * 0.054545454545454536 +
+                self.vision * 0.054545454545454536 +
+                self.hockey_iq * 0.054545454545454536 +
+                self.offensive_awareness * 0.054545454545454536 +
+                self.defensive_awareness * 0.045454545454545456 +
+                self.faceoffs * 0.06363636363636364 +
+                self.faceoff_wins * 0.03636363636363636 +
+                self.composure * 0.03636363636363636 +
+                self.endurance * 0.03636363636363636 +
+                self.determination * 0.03636363636363636 +
+                self.off_the_puck * 0.03636363636363636 +
+                self.one_timer * 0.027272727272727268 +
+                self.loose_puck * 0.0181818181818183
             )
         elif self.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
             rating = (
-                self.skating * 0.09 +
-                self.shooting * 0.08 +
-                self.shooting_accuracy * 0.07 +
-                self.shooting_power * 0.07 +
-                self.wristshot * 0.06 +
-                self.slapshot * 0.05 +
-                self.passing * 0.06 +
-                self.passing_accuracy * 0.05 +
-                self.passing_creativity * 0.05 +
-                self.deking * 0.06 +
-                self.stickhandling * 0.06 +
-                self.vision * 0.06 +
-                self.hockey_iq * 0.06 +
-                self.offensive_awareness * 0.07 +
-                self.defensive_awareness * 0.04 +
-                self.composure * 0.04 +
-                self.endurance * 0.04 +
-                self.determination * 0.04 +
-                self.off_the_puck * 0.05 +
-                self.one_timer * 0.04 +
-                self.backhand * 0.03 +
-                self.screen_shots * 0.03
+                self.skating * 0.075 +
+                self.shooting * 0.06666666666666667 +
+                self.shooting_accuracy * 0.05833333333333334 +
+                self.shooting_power * 0.05833333333333334 +
+                self.wristshot * 0.05 +
+                self.slapshot * 0.04166666666666667 +
+                self.passing * 0.05 +
+                self.passing_accuracy * 0.04166666666666667 +
+                self.passing_creativity * 0.04166666666666667 +
+                self.deking * 0.05 +
+                self.stickhandling * 0.05 +
+                self.vision * 0.05 +
+                self.hockey_iq * 0.05 +
+                self.offensive_awareness * 0.05833333333333334 +
+                self.defensive_awareness * 0.03333333333333333 +
+                self.composure * 0.03333333333333333 +
+                self.endurance * 0.03333333333333333 +
+                self.determination * 0.03333333333333333 +
+                self.off_the_puck * 0.04166666666666667 +
+                self.one_timer * 0.03333333333333333 +
+                self.backhand * 0.025 +
+                self.screen_shots * 0.02499999999999991
             )
         elif self.primary_position in (PlayerPosition.DEFENSE,
                                              PlayerPosition.LEFT_DEFENSE,
                                              PlayerPosition.RIGHT_DEFENSE):
             rating = (
-                self.skating * 0.08 +
-                self.passing * 0.06 +
-                self.passing_accuracy * 0.06 +
-                self.passing_creativity * 0.05 +
-                self.strength * 0.07 +
-                self.checking * 0.07 +
-                self.bodycheck * 0.06 +
-                self.defensive_awareness * 0.09 +
-                self.shot_blocking * 0.07 +
-                self.pokecheck * 0.06 +
-                self.anticipation * 0.06 +
-                self.hockey_iq * 0.06 +
-                self.composure * 0.05 +
-                self.aggressiveness * 0.05 +
-                self.balance * 0.05 +
-                self.endurance * 0.05 +
-                self.determination * 0.05 +
-                self.slapshot * 0.04 +
-                self.loose_puck * 0.04 +
-                self.pressure_player * 0.04
+                self.skating * 0.06896551724137932 +
+                self.passing * 0.05172413793103448 +
+                self.passing_accuracy * 0.05172413793103448 +
+                self.passing_creativity * 0.04310344827586207 +
+                self.strength * 0.060344827586206906 +
+                self.checking * 0.060344827586206906 +
+                self.bodycheck * 0.05172413793103448 +
+                self.defensive_awareness * 0.07758620689655173 +
+                self.shot_blocking * 0.060344827586206906 +
+                self.pokecheck * 0.05172413793103448 +
+                self.anticipation * 0.05172413793103448 +
+                self.hockey_iq * 0.05172413793103448 +
+                self.composure * 0.04310344827586207 +
+                self.aggressiveness * 0.04310344827586207 +
+                self.balance * 0.04310344827586207 +
+                self.endurance * 0.04310344827586207 +
+                self.determination * 0.04310344827586207 +
+                self.slapshot * 0.03448275862068966 +
+                self.loose_puck * 0.03448275862068966 +
+                self.pressure_player * 0.03448275862068961
             )
         else:
             # Fallback for other positions
             rating = (
-                self.skating * 0.10 +
-                self.shooting * 0.08 +
-                self.passing * 0.08 +
-                self.deking * 0.07 +
-                self.stickhandling * 0.07 +
-                self.vision * 0.07 +
-                self.hockey_iq * 0.07 +
-                self.offensive_awareness * 0.07 +
-                self.defensive_awareness * 0.07 +
-                self.composure * 0.07 +
-                self.endurance * 0.07 +
-                self.determination * 0.07 +
-                self.off_the_puck * 0.05 +
-                self.loose_puck * 0.04
+                self.skating * 0.10204081632653061 +
+                self.shooting * 0.08163265306122448 +
+                self.passing * 0.08163265306122448 +
+                self.deking * 0.07142857142857142 +
+                self.stickhandling * 0.07142857142857142 +
+                self.vision * 0.07142857142857142 +
+                self.hockey_iq * 0.07142857142857142 +
+                self.offensive_awareness * 0.07142857142857142 +
+                self.defensive_awareness * 0.07142857142857142 +
+                self.composure * 0.07142857142857142 +
+                self.endurance * 0.07142857142857142 +
+                self.determination * 0.07142857142857142 +
+                self.off_the_puck * 0.05102040816326531 +
+                self.loose_puck * 0.04081632653061229
             )
         return max(1, min(99, int(rating)))
     def _potential_cap(self) -> int:
