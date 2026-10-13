@@ -323,6 +323,10 @@ class GameManager:
                 # the draft pool is unshaped (cap compliance is also not
                 # enforced during the draft itself).
                 generator.fantasy_draft_mode = settings.get('fantasy_draft', False)
+                # R3 (2026-10-13): the generator's rarity gates fail loud
+                # in headless mode (R1 philosophy) -- propagate the flag so
+                # headless probes can never silently measure a poisoned pool.
+                generator._headless_sim = getattr(self, '_headless_sim', False)
                 debug_print("DEBUG: DatabaseGenerator created, starting generation...")
                 self.league = generator.generate_comprehensive_database(progress_callback)
                 debug_print("DEBUG: Database generation completed")
