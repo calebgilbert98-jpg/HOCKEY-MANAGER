@@ -789,7 +789,9 @@ def restore_dressed_lineup(team) -> dict:
         try:
             room = max(0, ACTIVE_ROSTER_MAX - active_roster_count(team))
         except Exception:
-            room = sk_need + go_need
+            # Fail closed: if the 23-man count is unavailable, recall
+            # nothing and let the count-exempt fillers cover the shortfall.
+            room = 0
         go_r = min(go_need, room)
         sk_r = min(sk_need, max(0, room - go_r))
         done["recalled"] = len(recall_best_available(team, sk_r, go_r))

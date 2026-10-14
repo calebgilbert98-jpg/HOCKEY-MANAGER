@@ -3578,24 +3578,37 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                           a_labels, b_labels, summary)
 
 
+def _tier_key(p):
+    """Identity key with exactly Player.__eq__ semantics (Player.id-based
+    equality: two players are the same iff their .id values are equal,
+    including the pathological None == None case)."""
+    try:
+        return ("id", getattr(p, "id", None))
+    except Exception:
+        return ("obj", id(p))
+
+
 def _nhl_tier_incoming(dst_team, assets):
     """Incoming trade assets that will actually join the NHL roster.
     Prospects stay prospects, AHLers stay AHLers (_source_roster_type) --
     so a farm/prospect goalie must NOT satisfy the 2-goalie hard block
-    (Copilot PR #12 finding 1). Mirrors _source_roster_type's default: a
-    player found on no list counts as NHL-tier. Never raises."""
+    (Copilot PR #12 finding 1). Membership uses _tier_key, which mirrors
+    _source_roster_type's Player.id-based equality (a bare id() test
+    would under-exclude equal-but-not-identical objects). A player found
+    on no list counts as NHL-tier, same as _source_roster_type's
+    default. Never raises."""
     try:
-        ahl_ids = {id(p) for p in
+        ahl_ids = {_tier_key(p) for p in
                    (getattr(dst_team, "ahl_roster", None) or [])}
-        pros_ids = {id(p) for p in
+        pros_ids = {_tier_key(p) for p in
                     (getattr(dst_team, "prospects", None) or [])}
     except Exception:
         ahl_ids, pros_ids = set(), set()
     try:
         return [a for a in (assets or [])
                 if not isinstance(a, DraftPick)
-                and id(a) not in ahl_ids
-                and id(a) not in pros_ids]
+                and _tier_key(a) not in ahl_ids
+                and _tier_key(a) not in pros_ids]
     except Exception:
         return []
 

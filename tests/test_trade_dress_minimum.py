@@ -197,6 +197,20 @@ def test_incoming_nhl_goalie_still_counts():
     assert te._nhl_tier_incoming(partner, [floater]) == [floater]
 
 
+def test_tier_filter_matches_source_roster_type_equality():
+    """Adversarial (a): the tier filter must mirror _source_roster_type's
+    Player.id-based equality -- an equal-but-not-identical farm object
+    must still be excluded."""
+    partner = _mkteam("Part3", n_skaters=20, n_goalies=2, n_ahl_skaters=0)
+    farm_goalie = _mkplayer(75, 24, PlayerPosition.GOALIE)
+    partner.ahl_roster.append(farm_goalie)
+    twin = _mkplayer(75, 24, PlayerPosition.GOALIE)
+    twin.id = farm_goalie.id  # equal (==) but not identical (is)
+    assert twin == farm_goalie and twin is not farm_goalie
+    assert te._nhl_tier_incoming(partner, [twin]) == [], \
+        "equal-but-not-identical farm goalie must be excluded"
+
+
 def test_restore_dressed_lineup_capped_at_23():
     """Finding 2: 23-man roster + injuries -> real recalls are capped at
     the 23-man limit; count-exempt fillers cover the rest (no forced
