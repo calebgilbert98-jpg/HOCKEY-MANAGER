@@ -364,7 +364,11 @@ def auto_activate_healed_ltir(team: Any, player: Any,
             try:
                 from auto_resolve import (auto_fix_salary_cap,
                                           apply_cap_fix_moves)
-                moves, err = auto_fix_salary_cap(team, short)
+                # F6: the planner knows a player is about to activate, so
+                # demotions backfilled by the pending activation are allowed
+                # (dressed-minimum guard counts incoming).
+                moves, err = auto_fix_salary_cap(
+                    team, short, incoming=[player])
             except Exception as e:
                 return False, f"Auto-shed unavailable: {e}"
             if not moves:

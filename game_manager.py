@@ -2482,6 +2482,33 @@ NHL League Office""",
                         pass
             except Exception:
                 pass
+        # F2 (Copilot PR #13): AI IR management runs for ALL AI clubs
+        # daily, not just teams that played. The injury countdown above
+        # stays game-based, but a healed parked player must be
+        # activated/reported every day -- not wait for the next game
+        # (e.g. after a trade makes activation affordable on an off-day).
+        if teams_played is not None:
+            try:
+                _played = set(teams_played or [])
+            except Exception:
+                _played = set()
+            for team in (getattr(self, 'league', None) and
+                         getattr(self.league, 'teams', None) or []):
+                try:
+                    if (getattr(team, 'team_name', None) in _played
+                            or (hasattr(self, 'user_team')
+                                and team == self.user_team)):
+                        continue
+                    import ir_system as _irs2
+                    _ir_done2 = _irs2.ai_manage_ir(
+                        team, getattr(self, 'current_date', None))
+                    try:
+                        self._report_ltir_stuck(
+                            team, (_ir_done2 or {}).get("ltir_still_parked"))
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
 
     def _process_suspension_service(self, teams_played=None):
         """Tick down DoPS suspensions once per GAME PLAYED (not per day).
@@ -6745,30 +6772,42 @@ NHL League Office""",
         }
 
     def _auto_fix_ltir_activation(self, team, player):
-        """R6 scripted compliance: shed waiver-safe salary until the healed
-        LTIR player activates off LTIR. Returns True when progress was made
-        (the targeted player activated -- other parked players get their own
-        blocker rounds with fresh auto_actions), False when no safe move
-        exists -- the headless blocker loop uses this to stop re-running a
-        hopeless fix instead of burning rounds on it. Never raises.
+        """R6 scripted compliance: shed waiver-safe salary until healed
+        LTIR players activate off LTIR.
+
+        Batch (Copilot PR #13 F3): clears ALL currently-blocked healed
+        players in one call, not just the named one -- a single headless
+        round resolves a multi-player backlog (the headless auto-resolver
+        allows 3 rounds; 4+ blocked players would otherwise strand the
+        4th). Returns True when progress was made (at least one player
+        activated -- other parked players get fresh blockers on the next
+        round), False when no safe move exists for any of them. The
+        headless blocker loop uses False to stop re-running a hopeless
+        fix instead of burning rounds on it. Never raises.
         """
         try:
             import ir_system as _irs
-            ok, msg = _irs.auto_activate_healed_ltir(
-                team, player, getattr(self, 'current_date', None))
+            current_date = getattr(self, 'current_date', None)
+            progressed = False
+            msgs = []
+            for _p, _short in _irs.healed_ltir_blocked(team):
+                # Re-check: an earlier activation in this batch may have
+                # already freed (or re-blocked) this player.
+                if _irs.ir_status_of(_p) != "LTIR":
+                    continue
+                if bool(getattr(_p, "is_injured", False)):
+                    continue
+                ok, msg = _irs.auto_activate_healed_ltir(
+                    team, _p, current_date)
+                msgs.append(msg)
+                if ok and _irs.ir_status_of(_p) == "None":
+                    progressed = True
             try:
-                self.add_news(f"LTIR auto-compliance: {msg}")
+                self.add_news(
+                    f"LTIR auto-compliance: {'; '.join(msgs) or 'nothing to do'}")
             except Exception:
                 pass
-            if not ok:
-                return False
-            # Progress, not perfection: the targeted player is off LTIR
-            # (auto_activate_healed_ltir only reports ok after a verified
-            # activate_player). Remaining parked players surface as fresh
-            # blockers with their own auto_actions on the next round --
-            # failing this round just because they remain would strand a
-            # working fix behind a misleading False.
-            return _irs.ir_status_of(player) == "None"
+            return progressed
         except Exception as e:
             try:
                 self.add_news(f"LTIR auto-compliance failed: {e}")

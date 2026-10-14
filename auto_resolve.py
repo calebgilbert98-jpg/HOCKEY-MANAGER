@@ -350,9 +350,14 @@ def auto_run_practice(team, app=None):
     if sessions == 0:
         return 0, "No practice sessions could be run"
     return sessions, None
-def auto_fix_salary_cap(team, over_amount):
+def auto_fix_salary_cap(team, over_amount, incoming=None):
     """Shed salary via releases (unsigned players), LTIR (eligible injured
     players) and safe demotions.
+
+    `incoming`: players about to JOIN the active roster (e.g. an LTIR
+    activation planned right after the shed -- Copilot PR #13 F6). They
+    count toward the dressed 18+2 minimum in the demotion guards, so a
+    demotion backfilled by the pending activation is correctly allowed.
 
     Uses the game's real cap accounting (salary_cap_system), so the
     predicted relief matches what cap_breakdown() shows after the moves
@@ -538,7 +543,8 @@ def auto_fix_salary_cap(team, over_amount):
         if not _on_ahl:
             try:
                 if (would_break_dress_minimum is not None
-                        and would_break_dress_minimum(team, [p])):
+                        and would_break_dress_minimum(
+                            team, [p], incoming=incoming)):
                     continue
             except Exception:
                 pass
@@ -604,7 +610,8 @@ def auto_fix_salary_cap(team, over_amount):
             continue
         try:
             if (would_break_dress_minimum is not None
-                    and would_break_dress_minimum(team, demoted + [p])):
+                    and would_break_dress_minimum(
+                        team, demoted + [p], incoming=incoming)):
                 dress_skipped += 1
                 continue
         except Exception:
@@ -694,7 +701,8 @@ def auto_fix_salary_cap(team, over_amount):
                                 and would_break_dress_minimum(
                                     team,
                                     demoted + _pair_demoted + [p],
-                                    incoming=_pair_recalled + [q])):
+                                    incoming=(list(incoming or [])
+                                              + _pair_recalled + [q]))):
                             continue
                     except Exception:
                         pass

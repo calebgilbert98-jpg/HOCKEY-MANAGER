@@ -212,12 +212,12 @@ def test_r6_blocker_auto_returns_affordable_healed_player():
     assert irs.ir_status_of(star) == "None"
 
 
-def test_r6_multi_parked_auto_action_reports_progress_per_player():
-    # Invariant: with TWO healed players parked, the first blocker's
-    # auto_action reports progress (True) once ITS player activates --
-    # even though the second player remains blocked. The headless loop
-    # must not strand a working fix behind a misleading False; the
-    # second player gets his own fresh blocker round.
+def test_r6_multi_parked_batch_clears_all():
+    # Invariant (Copilot PR #13 F3): with TWO healed players parked, ONE
+    # auto_action call clears BOTH (bounded batch) -- a single headless
+    # round resolves a multi-player backlog instead of needing one round
+    # per player. Returns True on progress; False only when no safe move
+    # exists for any of them.
     from game_manager import GameManager
     t = Team("Two Parked", "Test City", "Div", "Conf")
     t.salary_cap = CAP
@@ -247,18 +247,14 @@ def test_r6_multi_parked_auto_action_reports_progress_per_player():
     blocker = gm._ltir_compliance_blocker()
     assert blocker is not None and blocker["id"] == "ltir_compliance"
     _label, cb = blocker["auto_action"]
-    assert cb() is True, \
-        "auto_action must report progress once its player activates"
-    # Exactly one parked player remains; a fresh blocker names him.
-    remaining = irs.healed_ltir_blocked(t)
-    assert len(remaining) == 1, \
-        f"one player should remain parked, got {len(remaining)}"
-    blocker2 = gm._ltir_compliance_blocker()
-    assert blocker2 is not None
-    _label2, cb2 = blocker2["auto_action"]
-    assert cb2() is True
-    assert irs.healed_ltir_blocked(t) == []
+    assert cb() is True, "batch must make progress"
+    # Both players activated in the single batch call.
+    assert irs.healed_ltir_blocked(t) == [], \
+        "batch must clear every blocked player"
+    assert irs.ir_status_of(star1) == "None"
+    assert irs.ir_status_of(star2) == "None"
     assert irs.is_compliant_with_ltir(t)
+    assert gm._ltir_compliance_blocker() is None, "blocker must clear"
 
 
 def test_r6_get_continue_state_wires_ltir_blocker():
@@ -399,3 +395,54 @@ def test_r6_stuck_report_dedup_player_team_reason():
     gm2.news_log = []
     gm2._report_ltir_stuck(t, stuck)
     assert len(gm2.news_log) == 1, "retry after fix must deliver"
+
+
+def test_r6_planner_counts_pending_activation_for_dress_minimum():
+    # Invariant (Copilot PR #13 F6): at exactly the dressed 18+2 minimum
+    # with no AHL backfill, a demotion looks illegal to the cap planner --
+    # unless it knows the healed player is about to activate and refill
+    # the slot. The planner must count the pending activation (incoming)
+    # instead of falsely reporting "no safe move".
+    from game_manager import GameManager  # noqa: F401 (import smoke)
+    t = Team("At Minimum", "Test City", "Div", "Conf")
+    t.salary_cap = CAP
+    # 18 healthy $5M two-way skaters (waiver-exempt -> safe demotions)
+    # + 2 $3.5M goalies + $9M star = $106M charge vs $104M cap.
+    # Activating the star removes his $9M relief -> $2M shortfall, covered
+    # by demoting ONE $5M skater (sheds ~$4.1M). Without the incoming
+    # player counted, that demotion looks illegal (17 < 18 skaters).
+    t.roster = ([_mk(f"Skater{i}", 5_000_000, 3, ovr=78) for i in range(18)]
+                + [_mk("GoalieA", 3_500_000, 3, ovr=80,
+                       pos=PlayerPosition.GOALIE),
+                   _mk("GoalieB", 3_500_000, 3, ovr=80,
+                       pos=PlayerPosition.GOALIE)])
+    t.ahl_roster = []  # no backfill: Step-3 pairs unavailable
+    star = _mk("Star", 9_000_000, 5, ovr=92, age=27, two_way=False)
+    t.roster.append(star)
+    star.is_injured = True
+    star.games_remaining_injured = 30
+    ok, _ = irs.place_on_ltir(t, star, "2026-10-01")
+    assert ok, "LTIR placement must succeed"
+    star.is_injured = False
+    star.games_remaining_injured = 0
+    # $107M charge vs $104M cap + $0 pool-after = $3M shortfall.
+    blocked = irs.healed_ltir_blocked(t)
+    assert len(blocked) == 1 and blocked[0][1] > 0
+
+    ok, msg = irs.auto_activate_healed_ltir(t, star, date(2026, 11, 1))
+    assert ok, f"demote+activate must succeed, not report no-safe-move: {msg}"
+    assert irs.ir_status_of(star) == "None", "player must be off LTIR"
+    assert irs.is_compliant_with_ltir(t), "club must be cap-compliant"
+    # Dress minimum intact: 18 skaters + 2 goalies available.
+    from roster_limits import DRESSED_SKATERS_MIN, DRESSED_GOALIES_MIN
+    sk = sum(1 for p in t.roster
+             if not bool(getattr(p, "is_injured", False))
+             and getattr(getattr(p, "primary_position", None),
+                         "name", "") != "GOALIE"
+             and irs.ir_status_of(p) == "None")
+    go = sum(1 for p in t.roster
+             if getattr(getattr(p, "primary_position", None),
+                        "name", "") == "GOALIE"
+             and irs.ir_status_of(p) == "None")
+    assert sk >= DRESSED_SKATERS_MIN and go >= DRESSED_GOALIES_MIN, \
+        f"lineup must stay legal: {sk} skaters, {go} goalies"
