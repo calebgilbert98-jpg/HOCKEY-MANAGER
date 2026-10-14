@@ -191,6 +191,12 @@ def trade_breaks_dress_minimum(team, outgoing, incoming=None):
         the day gates handle the recall.
     would_break_dress_minimum is left untouched for its demotion/waiver
     callers. Returns (blocked: bool, reason: str).
+
+    NOTE: `incoming` must contain only players who will actually join the
+    club's NHL roster. Prospects stay prospects and AHLers stay AHLers
+    (trade_engine._source_roster_type) -- a farm goalie must not satisfy
+    the 2-goalie hard block. The execute_trade call site filters to
+    NHL-tier incoming before calling.
     """
     try:
         out_ids = {id(p) for p in (outgoing or [])}
@@ -763,6 +769,36 @@ def summon_emergency_fillers(team, rng=None):
     except Exception:
         pass
     return summoned
+
+
+def restore_dressed_lineup(team) -> dict:
+    """Bring a club back to a dressable 18+2 after a roster move.
+    Recalls real AHL players first, then summons emergency fillers for
+    any remaining shortfall. Real recalls are capped at the 23-man
+    active limit (Copilot PR #12 finding 2): recalling past it forces a
+    needless paper-down -- possible waiver exposure -- at the next day
+    gate. Fillers are exempt from the 23-man count, so they cover the
+    rest cleanly. Goalies are recalled before skaters: a club literally
+    cannot play without 2. No-op on a healthy lineup. Never raises.
+    Returns {"recalled": n, "summoned": n}."""
+    done = {"recalled": 0, "summoned": 0}
+    try:
+        if can_dress_lineup(team):
+            return done
+        sk_need, go_need = lineup_shortfall(team)
+        try:
+            room = max(0, ACTIVE_ROSTER_MAX - active_roster_count(team))
+        except Exception:
+            room = sk_need + go_need
+        go_r = min(go_need, room)
+        sk_r = min(sk_need, max(0, room - go_r))
+        done["recalled"] = len(recall_best_available(team, sk_r, go_r))
+        if not can_dress_lineup(team):
+            done["summoned"] = len(
+                summon_emergency_fillers(team))
+    except Exception:
+        pass
+    return done
 
 
 # --- AHL recalls ---------------------------------------------------------------

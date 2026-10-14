@@ -3270,12 +3270,12 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     # club.
     try:
         import roster_limits as _rl2
-        for _src_team, _out, _in in ((user_team, user_assets, partner_assets),
-                                     (partner_team, partner_assets, user_assets)):
+        for _src_team, _dst_team, _out, _in in (
+                (user_team, partner_team, user_assets, partner_assets),
+                (partner_team, user_team, partner_assets, user_assets)):
             _out_players = [a for a in (_out or [])
                             if not isinstance(a, DraftPick)]
-            _in_players = [a for a in (_in or [])
-                           if not isinstance(a, DraftPick)]
+            _in_players = _nhl_tier_incoming(_dst_team, _in)
             if _out_players:
                 try:
                     _dm_blocked, _dm_reason = _rl2.trade_breaks_dress_minimum(
@@ -3578,6 +3578,28 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                           a_labels, b_labels, summary)
 
 
+def _nhl_tier_incoming(dst_team, assets):
+    """Incoming trade assets that will actually join the NHL roster.
+    Prospects stay prospects, AHLers stay AHLers (_source_roster_type) --
+    so a farm/prospect goalie must NOT satisfy the 2-goalie hard block
+    (Copilot PR #12 finding 1). Mirrors _source_roster_type's default: a
+    player found on no list counts as NHL-tier. Never raises."""
+    try:
+        ahl_ids = {id(p) for p in
+                   (getattr(dst_team, "ahl_roster", None) or [])}
+        pros_ids = {id(p) for p in
+                    (getattr(dst_team, "prospects", None) or [])}
+    except Exception:
+        ahl_ids, pros_ids = set(), set()
+    try:
+        return [a for a in (assets or [])
+                if not isinstance(a, DraftPick)
+                and id(a) not in ahl_ids
+                and id(a) not in pros_ids]
+    except Exception:
+        return []
+
+
 def _post_trade_ai_recall(user_team, partner_team, league=None):
     """Recall dressed-lineup shortfalls for AI-controlled sides after a
     completed trade (Fix A follow-up, 2026-10-14). Never raises.
@@ -3603,12 +3625,7 @@ def _post_trade_ai_recall(user_team, partner_team, league=None):
                 _hum = bool(getattr(_side, "is_user_team", False))
             if _hum:
                 continue
-            if _rl.can_dress_lineup(_side):
-                continue
-            _sk_need, _go_need = _rl.lineup_shortfall(_side)
-            _rl.recall_best_available(_side, _sk_need, _go_need)
-            if not _rl.can_dress_lineup(_side):
-                _rl.ensure_dressed_lineup_auto(_side)
+            _rl.restore_dressed_lineup(_side)
         except Exception:
             continue
 

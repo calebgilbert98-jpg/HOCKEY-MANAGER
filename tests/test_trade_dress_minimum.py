@@ -161,3 +161,67 @@ def test_chained_deals_cannot_recount_backfill():
     blocked2, reason2 = rl.trade_breaks_dress_minimum(
         t, skaters2[:2], [_pick()])
     assert blocked2, f"chained drain must block once backfill is spent: {reason2}"
+
+
+# ---------------------------------------------------------------------------
+# Copilot PR #12 findings
+# ---------------------------------------------------------------------------
+
+def test_incoming_ahl_goalie_does_not_satisfy_goalie_block():
+    """Finding 1: a farm goalie stays on the farm (_source_roster_type)
+    and must NOT satisfy the 2-goalie hard block."""
+    t = _mkteam("FarmG", n_skaters=20, n_goalies=2, n_ahl_skaters=0)
+    partner = _mkteam("Part", n_skaters=20, n_goalies=2, n_ahl_skaters=0)
+    farm_goalie = _mkplayer(75, 24, PlayerPosition.GOALIE)
+    partner.ahl_roster.append(farm_goalie)
+    # The tier filter drops the farm goalie before the guard ever sees it.
+    assert te._nhl_tier_incoming(partner, [farm_goalie]) == []
+    goalie_out = next(p for p in t.roster
+                      if p.primary_position == PlayerPosition.GOALIE)
+    blocked, reason = rl.trade_breaks_dress_minimum(
+        t, [goalie_out], te._nhl_tier_incoming(partner, [farm_goalie]))
+    assert blocked, "a farm goalie must not satisfy the goalie hard block"
+    assert "goalie" in reason
+
+
+def test_incoming_nhl_goalie_still_counts():
+    """Finding 1 companion: genuine NHL-roster incoming is kept (no
+    over-blocking of real 1-for-1 goalie swaps)."""
+    partner = _mkteam("Part2", n_skaters=20, n_goalies=2, n_ahl_skaters=0)
+    nhl_goalie = next(p for p in partner.roster
+                      if p.primary_position == PlayerPosition.GOALIE)
+    assert te._nhl_tier_incoming(partner, [nhl_goalie]) == [nhl_goalie]
+    # And a player on no list at all defaults to NHL-tier (mirrors
+    # _source_roster_type).
+    floater = _mkplayer(80, 27, PlayerPosition.CENTER)
+    assert te._nhl_tier_incoming(partner, [floater]) == [floater]
+
+
+def test_restore_dressed_lineup_capped_at_23():
+    """Finding 2: 23-man roster + injuries -> real recalls are capped at
+    the 23-man limit; count-exempt fillers cover the rest (no forced
+    paper-down -- possible waiver exposure -- at the next day gate)."""
+    t = _mkteam("Cap23", n_skaters=21, n_goalies=2, n_ahl_skaters=4)
+    assert rl.active_roster_count(t) == 23
+    for p in [p for p in t.roster
+              if p.primary_position != PlayerPosition.GOALIE][:6]:
+        p.is_injured = True
+    assert not rl.can_dress_lineup(t)  # 15 dressable skaters
+    done = rl.restore_dressed_lineup(t)
+    assert done["recalled"] == 0, "no room under the 23-man max"
+    assert done["summoned"] == 3, "fillers cover the 3-man shortfall"
+    assert rl.active_roster_count(t) == 23, "23-man max respected"
+    assert rl.can_dress_lineup(t)
+    assert len(t.ahl_roster) == 4, "farm untouched when there's no room"
+
+
+def test_restore_dressed_lineup_recalls_when_room():
+    """Companion: with room under 23, real farm players are recalled
+    before any fillers are summoned."""
+    t = _mkteam("Room", n_skaters=16, n_goalies=2, n_ahl_skaters=4)
+    t.is_user_team = False
+    done = rl.restore_dressed_lineup(t)
+    assert done["recalled"] == 2
+    assert done["summoned"] == 0
+    assert rl.can_dress_lineup(t)
+    assert len(t.ahl_roster) == 2
