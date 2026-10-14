@@ -1068,6 +1068,42 @@ def apply_retention(retaining_team, player, pct, trade_date=None,
 RFA_IMPASSE_RIGHTS_MULT = 0.75
 
 
+def _will_be_ufa_at_expiry(player, years_remaining) -> bool:
+    """True when the player's contract expiry makes him a UFA (rental).
+
+    (Copilot R4 review): the rental/no-control term discounts apply to
+    pending UFAs only. A final-year player who will still be RFA at
+    expiry keeps team control via RFA rights -- he is not a rental.
+    Projects eligibility to term end (27+ or 7+ accrued seasons);
+    current eligibility via rfa_system.is_ufa_eligible covers the
+    already-eligible and Group-6 cases. Never raises; unknown -> False
+    (RFA treatment, the conservative direction for trade value).
+    """
+    try:
+        _yr = max(0, int(years_remaining or 0))
+    except Exception:
+        _yr = 0
+    try:
+        from rfa_system import is_ufa_eligible as _is_ufa_now
+        if bool(_is_ufa_now(player)):
+            return True
+    except Exception:
+        pass
+    try:
+        _age = int(getattr(player, "age", 27) or 27)
+        if _age + _yr >= 27:
+            return True
+    except Exception:
+        pass
+    try:
+        from rfa_system import _service_years as _svc_yrs
+        if int(_svc_yrs(player) or 0) + _yr >= 7:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000).
 
@@ -1144,15 +1180,18 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     # control are genuine market currency: a star with 6+ years of term
     # costs franchise-altering capital, while a pending UFA (final year
     # of his deal) is a rental and trades like one. The curve is
-    # monotonic in years_remaining (1.80 at 8+ yrs down through 0.90 for
-    # the final year to 0.60 with no term left); unsigned-RFA rights at
-    # a signing impasse keep their own 0.75 risk discount below and skip
-    # this factor (their team control via matching rights survives the
-    # unsigned status -- no double penalty). Players with no contract
-    # object stay neutral.
+    # monotonic in years_remaining (1.80 at 8+ yrs down through 1.12 at
+    # 2 yrs). The final-year rental discount (0.90) and the no-term
+    # discount (0.60) apply to pending UFAs only (Copilot R4 review): a
+    # final-year player who will still be RFA at expiry keeps team
+    # control via RFA rights -- he is not a rental, so his factor stays
+    # 1.0. Unsigned-RFA rights at a signing impasse keep their own 0.75
+    # risk discount below and skip this factor (their team control via
+    # matching rights survives the unsigned status -- no double
+    # penalty). Players with no contract object stay neutral.
     # (TUNING: R4 2026-10-13 -- calibrated so a 95 OVR 24yo with 6 yrs
-    # term prices >= 3.2 first-round equivalents and the same player as
-    # a pending UFA prices <= 60% of the term version.)
+    # term prices >= 3.2 first-round equivalents and the 1yr-term
+    # version prices <= 60% of the 6yr version.)
     try:
         _term_mult = 1.0
         _term_c = getattr(player, "contract", None)
@@ -1163,8 +1202,13 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
         except Exception:
             pass
         if _term_c is not None and not _term_impasse:
-            _term = int(getattr(_term_c, "years_remaining", 0) or 0)
-            if _term >= 8:
+            # Missing term info (stub/degenerate contract): neutral, not
+            # "no term". A real expired deal carries years_remaining=0.
+            _term_raw = getattr(_term_c, "years_remaining", None)
+            _term = None if _term_raw is None else int(_term_raw or 0)
+            if _term is None:
+                _term_mult = 1.0
+            elif _term >= 8:
                 _term_mult = 1.80
             elif _term == 7:
                 _term_mult = 1.75
@@ -1179,9 +1223,11 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
             elif _term == 2:
                 _term_mult = 1.12
             elif _term == 1:
-                _term_mult = 0.90
+                _term_mult = (0.90 if _will_be_ufa_at_expiry(player, 1)
+                             else 1.0)
             else:
-                _term_mult = 0.60
+                _term_mult = (0.60 if _will_be_ufa_at_expiry(player, 0)
+                             else 1.0)
             base *= _term_mult
     except Exception:
         pass
@@ -1376,6 +1422,8 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
     # Contract term (mirrors player_trade_value R4): years of team
     # control priced into the value. Skipped for unsigned-RFA impasse
     # rights (their own 0.75 discount below) and contract-less players.
+    # The rental (0.90) / no-control (0.60) factors apply to pending UFAs
+    # only -- a final-year RFA keeps team control (1.0).
     try:
         _tm_mult, _tm_why = 1.0, ""
         _tm_c = getattr(player, "contract", None)
@@ -1386,8 +1434,11 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         except Exception:
             pass
         if _tm_c is not None and not _tm_impasse:
-            _tm = int(getattr(_tm_c, "years_remaining", 0) or 0)
-            if _tm >= 8:
+            _tm_raw = getattr(_tm_c, "years_remaining", None)
+            _tm = None if _tm_raw is None else int(_tm_raw or 0)
+            if _tm is None:
+                _tm_mult, _tm_why = 1.0, ""
+            elif _tm >= 8:
                 _tm_mult, _tm_why = 1.80, f"{_tm} years of term: x1.80"
             elif _tm == 7:
                 _tm_mult, _tm_why = 1.75, "7 years of term: x1.75"
@@ -1402,11 +1453,19 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
             elif _tm == 2:
                 _tm_mult, _tm_why = 1.12, "2 years of term: x1.12"
             elif _tm == 1:
-                _tm_mult, _tm_why = (
-                    0.90, "final year (pending UFA): rental discount x0.90")
+                if _will_be_ufa_at_expiry(player, 1):
+                    _tm_mult, _tm_why = (
+                        0.90, "final year (pending UFA): rental x0.90")
+                else:
+                    _tm_mult, _tm_why = (
+                        1.0, "final year (RFA rights retained): x1.0")
             else:
-                _tm_mult, _tm_why = (
-                    0.60, "no term left: no team control x0.60")
+                if _will_be_ufa_at_expiry(player, 0):
+                    _tm_mult, _tm_why = (
+                        0.60, "no term left (UFA): no team control x0.60")
+                else:
+                    _tm_mult, _tm_why = (
+                        1.0, "no term left (RFA rights held): x1.0")
     except Exception:
         _tm_mult, _tm_why = 1.0, ""
     if _tm_mult != 1.0:
@@ -2603,7 +2662,13 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # real club would charge for the cap service.
     greed += _dump_toll46b
 
-    if effective >= greed:
+    # (Copilot R4 review): the D46b dump toll is a FIXED cap-service fee
+    # in untaxed ratio units -- separate it from the hockey-value demand
+    # so the franchise multiplier can't inflate a flat fee. The toll is
+    # compared in taxed-ask units (deflated by the bump): a 10x franchise
+    # ask must not turn a fixed 500-point fee into 5,000.
+    _hockey_greed = greed - _dump_toll46b
+    if effective >= _hockey_greed + _dump_toll46b / _franch_bump:
         return AIResponse('accept', "You've got a deal." + _why_tail())
 
     # Build a counter: find the smallest user asset that balances it
@@ -2631,8 +2696,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                           "We've been around on this too long. I'm moving on.")
     candidates = sorted(user_roster + user_picks, key=asset_value)
     # R4: the counter demands the full franchise-taxed shortfall -- the
-    # AI never counters below its own loyalty-modulated ask price.
-    shortfall = ev.partner_value * _franch_bump * greed - ev.user_value
+    # AI never counters below its own loyalty-modulated ask price. The
+    # fixed dump toll is added in points, untaxed (see above).
+    shortfall = (ev.partner_value * _franch_bump * _hockey_greed
+                 + _dump_toll_pts46b - ev.user_value)
     # D42: counters demand the FULL shortfall. The old 0.7 factor let a
     # 74-cents-on-the-dollar offer through whenever the user owned one
     # mid-sized asset -- the AI negotiated against itself.
