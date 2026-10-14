@@ -86,11 +86,36 @@ def test_term_premium_95_ovr_6yr_ge_32_firsts():
 
 
 def test_pending_ufa_le_60pct_of_term_version():
-    """R4 acceptance: pending UFA (final year) <= 60% of the 6yr version."""
-    v6 = te.player_trade_value(_mkplayer(95, 24, 6))
-    v1 = te.player_trade_value(_mkplayer(95, 24, 1))
+    """R4 acceptance: pending UFA (final year) <= 60% of the 6yr version.
+
+    Uses a UFA-eligible veteran (30yo): a 24yo with 1yr left is a pending
+    RFA, not a UFA (rfa_system.is_ufa_eligible: 27+ or 7+ seasons).
+    """
+    v6 = te.player_trade_value(_mkplayer(95, 30, 6))
+    v1 = te.player_trade_value(_mkplayer(95, 30, 1))
     assert v1 <= 0.60 * v6, (
         f"pending UFA {v1} must be <= 60% of 6yr term version {v6}")
+
+
+def test_final_year_rfa_keeps_control_value():
+    """A final-year player who will still be RFA at expiry is not a
+    rental: no 0.90 discount (RFA rights = retained team control)."""
+    v6 = te.player_trade_value(_mkplayer(95, 24, 6))
+    v1 = te.player_trade_value(_mkplayer(95, 24, 1))
+    # 24yo: 24+1 < 27 and no accrued seasons -> RFA -> 1.0x, so the ratio
+    # is exactly the 6yr premium inverse: 1/1.70 = 58.8% <= 60%.
+    assert v1 == v6 / 1.70 or abs(v1 / v6 - 1 / 1.70) < 0.001, (
+        f"24yo RFA 1yr {v1} should be 6yr {v6} / 1.70")
+    assert v1 <= 0.60 * v6
+
+
+def test_ufa_at_expiry_projection():
+    """26yo with 1yr left will be 27 at expiry -> UFA -> rental discount."""
+    v = te.player_trade_value(_mkplayer(90, 26, 1))
+    v2 = te.player_trade_value(_mkplayer(90, 26, 2))
+    # 1yr UFA-projected (0.90) < 2yr (1.12): the rental dip is real.
+    assert v < v2 * 0.90 / 1.12 + 1, f"26yo 1yr {v} should show rental dip vs 2yr {v2}"
+    assert abs(v / v2 - 0.90 / 1.12) < 0.01
 
 
 def test_term_curve_monotonic_across_terms():
