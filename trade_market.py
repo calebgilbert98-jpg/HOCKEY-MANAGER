@@ -491,6 +491,17 @@ def list_piece(app, league, seller, player, source="seller_list", today=None,
             ask = int(te.player_trade_value(player))
         except Exception:
             return None
+        # R4: the seller's franchise premium is part of the ask. A loyal
+        # GM's franchise piece lists at 2x/4x/10x (not plain market value)
+        # -- the same ask the direct-negotiation path demands via the
+        # franchise bump in ai_consider_trade. Never raises; non-franchise
+        # pieces list at 1.0x (unchanged).
+        try:
+            _fmult = float(te.franchise_price_mult(player, seller) or 1.0)
+            if _fmult > 1.0:
+                ask = int(ask * _fmult)
+        except Exception:
+            pass
         # Panic/urgency discount (Muck 2026-10-04): a pressured seller
         # accepts less than full value. Applied once at listing time;
         # the normal deadline decay still applies on top.

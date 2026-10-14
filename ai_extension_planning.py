@@ -37,7 +37,15 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-_POTENTIAL_PTS = {"A": 40.0, "B": 30.0, "C": 15.0, "D": 5.0, "F": 0.0}
+_POTENTIAL_PTS = {
+    # R4 fix (2026-10-13): covers all 12 _GRADE_LADDER rungs. The old
+    # 5-key dict silently zeroed the future-value read for every +/-
+    # grade -- and generated elites are overwhelmingly 'A+', so the
+    # best prospects scored 0 future points and _potential_grade()
+    # below didn't even recognize their grade. Monotonic; A+ > A.
+    "F": 0.0, "D": 5.0, "D+": 8.0, "C-": 11.0, "C": 15.0, "C+": 19.0,
+    "B-": 24.0, "B": 30.0, "B+": 34.0, "A-": 37.0, "A": 40.0, "A+": 45.0,
+}
 
 # Mirrors Player.POTENTIAL_LADDER (game_classes); kept local so this module
 # stays import-light. 12 rungs, F -> A+.
@@ -226,7 +234,7 @@ def franchise_score(player, identity=None, strategy=None) -> float:
     trust = scout_trust(identity)
     blended_idx = int(round(trust * _grade_index(grade)
                             + (1.0 - trust) * _gut_grade_index(player)))
-    blended_letter = _GRADE_LADDER[max(0, min(11, blended_idx))][0]
+    blended_letter = _GRADE_LADDER[max(0, min(11, blended_idx))]
     if age <= 21:
         youth_mult = 1.0
     elif age <= 23:
