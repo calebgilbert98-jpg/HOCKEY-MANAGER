@@ -163,8 +163,15 @@ def would_break_dress_minimum(team, outgoing, incoming=None) -> bool:
         go = sum(1 for p in (getattr(team, "roster", None) or [])
                  if is_available(p) and _is_goalie(p) and id(p) not in out_ids)
         # Incoming trade acquisitions dress for their new club (UI-BUG-04).
+        # Incoming activations (e.g. a healed LTIR player about to come
+        # off -- Copilot PR #13 F6) count too: they are joining the active
+        # roster, so only injury (not the IR/LTIR stash flag that
+        # is_available enforces) disqualifies them.
         for p in (incoming or []):
-            if not is_available(p):
+            try:
+                if bool(getattr(p, "is_injured", False)):
+                    continue
+            except Exception:
                 continue
             if _is_goalie(p):
                 go += 1

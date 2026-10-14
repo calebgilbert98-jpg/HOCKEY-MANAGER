@@ -2466,13 +2466,49 @@ NHL League Office""",
             # IR/LTIR (ir_system.py, Muck 2026-10-02): AI GMs stash their
             # long-term injuries and activate the healed, same as a human
             # would. User team is managed by the player. Never raises.
+            # R6: when scripted compliance can't free the room (no safe
+            # move), the stuck player is REPORTED via a news item -- a
+            # healed player may never sit on LTIR silently.
             try:
                 if not (hasattr(self, 'user_team')
                         and team == self.user_team):
                     import ir_system as _irs
-                    _irs.ai_manage_ir(team, getattr(self, 'current_date', None))
+                    _ir_done = _irs.ai_manage_ir(
+                        team, getattr(self, 'current_date', None))
+                    try:
+                        self._report_ltir_stuck(
+                            team, (_ir_done or {}).get("ltir_still_parked"))
+                    except Exception:
+                        pass
             except Exception:
                 pass
+        # F2 (Copilot PR #13): AI IR management runs for ALL AI clubs
+        # daily, not just teams that played. The injury countdown above
+        # stays game-based, but a healed parked player must be
+        # activated/reported every day -- not wait for the next game
+        # (e.g. after a trade makes activation affordable on an off-day).
+        if teams_played is not None:
+            try:
+                _played = set(teams_played or [])
+            except Exception:
+                _played = set()
+            for team in (getattr(self, 'league', None) and
+                         getattr(self.league, 'teams', None) or []):
+                try:
+                    if (getattr(team, 'team_name', None) in _played
+                            or (hasattr(self, 'user_team')
+                                and team == self.user_team)):
+                        continue
+                    import ir_system as _irs2
+                    _ir_done2 = _irs2.ai_manage_ir(
+                        team, getattr(self, 'current_date', None))
+                    try:
+                        self._report_ltir_stuck(
+                            team, (_ir_done2 or {}).get("ltir_still_parked"))
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
 
     def _process_suspension_service(self, teams_played=None):
         """Tick down DoPS suspensions once per GAME PLAYED (not per day).
@@ -3568,6 +3604,18 @@ NHL League Office""",
         except Exception:
             pass
         _tlog('salary_cap_done')
+        # R6 (LTIR phantom relief, 2026-10-14): a healed player cannot bank
+        # relief by sitting on LTIR -- the day can't advance until he's
+        # activated (club made compliant) or the club sheds the room to
+        # bring him back. Guarded import so an ir_system bug can never
+        # break day advancement.
+        try:
+            _ltir_blocker = self._ltir_compliance_blocker()
+            if _ltir_blocker:
+                blockers.append(_ltir_blocker)
+        except Exception:
+            pass
+        _tlog('ltir_compliance_done')
         # D46 (Wave B): the salary floor is a hard league rule -- the day
         # can't advance while the club sits under it.
         try:
@@ -6650,6 +6698,156 @@ NHL League Office""",
                 'auto_action': ('Auto-shed salary (waiver-safe)',
                                 lambda: self._auto_fix_cap(team, over)),
             }
+
+    def _ltir_compliance_blocker(self):
+        """R6: a healed player cannot remain on LTIR with relief intact.
+
+        CBA: once healthy, the player must come off LTIR -- the club must
+        be compliant under cap + remaining pool after his relief is
+        removed. Mirrors _cap_compliance_blocker (user club only; AI clubs
+        are handled by ir_system.ai_manage_ir's scripted compliance).
+
+        Healed players the club can ALREADY afford are returned
+        automatically first (idempotent repair, like the captaincy
+        auto-fix in get_continue_state): the blocker only names players
+        whose return genuinely needs cap room the club does not have.
+        The auto_action runs the same scripted compliance the headless
+        sim uses (auto-shed lowest-value movable salary, never risking
+        valuable players on waivers), then re-verifies against this
+        blocker. Never raises.
+        """
+        team = getattr(self, 'user_team', None)
+        if team is None:
+            return None
+        try:
+            import ir_system as _irs
+            # Auto-return healed players the club can already afford.
+            # (Side effect inside the blocker check is deliberate: a day
+            # advance may never leave a healthy player parked on LTIR, and
+            # this is the gate that enforces it.)
+            for _p in _irs.ltir_players(team):
+                try:
+                    if bool(getattr(_p, "is_injured", False)):
+                        continue
+                    _ok, _ = _irs.can_activate_from_ltir(team, _p)
+                    if not _ok:
+                        continue
+                    _done, _ = _irs.activate_player(
+                        team, _p, getattr(self, 'current_date', None))
+                    if _done and hasattr(self, 'news_log'):
+                        self.news_log.append({
+                            'date': self.current_date,
+                            'story': (
+                                f"📋 {getattr(_p, 'first_name', '')} "
+                                f"{getattr(_p, 'last_name', '')} activated "
+                                f"from LTIR (cap room available).")})
+                except Exception:
+                    continue
+            blocked = _irs.healed_ltir_blocked(team)
+        except Exception:
+            return None
+        if not blocked:
+            return None
+        _p, _short = blocked[0]
+        _name = (f"{getattr(_p, 'first_name', '')} "
+                 f"{getattr(_p, 'last_name', '')}").strip() or "player"
+        _others = f" (+{len(blocked) - 1} more)" if len(blocked) > 1 else ""
+        _room = (f"${_short:,} in cap room" if _short > 0
+                 else "cap room (the shortfall could not be computed)")
+        detail = (
+            f"{_name}{_others} is healthy but still on LTIR -- a healthy "
+            f"player cannot remain on LTIR under the CBA. The club needs "
+            f"{_room} to bring {_name} back (his relief "
+            f"comes off the pool on activation). Shed salary via trade, "
+            f"waivers, or demotion -- or use auto-shed -- before advancing.")
+        return {
+            'id': 'ltir_compliance',
+            'title': 'Healed player parked on LTIR',
+            'detail': detail,
+            'action_id': 'trade',
+            'action_label': 'Open Trade Center',
+            'auto_action': ('Auto-shed to activate (waiver-safe)',
+                            lambda: self._auto_fix_ltir_activation(
+                                team, _p)),
+        }
+
+    def _auto_fix_ltir_activation(self, team, player):
+        """R6 scripted compliance: shed waiver-safe salary until healed
+        LTIR players activate off LTIR.
+
+        Batch (Copilot PR #13 F3): clears ALL currently-blocked healed
+        players in one call, not just the named one -- a single headless
+        round resolves a multi-player backlog (the headless auto-resolver
+        allows 3 rounds; 4+ blocked players would otherwise strand the
+        4th). Returns True when progress was made (at least one player
+        activated -- other parked players get fresh blockers on the next
+        round), False when no safe move exists for any of them. The
+        headless blocker loop uses False to stop re-running a hopeless
+        fix instead of burning rounds on it. Never raises.
+        """
+        try:
+            import ir_system as _irs
+            current_date = getattr(self, 'current_date', None)
+            progressed = False
+            msgs = []
+            for _p, _short in _irs.healed_ltir_blocked(team):
+                # Re-check: an earlier activation in this batch may have
+                # already freed (or re-blocked) this player.
+                if _irs.ir_status_of(_p) != "LTIR":
+                    continue
+                if bool(getattr(_p, "is_injured", False)):
+                    continue
+                ok, msg = _irs.auto_activate_healed_ltir(
+                    team, _p, current_date)
+                msgs.append(msg)
+                if ok and _irs.ir_status_of(_p) == "None":
+                    progressed = True
+            try:
+                self.add_news(
+                    f"LTIR auto-compliance: {'; '.join(msgs) or 'nothing to do'}")
+            except Exception:
+                pass
+            return progressed
+        except Exception as e:
+            try:
+                self.add_news(f"LTIR auto-compliance failed: {e}")
+            except Exception:
+                pass
+            return False
+
+    def _report_ltir_stuck(self, team, stuck):
+        """R6: surface stuck healed-LTIR players (no safe move) as news.
+
+        A healed player may never sit on LTIR silently. Dedup key is
+        (player, team, reason): a traded player re-reports at his new
+        club, a changed shortfall re-reports, and a failed delivery is
+        NOT marked reported (it retries tomorrow). Never raises.
+        """
+        if not stuck:
+            return
+        try:
+            reported = getattr(self, "_ltir_stuck_reported", None)
+            if reported is None:
+                reported = self._ltir_stuck_reported = set()
+            team_key = getattr(team, "id", None)
+            if team_key is None:
+                team_key = id(team)
+            team_name = getattr(team, "team_name", None) or "a club"
+            for _p, _name, _why in stuck:
+                try:
+                    p_key = getattr(_p, "id", None)
+                    if p_key is None:
+                        p_key = id(_p)
+                    sig = (p_key, team_key, _why)
+                    if sig in reported:
+                        continue
+                    self.add_news(
+                        f"📋 {_name} ({team_name}) remains on LTIR -- {_why}")
+                    reported.add(sig)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
                                     went_ot: bool, sim_engine=None):
