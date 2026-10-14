@@ -1090,7 +1090,10 @@ def _will_be_ufa_at_expiry(player, years_remaining) -> bool:
     except Exception:
         pass
     try:
-        _age = int(getattr(player, "age", 27) or 27)
+        # Default 0 (not 27) for ageless stubs: matches rfa_system._age,
+        # so unknown age falls through to the service check and returns
+        # False (RFA treatment) per this helper's contract.
+        _age = int(getattr(player, "age", 0) or 0)
         if _age + _yr >= 27:
             return True
     except Exception:
