@@ -720,10 +720,10 @@ class AITeamManager:
                 else DEFAULT_CAP
         except Exception:
             _cap = DEFAULT_CAP
-        # Base demand follows the 2026 market-reset bands (superstar
-        # 95+ $14-19M, premium 90+ $9-13.5M) -- the same logic the
-        # league's contracts were generated on -- expressed as % of cap
-        # so it scales, with any market-setter premium on top.
+        # Base demand follows the smooth R5 ask curve (standard formula
+        # through 89 OVR, then a $0.5M/point run to $14M at 99 OVR --
+        # no multi-million-dollar band cliffs) expressed as % of cap so
+        # it scales, with any market-setter premium on top.
         from salary_cap_system import base_ask_dollars as _bad
         _base_pct = _bad(_ovr100, _age, _on_elc, _pos_name) / _cap
         # UFA/RFA scarcity: thin market + many suitors inflates the ask
@@ -3047,13 +3047,15 @@ class AITeamManager:
                                 overall: Optional[float] = None) -> int:
         """Estimate fair market salary for a player.
 
-        Mirrors the generation gates (player_generator CONTRACT_VALUES)
-        so AI offers match the market the league was built on -- the
-        2026 summer reset (Makar $20.4M, Celebrini $18.8M, Carlsson $18M
-        at 21, Kaprizov $17M). Young stars are valued at star money, not
-        bridged: waiting only raises their ask as the cap climbs, so the
-        market pays them upfront. Demands flow through demand_for, so
-        market-setter premiums still apply on top.
+        Delegates to salary_cap_system.base_ask_dollars (R5: the old
+        duplicated band table is gone) so AI offers sit on the same smooth
+        ask curve as user negotiations and FA asks -- the 2026 summer
+        reset market (Makar $20.4M, Celebrini $18.8M, Carlsson $18M at 21,
+        Kaprizov $17M) is what already-signed generation deals look like;
+        new asks top out at $14M for a 99 OVR. Young stars are valued at
+        star money, not bridged: waiting only raises their ask as the cap
+        climbs, so the market pays them upfront. Demands flow through
+        demand_for, so market-setter premiums still apply on top.
         """
         cap_sys = self._cap_system
         cap = cap_sys.current_cap if cap_sys else DEFAULT_CAP
@@ -3071,59 +3073,36 @@ class AITeamManager:
 
         # Category mirrors PlayerGenerator.determine_contract_info, except
         # stars are priced as stars at any age -- a 21-year-old franchise
-        # player coming off his ELC asks for $16M+, not another ELC.
+        # player coming off his ELC asks star money, not another ELC.
         # A player can only sign one ELC: if his current deal is
         # entry-level, the ELC band below does not apply -- the extension
         # is a second contract priced on the regular youth curve.
-        # R3 (2026-10-13): star bands restored to 95/90, mirroring
-        # player_generator (the 86+/82+ recalibration was a bandaid for
-        # the broken quality dial).
+        # R5 (2026-10-14): single source of truth. The AI estimate used to
+        # duplicate base_ask_dollars' band table here (90+ $9-13.5M, 95+
+        # $14-19M, hard youth/veteran edges) -- the duplication is how the
+        # salary cliffs survived in this path. It now calls
+        # base_ask_dollars directly: one smooth curve (max $0.6M per OVR
+        # point, top $14M at 99 OVR) for AI offers, user talks and FA asks
+        # alike. Young stars still get star money: the youth ramp lands on
+        # the $9M core at 89 OVR, so 89+ asks are undiscounted at any age;
+        # a player currently on an ELC asks second-contract money.
         try:
             _on_elc = bool(getattr(getattr(player, "contract", None),
                                    "entry_level", False))
         except Exception:
             _on_elc = False
-        if ovr100 >= 95:
-            lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
-        elif ovr100 >= 90:
-            lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
-        elif age <= 22 and not _on_elc:
-            # New-CBA ELC band: floor = signing-season league minimum,
-            # ceiling = max flat-salary equivalent (AAV) for the deal
-            # length (3 years at <=21, 2 years at 22).
-            try:
-                from salary_cap_system import league_minimum_salary as _lms3
-                from salary_cap_system import elc_max_salary as _elc3
-                lo, hi = int(_lms3()), int(_elc3(3 if age <= 21 else 2))
-            except Exception:
-                lo, hi = 775_000, 975_000
-            f = (ovr100 - 62) / 28
-        elif age <= 25 and ovr100 < 80:
-            lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
-        elif age >= 33 and ovr100 < 82:
-            try:
-                from salary_cap_system import league_minimum_salary as _lms4
-                _vlo = int(_lms4())
-            except Exception:
-                _vlo = 775_000
-            lo, hi, f = _vlo, 5_500_000, (ovr100 - 62) / 28
-        else:
-            lo, hi, f = 1_000_000, 9_000_000, (ovr100 - 58) / 24
-        f = max(0.0, min(1.0, f))
-        base_salary = lo + (hi - lo) * f
-
-        # Position adjustments (kept small: generation is position-blind)
         pos = player.primary_position
-        if pos == PlayerPosition.GOALIE:
-            base_salary *= 1.1
-        elif pos == PlayerPosition.CENTER:
-            base_salary *= 1.05
+        pos_name = pos.value if hasattr(pos, "value") else str(pos)
+        try:
+            from salary_cap_system import base_ask_dollars as _bad
+            base_salary = _bad(ovr100, age, _on_elc, pos_name)
+        except Exception:
+            base_salary = 1_000_000
 
         # Convert to cap % so demands scale with the cap, then apply any
         # market-setter premium through the single choke point. Scarcity
         # rides along: one market for AI estimates and user talks alike.
         base_cap_pct = base_salary / cap
-        pos_name = pos.value if hasattr(pos, "value") else str(pos)
         if cap_sys:
             league = getattr(self, "_league_ref", None)
             season = getattr(league, "season_year", 0) if league else 0

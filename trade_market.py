@@ -1640,7 +1640,7 @@ def perception_discount(app, league, player):
 
 def contract_worth(player):
     """Is he worth the cap hit? Compares the hit to the 2026 market salary
-    for his quality (base_ask_dollars band midpoint). Returns
+    for his quality (base_ask_dollars smooth curve). Returns
     (ratio, scout_note): ratio < 1 = overpaid, > 1 = team-friendly.
     Never raises; neutral (1.0, '') when unjudgeable."""
     try:

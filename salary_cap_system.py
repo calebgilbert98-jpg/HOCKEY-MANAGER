@@ -392,18 +392,28 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
                      position: str = "") -> int:
     """Base annual salary a player asks for, BEFORE market-setter premium.
 
-    The 2026 summer market reset, shared by every negotiation path (user
-    contract talks, AI free agency, AI extensions): superstar 95+ asks
-    $14-19M, premium 90+ asks $9-13.5M -- the same bands the league's
-    contracts were generated on and the AI's own estimate mirrors. Below
-    the star tiers the regular youth / veteran / middle-class curves
-    apply. A player can only sign one ELC, so a player currently on an
+    One continuous curve shared by every negotiation path (user contract
+    talks, AI free agency, AI extensions): the prime-age core curve runs
+    the standard formula through 89 OVR ($1-9M) then climbs a straight
+    $0.5M/point from 89 to 99 OVR, topping out at $14M before the small
+    positional nudge (goalies $15.4M, centers $14.7M at 99) -- no real salary
+    curve has multi-million-dollar discontinuities (Matthews $13.25M,
+    MacKinnon $12.6M, McDavid $12.5M -- smooth). Youth (<=25) and veteran
+    (33+) keep their old discounted bands through 74 OVR, then ride a
+    straight 74->89 ramp that lands exactly on the $9M core -- the old
+    hard <80/<82 band edges (a $4.8M youth cliff and $6.2M veteran cliff)
+    are gone. A player can only sign one ELC, so a player currently on an
     ELC asks second-contract money, not the ELC band.
 
-    R3 (2026-10-13): star bands restored to 95/90. The 2026-10-13
-    recalibration (86+/82+) was a bandaid for the broken quality dial;
-    with the R3 dial fix the original 2026-market bands are reachable
-    again.
+    R5 (2026-10-14): replaced the tiered bands (90+ $9-13.5M, 95+
+    $14-19M) whose in-band steps were $0.75-0.83M/point with $2.08M,
+    $4.8M and $6.2M cliffs at the 94/95, youth and veteran band edges.
+    No step budget can span $9M -> $19M over 10 OVR points, so the top
+    compresses to $14M at 99 -- closer to the real market the roadmap
+    cites. Max |ask(ovr+1) - ask(ovr)| <= $0.6M for ovr 70-99 at every
+    age and position (goalie nudge included). Generation bands in
+    player_generator CONTRACT_VALUES are untouched: they price already-
+    signed deals, this prices future asks.
 
     Bands are fractions of the 2026 $104M cap, so callers dividing by
     the live cap get demands that scale as the cap climbs. Callers feed
@@ -417,35 +427,59 @@ def base_ask_dollars(ovr100: int, age: int, on_elc: bool = False,
         age = int(age)
     except Exception:
         age = 27
-    if ovr100 >= 95:
-        lo, hi, f = 14_000_000, 19_000_000, (ovr100 - 94) / 6
-    elif ovr100 >= 90:
-        lo, hi, f = 9_000_000, 13_500_000, (ovr100 - 89) / 6
-    elif age <= 22 and not on_elc:
-        # ELC-aged player asking for his (first) NHL deal.
+
+    # ELC band is flat by design (league minimum to ELC max), so no
+    # ovr-adjacent cliff is possible here. Formula unchanged; it is now
+    # checked before the star tiers (a first NHL deal is ELC-capped even
+    # for a 90+ OVR youngster -- the old code priced those at star money).
+    if age <= 22 and not on_elc:
         try:
             lo, hi = int(league_minimum_salary()), int(
                 elc_max_salary(3 if age <= 21 else 2))
         except Exception:
             lo, hi = 775_000, 975_000
         f = (ovr100 - 62) / 28
-    elif age <= 25 and ovr100 < 80:
-        lo, hi, f = 1_200_000, 5_000_000, (ovr100 - 62) / 28
-    elif age >= 33 and ovr100 < 82:
-        # VETERAN band: 33+ below the star tiers. Kept at <82 (not <90):
-        # an 82-89 veteran prices on the STANDARD middle-class curve,
-        # not as a bargain -- matches player_generator.py.
+        f = max(0.0, min(1.0, f))
+        return int(lo + (hi - lo) * f)
+
+    # Prime-age core curve. The standard formula is unchanged through 88
+    # OVR (it clamps at $9M from 82 up); 89 continues at $9M and the star
+    # run climbs $0.5M per point to $14M at 99.
+    if ovr100 >= 89:
+        core = 9_000_000 + (ovr100 - 89) * 500_000
+    else:
+        f = (ovr100 - 58) / 24
+        f = max(0.0, min(1.0, f))
+        core = 1_000_000 + 8_000_000 * f
+
+    # Youth / veteran: the old discounted bands apply through 74 OVR
+    # unchanged; above that a straight 74->89 ramp lands exactly on the
+    # $9M core. This replaces the old hard <80 (youth) / <82 (veteran)
+    # band edges, which produced $4.8M and $6.2M cliffs. The ramp slope
+    # (~$0.41-0.46M/point) keeps every ovr-adjacent step inside the
+    # $0.6M budget at every age, goalie nudge included.
+    base = core
+    if age <= 25 and ovr100 < 89:
+        if ovr100 <= 74:
+            f = (ovr100 - 62) / 28
+            f = max(0.0, min(1.0, f))
+            base = 1_200_000 + 3_800_000 * f
+        else:
+            _y74 = 1_200_000 + 3_800_000 * (12 / 28)
+            base = _y74 + (ovr100 - 74) * (9_000_000 - _y74) / 15
+    elif age >= 33 and ovr100 < 89:
         try:
             _vlo = int(league_minimum_salary())
         except Exception:
             _vlo = 775_000
-        lo, hi, f = _vlo, 3_750_000, (ovr100 - 62) / 28
-    else:
-        # STANDARD: 1-9M with generous (ovr-58)/24 curve, mirroring
-        # player_generator.py recalibration (2026-10-13).
-        lo, hi, f = 1_000_000, 9_000_000, (ovr100 - 58) / 24
-    f = max(0.0, min(1.0, f))
-    base = lo + (hi - lo) * f
+        if ovr100 <= 74:
+            f = (ovr100 - 62) / 28
+            f = max(0.0, min(1.0, f))
+            base = _vlo + (3_750_000 - _vlo) * f
+        else:
+            _v74 = _vlo + (3_750_000 - _vlo) * (12 / 28)
+            base = _v74 + (ovr100 - 74) * (9_000_000 - _v74) / 15
+
     # Generation is position-blind; the established estimate carries a
     # small positional nudge and the ask matches it.
     _pos = str(position or "").upper()
