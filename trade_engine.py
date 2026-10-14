@@ -3255,27 +3255,36 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     except Exception:
         pass
 
-    # Dress-minimum guard (BUG FIX 2026-10-07): a trade must not leave
-    # either club unable to dress 18 skaters + 2 goalies. The AI market
-    # was trading away both of a team's goalies (e.g. Anaheim -> Florida
-    # day 1), leaving the club unable to play games. Incoming assets
-    # count toward the post-deal lineup (1-for-1 goalie swap stays legal).
+    # Dress-minimum guard (Oct-7 bug fix, rescoped 2026-10-14 Fix A): the
+    # original guard blocked EVERY roster-imbalanced deal, strangling the
+    # "roster player for futures" archetype (2,187 AI deals blocked vs
+    # 442 completed in one sim). The real Oct-7 bug was only ever goalies
+    # (AI trading away both of a club's goalies on day 1). Final policy,
+    # stated once: goalies < 2 post-deal is a HARD block (a club cannot
+    # play without 2 goalies); skaters < 18 post-deal blocks ONLY when
+    # AHL backfill cannot cover the shortfall -- real clubs recall from
+    # the farm after a rental-for-picks deal, and ensure_dressed_lineup_auto
+    # / the day gates handle the recall. This reconciles the R1 comment
+    # above (no roster-size vetoes on chained strategy) with the crease
+    # fix: the only hard veto left is the one that prevents an unplayable
+    # club.
     try:
         import roster_limits as _rl2
-        for _src_team, _out, _in in ((user_team, user_assets, partner_assets),
-                                     (partner_team, partner_assets, user_assets)):
+        for _src_team, _dst_team, _out, _in in (
+                (user_team, partner_team, user_assets, partner_assets),
+                (partner_team, user_team, partner_assets, user_assets)):
             _out_players = [a for a in (_out or [])
                             if not isinstance(a, DraftPick)]
-            _in_players = [a for a in (_in or [])
-                           if not isinstance(a, DraftPick)]
+            _in_players = _nhl_tier_incoming(_dst_team, _in)
             if _out_players:
                 try:
-                    if _rl2.would_break_dress_minimum(
-                            _src_team, _out_players, _in_players):
+                    _dm_blocked, _dm_reason = _rl2.trade_breaks_dress_minimum(
+                        _src_team, _out_players, _in_players)
+                    if _dm_blocked:
                         _tname = getattr(_src_team, "team_name", "?")
                         return _blocked(
                             f"{_tname} would be unable to dress a full lineup "
-                            f"(18 skaters + 2 goalies) after this trade -- deal blocked.")
+                            f"after this trade ({_dm_reason}) -- deal blocked.")
                 except Exception:
                     # Fail-safe: if the guard errors, block the trade
                     # (better than allowing a roster-breaking deal through)
@@ -3569,6 +3578,71 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                           a_labels, b_labels, summary)
 
 
+def _tier_key(p):
+    """Identity key with exactly Player.__eq__ semantics (Player.id-based
+    equality: two players are the same iff their .id values are equal,
+    including the pathological None == None case)."""
+    try:
+        return ("id", getattr(p, "id", None))
+    except Exception:
+        return ("obj", id(p))
+
+
+def _nhl_tier_incoming(dst_team, assets):
+    """Incoming trade assets that will actually join the NHL roster.
+    Prospects stay prospects, AHLers stay AHLers (_source_roster_type) --
+    so a farm/prospect goalie must NOT satisfy the 2-goalie hard block
+    (Copilot PR #12 finding 1). Membership uses _tier_key, which mirrors
+    _source_roster_type's Player.id-based equality (a bare id() test
+    would under-exclude equal-but-not-identical objects). A player found
+    on no list counts as NHL-tier, same as _source_roster_type's
+    default. Never raises."""
+    try:
+        ahl_ids = {_tier_key(p) for p in
+                   (getattr(dst_team, "ahl_roster", None) or [])}
+        pros_ids = {_tier_key(p) for p in
+                    (getattr(dst_team, "prospects", None) or [])}
+    except Exception:
+        ahl_ids, pros_ids = set(), set()
+    try:
+        return [a for a in (assets or [])
+                if not isinstance(a, DraftPick)
+                and _tier_key(a) not in ahl_ids
+                and _tier_key(a) not in pros_ids]
+    except Exception:
+        return []
+
+
+def _post_trade_ai_recall(user_team, partner_team, league=None):
+    """Recall dressed-lineup shortfalls for AI-controlled sides after a
+    completed trade (Fix A follow-up, 2026-10-14). Never raises.
+
+    The rescoped guard allows "roster player for futures" deals when AHL
+    backfill covers the shortfall; this makes the promise real by moving
+    the counted backfill immediately, so chained deals can't re-count
+    the same farm depth. Human-managed clubs are skipped -- their recalls
+    stay a human decision.
+    """
+    try:
+        import roster_limits as _rl
+        from game_classes import is_human_managed as _ihm
+    except Exception:
+        return
+    for _side in (user_team, partner_team):
+        try:
+            if _side is None:
+                continue
+            try:
+                _hum = bool(_ihm(_side))
+            except Exception:
+                _hum = bool(getattr(_side, "is_user_team", False))
+            if _hum:
+                continue
+            _rl.restore_dressed_lineup(_side)
+        except Exception:
+            continue
+
+
 def _maybe_fire_trade_speculation(league, user_team, partner_team,
                                   user_assets, partner_assets,
                                   user_ratio, date_str) -> None:
@@ -3770,5 +3844,17 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                 if _hum:
                     continue
                 _dr.auto_press_response(side, press_event)
+    except Exception:
+        pass
+    # Fix A follow-up (2026-10-14): the rescoped dress-minimum guard lets
+    # "roster player for futures" deals through when AHL backfill covers
+    # the shortfall. Make that promise real: immediately recall the
+    # shortfall for AI-controlled sides. Without this, chained AI deals
+    # re-count the same farm depth (up to 3/tick in the market) and no
+    # recall ever executes between them. Human-managed clubs are skipped
+    # -- their recalls stay a human decision via the recall picker/day
+    # gates, same rule as the press cascade above.
+    try:
+        _post_trade_ai_recall(user_team, partner_team, league)
     except Exception:
         pass
