@@ -1140,6 +1140,52 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     elif salary < expected * 0.6 and ovr >= 70:
         base *= 1.1  # bargain deal
 
+    # R4 -- contract term is priced into trade value. Years of team
+    # control are genuine market currency: a star with 6+ years of term
+    # costs franchise-altering capital, while a pending UFA (final year
+    # of his deal) is a rental and trades like one. The curve is
+    # monotonic in years_remaining (1.80 at 8+ yrs down through 0.90 for
+    # the final year to 0.60 with no term left); unsigned-RFA rights at
+    # a signing impasse keep their own 0.75 risk discount below and skip
+    # this factor (their team control via matching rights survives the
+    # unsigned status -- no double penalty). Players with no contract
+    # object stay neutral.
+    # (TUNING: R4 2026-10-13 -- calibrated so a 95 OVR 24yo with 6 yrs
+    # term prices >= 3.2 first-round equivalents and the same player as
+    # a pending UFA prices <= 60% of the term version.)
+    try:
+        _term_mult = 1.0
+        _term_c = getattr(player, "contract", None)
+        _term_impasse = False
+        try:
+            _term_impasse = bool(
+                _rfa_system.rfa_rights_at_impasse(player))
+        except Exception:
+            pass
+        if _term_c is not None and not _term_impasse:
+            _term = int(getattr(_term_c, "years_remaining", 0) or 0)
+            if _term >= 8:
+                _term_mult = 1.80
+            elif _term == 7:
+                _term_mult = 1.75
+            elif _term == 6:
+                _term_mult = 1.70
+            elif _term == 5:
+                _term_mult = 1.58
+            elif _term == 4:
+                _term_mult = 1.45
+            elif _term == 3:
+                _term_mult = 1.30
+            elif _term == 2:
+                _term_mult = 1.12
+            elif _term == 1:
+                _term_mult = 0.90
+            else:
+                _term_mult = 0.60
+            base *= _term_mult
+    except Exception:
+        pass
+
     # Volatility tax: hotheads cost less, but a superstar is worth the headache.
     try:
         base *= _reputation_system.volatility_trade_discount(player)
@@ -1232,8 +1278,8 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
     recomputes the identical math while recording each step so the
     "Analyze Trade Value" dialog can show WHY a player is worth what he
     is (attributes/OVR, age curve, potential, contract efficiency,
-    volatility, goalie premium, RFA-impasse rights, trade-request discount,
-    recent performance).
+    contract term, volatility, goalie premium, RFA-impasse rights,
+    trade-request discount, recent performance).
     Never raises -- returns ([], total) best-effort on weird inputs.
     """
     comps = []
@@ -1324,6 +1370,51 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
             'label': 'Contract efficiency',
             'delta': int(_new - running),
             'detail': f"{_cap_why}: x{_cap_mult:g}",
+        })
+        running = _new
+
+    # Contract term (mirrors player_trade_value R4): years of team
+    # control priced into the value. Skipped for unsigned-RFA impasse
+    # rights (their own 0.75 discount below) and contract-less players.
+    try:
+        _tm_mult, _tm_why = 1.0, ""
+        _tm_c = getattr(player, "contract", None)
+        _tm_impasse = False
+        try:
+            _tm_impasse = bool(
+                _rfa_system.rfa_rights_at_impasse(player))
+        except Exception:
+            pass
+        if _tm_c is not None and not _tm_impasse:
+            _tm = int(getattr(_tm_c, "years_remaining", 0) or 0)
+            if _tm >= 8:
+                _tm_mult, _tm_why = 1.80, f"{_tm} years of term: x1.80"
+            elif _tm == 7:
+                _tm_mult, _tm_why = 1.75, "7 years of term: x1.75"
+            elif _tm == 6:
+                _tm_mult, _tm_why = 1.70, "6 years of term: x1.70"
+            elif _tm == 5:
+                _tm_mult, _tm_why = 1.58, "5 years of term: x1.58"
+            elif _tm == 4:
+                _tm_mult, _tm_why = 1.45, "4 years of term: x1.45"
+            elif _tm == 3:
+                _tm_mult, _tm_why = 1.30, "3 years of term: x1.30"
+            elif _tm == 2:
+                _tm_mult, _tm_why = 1.12, "2 years of term: x1.12"
+            elif _tm == 1:
+                _tm_mult, _tm_why = (
+                    0.90, "final year (pending UFA): rental discount x0.90")
+            else:
+                _tm_mult, _tm_why = (
+                    0.60, "no term left: no team control x0.60")
+    except Exception:
+        _tm_mult, _tm_why = 1.0, ""
+    if _tm_mult != 1.0:
+        _new = running * _tm_mult
+        comps.append({
+            'label': 'Contract term',
+            'delta': int(_new - running),
+            'detail': _tm_why,
         })
         running = _new
 
@@ -2422,8 +2513,35 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # system's). The multiplier is applied downstream in the valuation;
     # here we just flag and continue to normal negotiation.
     _untouch = _untouchable_names(partner_team, partner_assets, _tiers)
-    # (No flat rejection — franchise pricing is handled in the valuation
-    # layer via _franchise_price_mult, modulated by GM loyalty.)
+    # R4 -- franchise pricing wired into the ask path (was dead code:
+    # franchise_price_mult() existed but no caller used it). The AI GM's
+    # own franchise-caliber pieces carry the loyalty-modulated multiplier
+    # (2x/4x/10x) on the OUTGOING side of this negotiation: the demand the
+    # other side must meet rises for the AI's crown jewels, while the
+    # incoming offer is valued at plain market value. Applied as a bump
+    # ratio (>= 1.0) so the blended accept ratio and the counter
+    # shortfall below move together. Picks are never franchise pieces.
+    # Never raises; no franchise pieces -> 1.0 (behavior unchanged).
+    _franch_bump = 1.0
+    try:
+        _franch_base = 0
+        _franch_taxed = 0
+        for _fa in partner_assets or []:
+            try:
+                _fm = 1.0 if _is_pick(_fa) else float(
+                    franchise_price_mult(_fa, partner_team) or 1.0)
+            except Exception:
+                _fm = 1.0
+            try:
+                _fav = int(asset_value(_fa) or 0)
+            except Exception:
+                _fav = 0
+            _franch_base += _fav
+            _franch_taxed += int(_fav * _fm)
+        if _franch_base > 0 and _franch_taxed > _franch_base:
+            _franch_bump = _franch_taxed / _franch_base
+    except Exception:
+        _franch_bump = 1.0
 
     # D40 -- the circumstantial rivalry gate (open / taxed / closed).
     # Never a blanket veto: role players move between rivals; the crown
@@ -2453,7 +2571,9 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                 need_bonus += 0.04 if _need_fills == 1 else 0.02
         except Exception:
             pass
-    effective = ratio + need_bonus
+    # R4: the franchise bump deflates the accept ratio -- the AI's taxed
+    # ask (outgoing side) is what the offer is measured against.
+    effective = ratio / _franch_bump + need_bonus
 
     # D42 -- the stinginess pass. The threshold is anchored at fair value
     # (1.0), not 0.95: the AI no longer sells at a 5% discount by default.
@@ -2510,7 +2630,9 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         return AIResponse('reject',
                           "We've been around on this too long. I'm moving on.")
     candidates = sorted(user_roster + user_picks, key=asset_value)
-    shortfall = ev.partner_value * greed - ev.user_value
+    # R4: the counter demands the full franchise-taxed shortfall -- the
+    # AI never counters below its own loyalty-modulated ask price.
+    shortfall = ev.partner_value * _franch_bump * greed - ev.user_value
     # D42: counters demand the FULL shortfall. The old 0.7 factor let a
     # 74-cents-on-the-dollar offer through whenever the user owned one
     # mid-sized asset -- the AI negotiated against itself.
