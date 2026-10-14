@@ -2671,7 +2671,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # compared in taxed-ask units (deflated by the bump): a 10x franchise
     # ask must not turn a fixed 500-point fee into 5,000.
     _hockey_greed = greed - _dump_toll46b
-    if effective >= _hockey_greed + _dump_toll46b / _franch_bump:
+    # The accept bar, in taxed-ask units (D2: the sweetener band below
+    # must measure "close to accept" against this same bar).
+    _accept_bar = _hockey_greed + _dump_toll46b / _franch_bump
+    if effective >= _accept_bar:
         return AIResponse('accept', "You've got a deal." + _why_tail())
 
     # Build a counter: find the smallest user asset that balances it
@@ -2776,7 +2779,7 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                 want_added=[c])
 
     # Or the AI offers to sweeten from its side if you're close
-    if effective >= greed - 0.15:
+    if effective >= _accept_bar - 0.15:
         partner_roster = [p for p in getattr(partner_team, 'roster', [])
                           if p not in partner_assets]
         sweeteners = sorted(partner_roster, key=asset_value)
