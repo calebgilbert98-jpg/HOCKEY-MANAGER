@@ -175,6 +175,53 @@ def would_break_dress_minimum(team, outgoing, incoming=None) -> bool:
         return False
 
 
+def trade_breaks_dress_minimum(team, outgoing, incoming=None):
+    """Trade-specific dress-minimum policy (Fix A, 2026-10-14).
+
+    The Oct-7 guard (would_break_dress_minimum) blocked EVERY
+    roster-imbalanced deal, strangling the "roster player for futures"
+    archetype (2,187 AI deals blocked vs 442 completed in one sim). The
+    real Oct-7 bug was only ever goalies (AI trading away both of a
+    club's goalies on day 1). Policy here:
+      - GOALIES: hard block if post-deal available goalies < 2. A club
+        literally cannot play without 2 goalies; no skater covers.
+      - SKATERS: block only if post-deal skaters < 18 AND AHL backfill
+        cannot cover the shortfall. Real clubs recall from the farm
+        after a rental-for-picks deal; ensure_dressed_lineup_auto and
+        the day gates handle the recall.
+    would_break_dress_minimum is left untouched for its demotion/waiver
+    callers. Returns (blocked: bool, reason: str).
+    """
+    try:
+        out_ids = {id(p) for p in (outgoing or [])}
+        sk = sum(1 for p in (getattr(team, "roster", None) or [])
+                 if is_available(p) and not _is_goalie(p) and id(p) not in out_ids)
+        go = sum(1 for p in (getattr(team, "roster", None) or [])
+                 if is_available(p) and _is_goalie(p) and id(p) not in out_ids)
+        # Incoming trade acquisitions dress for their new club (UI-BUG-04).
+        for p in (incoming or []):
+            if not is_available(p):
+                continue
+            if _is_goalie(p):
+                go += 1
+            else:
+                sk += 1
+        if go < DRESSED_GOALIES_MIN:
+            return (True, f"only {go} goalie(s) would remain "
+                          f"({DRESSED_GOALIES_MIN} required)")
+        if sk < DRESSED_SKATERS_MIN:
+            shortfall = DRESSED_SKATERS_MIN - sk
+            backfill = [p for p in recall_candidates(
+                team, need_skaters=shortfall) if not _is_goalie(p)]
+            if len(backfill) < shortfall:
+                return (True, f"only {sk} skaters would remain and the farm "
+                              f"covers {len(backfill)}/{shortfall} "
+                              f"({DRESSED_SKATERS_MIN} required)")
+        return (False, "")
+    except Exception:
+        return (False, "")
+
+
 def emergency_filler_charge(team) -> int:
     """Total cap charge of emergency fillers -- excluded from the day-gate
     compliance check (the league exception: summonable even over the cap)."""
