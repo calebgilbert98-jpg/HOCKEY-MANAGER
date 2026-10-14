@@ -15,6 +15,9 @@ blocker policy:
   season_meeting   -> resolve with the AI-equivalent mandate (the same
                       mandate structure + downstream wiring as the user
                       path, via resolve_ai_season_meeting)
+  ltir_compliance  -> run the blocker's own scripted compliance
+                      (auto-shed lowest-value movable salary, then
+                      activate the healed player off LTIR)
   <registry ids>   -> known BLOCKS_ADVANCE/PAUSES_DAY ids from the
                       pending-items registry: no generic policy exists;
                       fail closed with a clear abort marker.
@@ -399,6 +402,21 @@ def _resolve_dress_minimum(app, gm, blocker, log):
             f"{names}")
 
 
+def _resolve_ltir_compliance(app, gm, blocker, log):
+    """R6: run the blocker's own scripted compliance (auto-shed
+    lowest-value movable salary via auto_resolve, then activate the healed
+    player off LTIR). Fails closed: an abort marker beats a hung sim."""
+    auto = (blocker or {}).get("auto_action")
+    if not auto:
+        raise DayLoopAbort("ltir_compliance: blocker has no auto_action")
+    _label, _cb = auto
+    if _cb() is False:
+        raise DayLoopAbort(
+            "ltir_compliance: scripted compliance reports no safe move -- "
+            f"detail={blocker.get('detail', '')!r}")
+    return f"ltir_compliance: ran scripted compliance ({_label})"
+
+
 _RESOLVERS = {
     "fantasy_draft": _resolve_fantasy_draft,
     "salary_cap": _resolve_salary_cap,
@@ -406,6 +424,7 @@ _RESOLVERS = {
     "captaincy_choice": _resolve_captaincy,
     "season_meeting": _resolve_season_meeting,
     "dress_minimum": _resolve_dress_minimum,
+    "ltir_compliance": _resolve_ltir_compliance,
 }
 
 

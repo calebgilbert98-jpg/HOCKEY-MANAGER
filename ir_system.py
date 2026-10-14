@@ -26,6 +26,11 @@ LTIR (Long-Term Injured Reserve):
   - Activation: the team must be compliant under cap + remaining pool
     after the player's relief is removed -- i.e. they need his cap hit
     of breathing room, or they must shed salary first.
+  - R6 (2026-10-14): a healed player may never remain parked on LTIR.
+    Activation failures on cap room surface as a day-advance blocker for
+    the user club (game_manager._ltir_compliance_blocker); AI clubs run
+    scripted compliance (auto_activate_healed_ltir) that sheds
+    waiver-safe salary until the player activates.
 
 All functions never raise. Old saves degrade: ir_status defaults to
 "None" via getattr.
@@ -258,6 +263,136 @@ def can_activate_from_ltir(team: Any, player: Any) -> Tuple[bool, str]:
         return False, "Could not evaluate cap compliance."
 
 
+def _ltir_activation_shortfall(team: Any, player: Any) -> int:
+    """Dollars of cap room the club must free to activate this LTIR player.
+
+    Activation removes the player's relief from the pool, so the club
+    needs charge <= cap + (relief - hit). Never raises."""
+    try:
+        import salary_cap_system as _scs
+    except Exception:
+        return 0
+    try:
+        hit = _player_cap_hit(player)
+        pool_after = max(0, ltir_relief(team) - hit)
+        cap = int(getattr(team, "salary_cap", _scs.DEFAULT_CAP)
+                  or _scs.DEFAULT_CAP)
+        charge = int(_scs.compliance_charge(team) or 0)
+        return max(0, charge - (cap + pool_after))
+    except Exception:
+        return 0
+
+
+def healed_ltir_blocked(team: Any) -> List[Tuple[Any, int]]:
+    """Healed players parked on LTIR who cannot activate right now.
+
+    The R6 exploit: a healed player's activation fails on cap room and he
+    sits on LTIR forever, banking phantom relief. This returns
+    [(player, shortfall_dollars)] for every healed LTIR player whose
+    activation is currently blocked. Pure query -- never mutates (the
+    caller decides whether to auto-return affordable players or force
+    compliance). Never raises.
+    """
+    out: List[Tuple[Any, int]] = []
+    try:
+        for p in ltir_players(team):
+            try:
+                if bool(getattr(p, "is_injured", False)):
+                    continue  # genuinely hurt -- not the exploit
+                ok, _ = can_activate_from_ltir(team, p)
+                if ok:
+                    continue
+                out.append((p, _ltir_activation_shortfall(team, p)))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _player_display_name(player: Any) -> str:
+    try:
+        name = f"{getattr(player, 'first_name', '')} {getattr(player, 'last_name', '')}".strip()
+        return name or getattr(player, "full_name", None) or "player"
+    except Exception:
+        return "player"
+
+
+def auto_activate_healed_ltir(team: Any, player: Any,
+                              current_date: Any = None) -> Tuple[bool, str]:
+    """Scripted compliance (R6): a healed player cannot remain on LTIR.
+
+    Under the CBA a healthy player must come off LTIR -- the club must be
+    compliant under cap + remaining pool after his relief is removed. When
+    the club cannot afford the activation, shed the shortfall via
+    auto_resolve.auto_fix_salary_cap (waiver-safe: releases of unsigned
+    players, LTIR of other injured players, waiver-exempt demotions,
+    demote+recall paper moves -- never risks valuable players on waivers)
+    and retry, bounded. When no safe move exists the constraint is
+    reported instead of gambling, per the standing auto-resolve rule.
+
+    Returns (True, msg) when the player is off LTIR and the club is
+    compliant; (False, reason) otherwise. Never raises.
+    """
+    try:
+        if not is_on_ltir(player):
+            return False, f"{_player_display_name(player)} is not on LTIR."
+        if bool(getattr(player, "is_injured", False)):
+            remaining = int(getattr(player, "games_remaining_injured", 0) or 0)
+            return False, f"{_player_display_name(player)} is still injured ({remaining} games)."
+        for _round in range(4):
+            ok, reason = activate_player(team, player, current_date)
+            if ok:
+                return True, (
+                    f"{_player_display_name(player)} activated from LTIR "
+                    f"(club compliant).")
+            if not is_on_ltir(player):
+                # Left LTIR some other way mid-loop; nothing left to do.
+                return True, f"{_player_display_name(player)} is off LTIR."
+            ok2, reason2 = can_activate_from_ltir(team, player)
+            if ok2:
+                # can_activate says yes but activate failed: an internal
+                # disagreement -- report it, don't loop on a mystery.
+                return False, (
+                    f"Activation disagrees with itself for "
+                    f"{_player_display_name(player)}: {reason}")
+            short = _ltir_activation_shortfall(team, player)
+            if short <= 0:
+                return False, (
+                    f"Activation of {_player_display_name(player)} blocked "
+                    f"for a non-cap reason: {reason}")
+            try:
+                from auto_resolve import (auto_fix_salary_cap,
+                                          apply_cap_fix_moves)
+                moves, err = auto_fix_salary_cap(team, short)
+            except Exception as e:
+                return False, f"Auto-shed unavailable: {e}"
+            if not moves:
+                return False, (
+                    f"Cannot free ${short:,} to activate "
+                    f"{_player_display_name(player)}: "
+                    f"{err or reason2 or reason}")
+            try:
+                applied, skipped = apply_cap_fix_moves(team, moves,
+                                                       current_date)
+            except Exception as e:
+                return False, f"Auto-shed failed to apply: {e}"
+            if not applied:
+                _why = "; ".join(
+                    f"{_player_display_name(p)}: {w}"
+                    for p, w in (skipped or []))
+                return False, (
+                    f"Auto-shed applied nothing "
+                    f"({_why or err or 'no moves applied'}); cannot free "
+                    f"${short:,} to activate "
+                    f"{_player_display_name(player)}.")
+        return False, (
+            f"Compliance did not converge for "
+            f"{_player_display_name(player)} in 4 rounds.")
+    except Exception as e:
+        return False, f"LTIR compliance failed: {e}"
+
+
 def can_activate_from_ir(player: Any, current_date: Any) -> Tuple[bool, str]:
     """IR activation: 7-day minimum + healed."""
     try:
@@ -302,14 +437,17 @@ def activate_player(team: Any, player: Any,
         return False, "Could not activate player."
 
 
-def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, int]:
+def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, Any]:
     """AI GM IR/LTIR management. Never raises.
 
     - Long-term injuries (>= LTIR_MIN_GAMES) -> LTIR automatically.
     - Shorter injuries (>= 3 games) -> IR automatically.
     - Healed players on IR past the 7-day minimum -> activate.
     - Healed players on LTIR -> activate when cap-compliant.
-    Returns counts of actions taken.
+    Returns counts of actions taken, plus (R6) "ltir_still_parked":
+    [(player, name, reason)] for healed LTIR players scripted compliance
+    could not free room for -- reported every call; the caller dedups and
+    delivers. Never gambles valuable players (standing auto-resolve rule).
     """
     done = {"ltir_placed": 0, "ir_placed": 0, "activated": 0, "ltir_decisions": 0}
     try:
@@ -342,9 +480,31 @@ def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, int]:
                     if ok:
                         done["ir_placed"] += 1
             elif status in ("IR", "LTIR") and not bool(getattr(p, "is_injured", False)):
-                ok, _ = activate_player(team, p, current_date)
-                if ok:
-                    done["activated"] += 1
+                if status == "LTIR":
+                    # R6: a healed player cannot bank phantom relief by
+                    # sitting on LTIR. Scripted compliance sheds waiver-safe
+                    # salary until the player activates; when no safe move
+                    # exists it reports instead of gambling (never risks
+                    # valuable players on waivers). The report is surfaced
+                    # by the caller (game_manager), which dedups on
+                    # (player, team, reason) and marks reported only after
+                    # successful delivery -- so a traded player re-reports
+                    # at his new club, a changed shortfall re-reports, and
+                    # a failed delivery retries instead of going silent.
+                    try:
+                        ok, _why = auto_activate_healed_ltir(
+                            team, p, current_date)
+                    except Exception:
+                        ok, _why = activate_player(team, p, current_date)
+                    if ok:
+                        done["activated"] += 1
+                    else:
+                        done.setdefault("ltir_still_parked", []).append(
+                            (p, _player_display_name(p), str(_why)))
+                else:
+                    ok, _ = activate_player(team, p, current_date)
+                    if ok:
+                        done["activated"] += 1
         except Exception:
             continue
     return done
