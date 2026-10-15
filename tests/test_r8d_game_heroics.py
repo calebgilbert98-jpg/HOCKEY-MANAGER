@@ -125,12 +125,106 @@ def test_two_goals_is_not_a_hat_trick():
 
 def test_hat_trick_in_loss_never_claims_win():
     d = std_pair()
-    res = mkresult(d["home"], d["away"], 2, 5,
+    res = mkresult(d["home"], d["away"], 3, 5,
                    {1: line(d["s1"], g=3), 2: line(d["g1"], saves=15)})
     sts = stories(mkapp([res]))
     assert any("Sid Crosby" in s for s in sts), names(sts)
-    assert not any("win over" in s or "to a " in s and "victory" in s
-                   for s in sts), names(sts)
+    assert not any("win over" in s or "victory" in s for s in sts), names(sts)
+
+
+# ------------------------------------------- reviewer C round-1 killshots
+
+def test_line_capped_by_team_score_hat_trick():
+    # Reviewer C killshot 1: 3 "goals" in a 2-0 game disproves itself.
+    d = std_pair()
+    res = mkresult(d["home"], d["away"], 2, 0,
+                   {1: line(d["s1"], g=3), 2: line(d["g1"], saves=20)})
+    sts = stories(mkapp([res]))
+    assert not any("Sid Crosby" in s for s in sts), names(sts)
+
+
+def test_line_capped_by_team_score_points():
+    # Reviewer C killshot 1: 4 assists on 1 team goal is impossible.
+    d = std_pair()
+    res = mkresult(d["home"], d["away"], 1, 0,
+                   {1: line(d["s1"], g=0, a=4), 2: line(d["g1"], saves=20)})
+    sts = stories(mkapp([res]))
+    assert not any("Sid Crosby" in s for s in sts), names(sts)
+
+
+def test_phantom_player_never_fires():
+    # Reviewer C killshot 2: a non-roster object with a matching
+    # team_name label must stay silent.
+    d = std_pair()
+    phantom = types.SimpleNamespace(
+        first_name="Phantom", last_name="Scorer",
+        primary_position=types.SimpleNamespace(value="C"),
+        team_name="Pittsburgh Penguins", id=424242)
+    res = mkresult(d["home"], d["away"], 5, 2,
+                   {1: line(d["s1"], g=1), 99: line(phantom, g=3)})
+    sts = stories(mkapp([res]))
+    assert not any("Phantom Scorer" in s for s in sts), names(sts)
+
+
+def test_phantom_ot_scorer_never_fires():
+    # Reviewer C killshot 2 (OT variant).
+    d = std_pair()
+    phantom = types.SimpleNamespace(
+        first_name="Phantom", last_name="Winner",
+        primary_position=types.SimpleNamespace(value="C"),
+        team_name="Pittsburgh Penguins", id=424243)
+    evs = [goal_event(phantom, "Pittsburgh Penguins", 4)]
+    res = mkresult(d["home"], d["away"], 3, 2,
+                   {1: line(d["s1"], g=1)}, overtime=True, events=evs)
+    sts = stories(mkapp([res]))
+    assert not any("Phantom Winner" in s for s in sts), names(sts)
+
+
+def test_string_goal_total_rejected():
+    # Reviewer C killshot 3: g="3" must not fire.
+    d = std_pair()
+    bad = {"player": d["s1"], "g": "3", "a": 0, "saves": 0}
+    res = mkresult(d["home"], d["away"], 5, 2, {1: bad})
+    sts = stories(mkapp([res]))
+    assert not any("Sid Crosby" in s for s in sts), names(sts)
+
+
+def test_float_goal_total_rejected():
+    # Reviewer C killshot 3: g=3.9 must not truncate into a hat trick.
+    d = std_pair()
+    bad = {"player": d["s1"], "g": 3.9, "a": 0, "saves": 0}
+    res = mkresult(d["home"], d["away"], 5, 2, {1: bad})
+    sts = stories(mkapp([res]))
+    assert not any("Sid Crosby" in s for s in sts), names(sts)
+
+
+def test_string_score_rejected():
+    # Reviewer C killshot 3: a string home_score fails the whole result.
+    d = std_pair()
+    res = mkresult(d["home"], d["away"], 5, 2, {1: line(d["s1"], g=3)})
+    res["home_score"] = "5"
+    sts = stories(mkapp([res]))
+    assert sts == [], names(sts)
+
+
+def test_string_saves_rejected():
+    # Reviewer C killshot 3: saves="25" must not fire a shutout.
+    d = std_pair()
+    bad = {"player": d["g1"], "g": 0, "a": 0, "saves": "25"}
+    res = mkresult(d["home"], d["away"], 3, 0, {2: bad})
+    sts = stories(mkapp([res]))
+    assert not any("Marc Fleury" in s for s in sts), names(sts)
+
+
+def test_string_ot_period_rejected():
+    # Reviewer C killshot 3 (OT variant): period="4" must not fire.
+    d = std_pair()
+    ev = {"event": "Goal", "player": d["s1"],
+          "team": "Pittsburgh Penguins", "period": "4"}
+    res = mkresult(d["home"], d["away"], 3, 2,
+                   {1: line(d["s1"], g=1)}, overtime=True, events=[ev])
+    sts = stories(mkapp([res]))
+    assert not any("Sid Crosby" in s for s in sts), names(sts)
 
 
 # ------------------------------------------------------- multi-point games

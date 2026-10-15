@@ -2835,8 +2835,17 @@ _HEROICS_WEIGHTS = {
 }
 
 
+def _hero_int(v):
+    """Strict int or None. Strings, floats and bools never coerce: a
+    premise built on junk numerics must not render (reviewer C
+    killshot: g="3", saves="25", g=3.9 all fired)."""
+    if isinstance(v, bool):
+        return None
+    return v if isinstance(v, int) else None
+
+
 def _hero_line_num(line, *names):
-    """First numeric value under any of the names in a game_stats line;
+    """First integer value under any of the names in a game_stats line;
     0 on missing/junk (a premise built on missing stats must not
     render)."""
     for n in names:
@@ -2844,12 +2853,9 @@ def _hero_line_num(line, *names):
             v = (line or {}).get(n)
         except Exception:
             v = None
-        if v is None or isinstance(v, bool):
-            continue
-        try:
-            return int(v)
-        except Exception:
-            continue
+        iv = _hero_int(v)
+        if iv is not None:
+            return iv
     return 0
 
 
@@ -2887,8 +2893,11 @@ def _hero_teams_ok(home, away):
 
 def _hero_team_of(p, home, away):
     """Authoritative team for a player: roster membership (object
-    identity) first, the player's team_name label second. Never
-    invents one."""
+    identity) ONLY. A per-game line always names a rostered player in
+    production; a player on neither roster is corrupt state, and the
+    team_name label fallback would let a phantom object fire (reviewer
+    C killshot). Never invents a team: "" fails every gate downstream.
+    """
     try:
         pidn = id(p)
         for t in (home, away):
@@ -2897,7 +2906,7 @@ def _hero_team_of(p, home, away):
                     return _safe(lambda: t.team_name, "") or ""
     except Exception:
         pass
-    return _safe(lambda: p.team_name, "") or ""
+    return ""
 
 
 def _hero_starter_goalie(team):
@@ -2926,10 +2935,8 @@ def _hero_ot_scorer(result):
                 continue
             if e.get("event") != "Goal":
                 continue
-            try:
-                if int(e.get("period", 0) or 0) <= 3:
-                    continue
-            except Exception:
+            per = _hero_int(e.get("period"))
+            if per is None or per <= 3:
                 continue
             if e.get("player") is None:
                 continue
@@ -3034,12 +3041,9 @@ def _heroics_stories(app, game_date, rng):
                 continue
             hn = home.team_name
             an = away.team_name
-            hs = _safe(lambda: int(res.get("home_score")), None)
-            aws = _safe(lambda: int(res.get("away_score")), None)
+            hs = _hero_int(res.get("home_score"))
+            aws = _hero_int(res.get("away_score"))
             if hs is None or aws is None or hs < 0 or aws < 0:
-                continue
-            if isinstance(res.get("home_score"), bool) or isinstance(
-                    res.get("away_score"), bool):
                 continue
             winner = res.get("winner")
             wname = _safe(lambda: winner.team_name, "") or ""
@@ -3073,6 +3077,14 @@ def _heroics_stories(app, game_date, rng):
                 if g < 0 or a < 0:
                     continue
                 pts = g + a
+                # Cross-check the line against the team score: one player
+                # cannot earn two points on the same goal, so g and pts
+                # can never exceed his team's goals. A line that does is
+                # corrupt state (reviewer C killshot: a "3-goal" night in
+                # a 2-0 game disproves itself) -- fail silent.
+                team_goals = hs if team == hn else aws
+                if g > team_goals or pts > team_goals:
+                    continue
                 # A 5-point night outranks a bare hat trick (the five-point
                 # templates name the hat trick inside when one is part
                 # of it).
