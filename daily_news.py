@@ -20,6 +20,7 @@ Design notes:
 - Everything is defensive: missing data skips the story, never crashes.
 """
 
+import logging
 import math
 import random
 from datetime import date
@@ -1301,23 +1302,36 @@ def _performance_stories(app, game_date, rng):
 #
 # Covers the biggest Press Box gap: the stretch run. Three premises, all
 # derived from real team records via playoff-cutoff math (never invented):
-#   - PLAYOFF RACE: the final spot in a conference is contested (first team
-#     out is alive and within PLAYOFF_RACE_BAND_PTS of the last team in).
-#   - CLINCHED: a team has mathematically locked a berth (fewer than S
-#     teams can still finish above it, ties counted against -- conservative).
-#   - ELIMINATED: a team can no longer reach the cutoff (S teams already
-#     sit above its maximum achievable points -- conservative).
+#   - PLAYOFF RACE: a playoff spot is genuinely contested (first team out
+#     is alive and within PLAYOFF_RACE_BAND_PTS of the last team in).
+#   - CLINCHED: a team has mathematically locked a postseason berth.
+#   - ELIMINATED: a team can no longer reach the postseason.
 #
-# Fail-closed gates: NHL teams only (mirrors playoff_system's own filter);
-# in-season only; the stretch-run window requires median GP >= 60, every
-# team's season still alive (remaining >= 1), and a sane GP spread --
-# anything off and the bucket stays silent. Clinch/elimination stories are
-# once-per-season per team (season_year in the key, window > any season).
+# FORMAT-AWARE (REV-C adversarial finding): the engine's default playoff
+# format is divisional (top 3 per division + 2 wild cards per conference;
+# game_classes.py). Conference top-half math under that format produces
+# FALSE stories -- e.g. a team locked 6th in its division (five division
+# rivals above its ceiling, 3rd in the wild-card race) still counted as
+# "top 8 by points" and got a CLINCHED story. Each format therefore gets
+# its own cutoff math, read from league.playoff_format ('divisional'
+# default, old-save safe -- the same default playoff_system uses).
+#
+# Every clinch/elimination rule below is conservative and airtight: a
+# story fires only when the premise holds in EVERY possible completion
+# of the season. Ties block a clinch (a tie + lost tiebreaker knocks a
+# team out); elimination needs teams strictly above the ceiling.
+#
+# Fail-closed gates: NHL teams only; in-season only; the stretch-run
+# window requires median GP >= 60, every team's season still alive
+# (remaining >= 1), and a sane GP spread -- anything off and the bucket
+# stays silent. Clinch/elimination stories are once-per-season per team.
+# Team identity in the math is the team OBJECT, never the display name
+# (duplicate names / "Unknown Team" must not cross-contaminate sets).
 # ---------------------------------------------------------------------------
 
 # Stretch-run window: median team games played before the race is real.
 PLAYOFF_RACE_MIN_MEDIAN_GP = 60
-# Max GP spread inside a conference pool before the state is distrusted.
+# Max GP spread inside a pool before the state is distrusted.
 PLAYOFF_RACE_MAX_GP_SPREAD = 10
 # Points band around the final playoff spot that counts as "the race".
 PLAYOFF_RACE_BAND_PTS = 4
@@ -1367,6 +1381,22 @@ def _pr_conference(t):
     return "Eastern"
 
 
+def _pr_division(t):
+    """Division grouping (Atlantic/Metropolitan/Central/Pacific)."""
+    return _safe(lambda: t.division, "") or ""
+
+
+def _pr_playoff_format(app):
+    """'divisional' (default, old-save safe) or 'conference'.
+
+    Mirrors playoff_system._playoff_format's default: leagues pickled
+    before the format existed have no attribute.
+    """
+    lg = _pr_league(app)
+    pf = _safe(lambda: lg.playoff_format, "divisional") or "divisional"
+    return pf if pf in ("divisional", "conference") else "divisional"
+
+
 def _pr_pool_records(pool, season_len):
     """(team, gp, pts, max_pts, name, wins) for every pool team.
 
@@ -1403,30 +1433,22 @@ def _pr_window_ok(rows, season_len):
 
 
 def _pr_cutoff_math(rows, spots):
-    """Playoff-cutoff math for one conference pool.
+    """Classic top-`spots` cutoff math for one pool.
 
-    Returns dict with ranked rows (points desc, wins desc, name), the set
-    of clinched team names, the set of eliminated team names, and the
-    last-in / first-out rows. Conservative on both ends: a competitor who
-    can only TIE blocks a clinch, and a team is only eliminated when S
-    teams already sit strictly above its ceiling.
+    Used for the 'conference' playoff format (spots = half the pool) and
+    for per-division 3rd-place math under the divisional format (spots=3).
+    Conservative on both ends: a competitor who can only TIE still blocks
+    a clinch, and a team is only eliminated when `spots` teams already sit
+    strictly above its ceiling. Team identity is the team object, never
+    the display name (duplicate names must not cross-contaminate).
     """
     ranked = sorted(rows, key=lambda r: (-r[2], -r[5], r[4]))
     clinched, eliminated = set(), set()
     for t, gp, pts, max_pts, name, w in ranked:
-        # Teams (other than this one) that can still finish at-or-above
-        # it. A competitor who can only TIE still blocks the clinch: the
-        # story claims the berth is official, and a tie plus a lost
-        # tiebreaker knocks a team out -- so ties count against.
-        can_pass = sum(1 for o in ranked
-                       if o[4] != name and o[3] >= pts)
-        if can_pass < spots:
-            clinched.add(name)
-        # Teams already sitting above this team's ceiling.
-        above_ceiling = sum(1 for o in ranked
-                            if o[4] != name and o[2] > max_pts)
-        if above_ceiling >= spots:
-            eliminated.add(name)
+        if sum(1 for o in ranked if o[0] is not t and o[3] >= pts) < spots:
+            clinched.add(id(t))
+        if sum(1 for o in ranked if o[0] is not t and o[2] > max_pts) >= spots:
+            eliminated.add(id(t))
     return {
         "ranked": ranked,
         "clinched": clinched,
@@ -1434,6 +1456,77 @@ def _pr_cutoff_math(rows, spots):
         "last_in": ranked[spots - 1] if len(ranked) >= spots else None,
         "first_out": ranked[spots] if len(ranked) > spots else None,
     }
+
+
+def _pr_divisional_sets(conf_rows, div_rows):
+    """Airtight clinch/elimination sets under divisional qualifying.
+
+    conf_rows: every row in the conference. div_rows: {division: [rows]}.
+    Returns (div_locked, wc_locked, eliminated, div_maths):
+      - div_locked: teams guaranteed a division top-3 berth (<3 division
+        rivals can still reach their points -- airtight: at most 2 rivals
+        can finish above-or-tied, so the team is top-3 in every
+        completion regardless of tiebreaks).
+      - wc_locked: teams guaranteed a wild-card berth (at most one team
+        that could ever share the wild-card pool can still reach their
+        points -- airtight: locked teams never enter the pool, so at most
+        one pool rival finishes above-or-tied in any completion).
+      - eliminated: teams with no path at all (division-dead AND
+        wild-card-dead, both airtight -- see below).
+      - div_maths: {division: _pr_cutoff_math(rows, 3)} for race stories.
+    All sets hold id(team) (never names -- and never the team
+    objects themselves, which may be unhashable); the dicts are
+    session-scoped and team objects live in the league, so ids are
+    stable for the dedup window's purposes.
+    """
+    div_maths = {}
+    for div, rows in div_rows.items():
+        if len(rows) >= 4:
+            div_maths[div] = _pr_cutoff_math(rows, 3)
+    div_locked = set()
+    for m in div_maths.values():
+        div_locked |= m["clinched"]
+    # Division-dead: >=3 division rivals strictly above the ceiling --
+    # no division path in any completion (ceilings are fixed).
+    div_out = set()
+    for div, rows in div_rows.items():
+        for t, gp, pts, max_pts, name, w in rows:
+            if sum(1 for o in rows if o[0] is not t and o[2] > max_pts) >= 3:
+                div_out.add(id(t))
+    # Division of each team, for the wild-card-dead count below.
+    div_of = {}
+    for div, rows in div_rows.items():
+        for r in rows:
+            div_of[id(r[0])] = div
+
+    wc_locked, eliminated = set(), set()
+    for t, gp, pts, max_pts, name, w in conf_rows:
+        if id(t) in div_locked:
+            continue
+        pool_rivals = [o for o in conf_rows
+                       if o[0] is not t and id(o[0]) not in div_locked]
+        if sum(1 for o in pool_rivals if o[3] >= pts) < 2:
+            wc_locked.add(id(t))
+    for t, gp, pts, max_pts, name, w in conf_rows:
+        if id(t) in div_locked or id(t) not in div_out:
+            continue
+        # Wild-card-dead, airtight: let A be the conference rivals already
+        # strictly above our ceiling -- in every completion they all
+        # finish above us (their points only grow; our ceiling is fixed).
+        # At most 3 per division can take division berths, so the rest
+        # are FORCED into the wild-card pool, still above us. If >=2 are
+        # forced in, we are at best 3rd in the pool in every completion.
+        # Combined with div_out (no division path), elimination holds in
+        # every completion.
+        per_div = {}
+        for o in conf_rows:
+            if o[0] is not t and o[2] > max_pts:
+                d = div_of.get(id(o[0]))
+                per_div[d] = per_div.get(d, 0) + 1
+        forced_pool = sum(c - min(3, c) for c in per_div.values())
+        if forced_pool >= 2:
+            eliminated.add(id(t))
+    return div_locked, wc_locked, eliminated, div_maths
 
 
 # Race templates without a games-remaining clause (always safe).
@@ -1478,15 +1571,20 @@ _PR_RACE_TEMPLATES_GAMES = [
 ]
 
 
-def _pr_race_story(conf, math, rng):
-    """The final spot is genuinely contested: story or None."""
+def _pr_race_story(label, math, rng):
+    """The final spot is genuinely contested: story or None.
+
+    `label` is the conference name (conference format / wild-card race)
+    or division name (division 3rd-place race) rendered in templates.
+    Team identity in the sets is id(team).
+    """
     last_in = math["last_in"]
     first_out = math["first_out"]
     if last_in is None or first_out is None:
         return None
-    if first_out[4] in math["eliminated"]:
+    if id(first_out[0]) in math["eliminated"]:
         return None
-    if last_in[4] in math["clinched"]:
+    if id(last_in[0]) in math["clinched"]:
         return None
     gap = last_in[2] - first_out[2]
     if gap < 0 or gap > PLAYOFF_RACE_BAND_PTS:
@@ -1495,8 +1593,8 @@ def _pr_race_story(conf, math, rng):
     line_pts = last_in[2]
     bubble = [r for r in math["ranked"]
               if abs(r[2] - line_pts) <= PLAYOFF_RACE_BAND_PTS
-              and r[4] not in math["clinched"]
-              and r[4] not in math["eliminated"]
+              and id(r[0]) not in math["clinched"]
+              and id(r[0]) not in math["eliminated"]
               and r[4] != "Unknown Team"]
     if len(bubble) < 2:
         return None
@@ -1518,7 +1616,7 @@ def _pr_race_story(conf, math, rng):
     # used (stating the minimum would be false for the teams with more).
     remainings = sorted({(r[3] - r[2]) // 2 for r in named})
     templates = _PR_RACE_TEMPLATES
-    fmt = dict(teams=teams_str, band=PLAYOFF_RACE_BAND_PTS, conf=conf)
+    fmt = dict(teams=teams_str, band=PLAYOFF_RACE_BAND_PTS, conf=label)
     if len(remainings) == 1:
         n = remainings[0]
         fmt["games_str"] = f"{n} game" if n == 1 else f"{n} games"
@@ -1526,16 +1624,24 @@ def _pr_race_story(conf, math, rng):
     return rng.choice(templates).format(**fmt)
 
 
+def _pr_team_key(season_year, t, name):
+    """Repeat key for one-shot team stories. The id() disambiguates teams
+    that share a display name (or are both nameless); the dict is
+    session-scoped and team objects live in the league, so it is stable
+    for the dedup window's purposes."""
+    return f"playoff:{season_year}:{name}#{id(t)}"
+
+
 def _pr_clinch_pending(math, game_date, rng, season_year, app):
     """(story, key, story_type) for newly-clinched teams -- marking is left
     to the caller so keys are only marked for stories actually returned."""
     pending = []
     for t, gp, pts, max_pts, name, _w in math["ranked"]:
-        if name in math["eliminated"] or name == "Unknown Team":
+        if id(t) in math["eliminated"] or name == "Unknown Team":
             continue
-        if name not in math["clinched"]:
+        if id(t) not in math["clinched"]:
             continue
-        key = f"playoff:{season_year}:{name}"
+        key = _pr_team_key(season_year, t, name)
         if not _recent_ok(app, key, "clinch", game_date,
                           window=PLAYOFF_RACE_SEASON_WINDOW):
             continue
@@ -1588,9 +1694,9 @@ def _pr_elimination_pending(math, game_date, rng, season_year, app):
     for t, gp, pts, max_pts, name, _w in reversed(math["ranked"]):
         if name == "Unknown Team":
             continue
-        if name not in math["eliminated"]:
+        if id(t) not in math["eliminated"]:
             continue
-        key = f"playoff:{season_year}:{name}"
+        key = _pr_team_key(season_year, t, name)
         if not _recent_ok(app, key, "eliminated", game_date,
                           window=PLAYOFF_RACE_SEASON_WINDOW):
             continue
@@ -1633,6 +1739,60 @@ def _pr_elimination_pending(math, game_date, rng, season_year, app):
     return pending
 
 
+def _pr_divisional_stories(app, conf, rows, season_len, season_year,
+                           game_date, rng):
+    """Clinch/elimination stories, division 3rd-place races, and the
+    wild-card race under divisional qualifying."""
+    out = []
+    div_rows = {}
+    for r in rows:
+        div_rows.setdefault(_pr_division(r[0]), []).append(r)
+    div_locked, wc_locked, eliminated, div_maths = _pr_divisional_sets(
+        rows, div_rows)
+    conf_math = {
+        "ranked": sorted(rows, key=lambda r: (-r[2], -r[5], r[4])),
+        "clinched": div_locked | wc_locked,
+        "eliminated": eliminated,
+        "last_in": None,
+        "first_out": None,
+    }
+    out.extend(_pr_clinch_pending(conf_math, game_date, rng,
+                                  season_year, app))
+    out.extend(_pr_elimination_pending(conf_math, game_date, rng,
+                                        season_year, app))
+    # Division 3rd-place races.
+    for div in sorted(div_rows):
+        drows = div_rows[div]
+        if len(drows) < 4 or div not in div_maths:
+            continue
+        if not _pr_window_ok(drows, season_len):
+            continue
+        race = _pr_race_story(div or conf, div_maths[div], rng)
+        if race is not None:
+            key = f"league:playoff_race:{season_year}:{div or conf}"
+            if _recent_ok(app, key, "race", game_date):
+                out.append((race, key, "race"))
+        if len(out) >= 2:
+            break
+    # Wild-card race among teams not locked into a division berth.
+    wc_pool = [r for r in rows if id(r[0]) not in div_locked]
+    if len(wc_pool) >= 3 and len(out) < 2:
+        wc_ranked = sorted(wc_pool, key=lambda r: (-r[2], -r[5], r[4]))
+        wc_math = {
+            "ranked": wc_ranked,
+            "clinched": set(wc_locked),
+            "eliminated": set(eliminated),
+            "last_in": wc_ranked[1],
+            "first_out": wc_ranked[2],
+        }
+        race = _pr_race_story(conf, wc_math, rng)
+        if race is not None:
+            key = f"league:playoff_race:{season_year}:{conf}:wc"
+            if _recent_ok(app, key, "race", game_date):
+                out.append((race, key, "race"))
+    return out
+
+
 def _playoff_race_stories(app, game_date, rng):
     """Playoff race / clinch / elimination coverage for the stretch run.
 
@@ -1648,11 +1808,14 @@ def _playoff_race_stories(app, game_date, rng):
         if season_len is None:
             return []
         season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
         nhl = [t for t in _all_teams(app)
                if (_safe(lambda: t.league_name, "") or "")
                == "National Hockey League"]
         if len(nhl) < 4:
             return []
+        fmt = _pr_playoff_format(app)
         pools = {}
         for t in nhl:
             pools.setdefault(_pr_conference(t), []).append(t)
@@ -1661,31 +1824,35 @@ def _playoff_race_stories(app, game_date, rng):
             if len(pool) < 4:
                 continue
             rows = _pr_pool_records(pool, season_len)
-            if not rows:
+            if not rows or not _pr_window_ok(rows, season_len):
                 continue
-            if not _pr_window_ok(rows, season_len):
-                continue
-            spots = len(pool) // 2
-            if spots < 1:
-                continue
-            math = _pr_cutoff_math(rows, spots)
-            pending.extend(_pr_clinch_pending(math, game_date, rng,
-                                              season_year, app))
-            pending.extend(_pr_elimination_pending(math, game_date, rng,
-                                                   season_year, app))
-            race = _pr_race_story(conf, math, rng)
-            if race is not None:
-                key = f"league:playoff_race:{season_year}:{conf}"
-                if _recent_ok(app, key, "race", game_date):
-                    pending.append((race, key, "race"))
+            if fmt == "conference":
+                spots = len(pool) // 2
+                if spots < 1:
+                    continue
+                math = _pr_cutoff_math(rows, spots)
+                pending.extend(_pr_clinch_pending(math, game_date, rng,
+                                                  season_year, app))
+                pending.extend(_pr_elimination_pending(math, game_date, rng,
+                                                       season_year, app))
+                race = _pr_race_story(conf, math, rng)
+                if race is not None:
+                    key = f"league:playoff_race:{season_year}:{conf}"
+                    if _recent_ok(app, key, "race", game_date):
+                        pending.append((race, key, "race"))
+            else:
+                pending.extend(_pr_divisional_stories(
+                    app, conf, rows, season_len, season_year, game_date, rng))
             if len(pending) >= 2:
                 break
     except Exception:
+        logging.getLogger(__name__).exception("playoff race bucket failed")
         return []
     chosen = pending[:2]
     for story, key, stype in chosen:
         _mark_recent(app, key, stype, game_date)
     return [s for s, _k, _t in chosen]
+
 
 
 # ---------------------------------------------------------------------------
