@@ -2474,6 +2474,7 @@ def _ar_trail(race):
     try:
         gap = int(race[0].get("points") or 0) - int(race[1].get("points") or 0)
     except Exception:
+        logging.getLogger(__name__).exception("award race trail gap failed")
         return None, None
     return rname, gap
 
@@ -2548,7 +2549,18 @@ def _ar_art_ross_pending(race, roster_map, season_year, app, game_date,
     rname, gap = _ar_trail(race)
     trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
              else (f" with {rname} in pursuit" if rname else ""))
-    story = rng.choice(_ART_ROSS_TEMPLATES).format(
+    # Template 3 ("Nobody has more points than X") asserts strict points
+    # maximality, but art_ross_race sorts by score = points + 3-star
+    # bonus -- a star-boosted player can lead the race with fewer points.
+    # That template is only eligible on a strict points lead (or no
+    # runner-up); the other two assert race leadership, which holds by
+    # construction.
+    strict_points_lead = (len(race) < 2
+                           or (race[0].get("points") or 0)
+                           > (race[1].get("points") or 0))
+    templates = (_ART_ROSS_TEMPLATES if strict_points_lead
+                 else _ART_ROSS_TEMPLATES[:2])
+    story = rng.choice(templates).format(
         name=name, team=team, pts=pts, g=row.get("goals") or 0,
         a=row.get("assists") or 0, gp=gp, trail=trail)
     tightness = gap if isinstance(gap, int) and gap >= 0 else 10 ** 6

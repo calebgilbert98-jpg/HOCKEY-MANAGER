@@ -28,7 +28,8 @@ import awards_race as ar
 _PID = [0]
 
 
-def mkplayer(fn, ln, pos, stats, team=None, pid=None, rookie=False):
+def mkplayer(fn, ln, pos, stats, team=None, pid=None, rookie=False,
+             stars=None):
     _PID[0] += 1
     p = types.SimpleNamespace(
         first_name=fn, last_name=ln,
@@ -38,6 +39,8 @@ def mkplayer(fn, ln, pos, stats, team=None, pid=None, rookie=False):
         is_rookie=rookie)
     if team is not None:
         p.team_name = team
+    if stars is not None:
+        p.game_stars = stars
     return p
 
 
@@ -380,6 +383,58 @@ def test_duplicate_names_each_get_a_story():
 
 
 # ------------------------------------------------------- full bucket -------
+
+def test_art_ross_star_boost_never_claims_false_maximality():
+    # art_ross_race sorts by points + 3-star bonus: a star-boosted player
+    # can lead the race with FEWER points. Template 3 ("Nobody has more
+    # points than X") must never fire then; the other templates assert
+    # race leadership, which holds by construction.
+    boosted = mkplayer("Star", "Boosted", "C", skater_stats(25, 28, 50),
+                       team="Aces", stars={"first": 20, "second": 0,
+                                           "third": 0})   # 53 pts
+    plain = mkplayer("Plain", "Scorer", "C", skater_stats(26, 28, 50),
+                     team="Bees")                          # 54 pts
+    app, d = std_app([[boosted], [plain], [], []])
+    players = [p for t in app.league.teams for p in t.roster]
+    rm = ar.roster_team_map(app.league.teams)
+    race = ar.art_ross_race([p for p in players
+                             if dn._td_pos_group(p) == "Forward"])
+    assert race[0]["player"].first_name == "Star"  # bonus flips the order
+    assert race[0]["points"] < race[1]["points"]
+    seen = set()
+    for seed in range(60):
+        item = dn._ar_art_ross_pending(race, rm, 2026, app, d,
+                                       random.Random(seed))
+        assert item is not None
+        s = item[0]
+        assert "Nobody has more points" not in s, s
+        seen.add(s)
+    # Both eligible templates still render true race-leadership claims.
+    assert any("paces the Art Ross race" in s for s in seen), seen
+    assert any("leads the scoring-title chase" in s for s in seen), seen
+    assert all("Star Boosted" in s and "53 points" in s for s in seen)
+
+
+def test_art_ross_strict_points_lead_template3_fires_true():
+    # With a genuine strict points lead, template 3 is eligible and its
+    # maximality claim is true.
+    lead = mkplayer("Nikita", "Omega", "RW", skater_stats(35, 65, 55),
+                    team="Bees")
+    run = mkplayer("David", "Sigma", "C", skater_stats(30, 60, 55),
+                   team="Aces")
+    app, d = std_app([[run], [lead], [], []])
+    players = [p for t in app.league.teams for p in t.roster]
+    rm = ar.roster_team_map(app.league.teams)
+    race = ar.art_ross_race([p for p in players
+                             if dn._td_pos_group(p) == "Forward"])
+    fired = [dn._ar_art_ross_pending(race, rm, 2026, app, d,
+                                     random.Random(seed))[0]
+             for seed in range(60)]
+    t3 = [s for s in fired if "Nobody has more points" in s]
+    assert t3, "template 3 never selected on a strict points lead"
+    assert all("Nikita Omega (Bees)" in s and "100 in 55 games" in s
+               for s in t3)
+
 
 def test_full_bucket_fires_all_five_races_over_a_week():
     lead = mkplayer("Connor", "Alpha", "C", skater_stats(40, 55, 55),
