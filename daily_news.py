@@ -2777,6 +2777,441 @@ def _award_race_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# Game heroics bucket (R8d)
+#
+# Covers the Press Box gap for single-game heroics -- hat tricks,
+# shutouts, 4/5-point nights, OT winners -- as a presentation layer over
+# the league's persisted per-game recap feed (league.game_results /
+# league._results_by_date: the same result dicts the box score, the
+# three-star logger and the career-moments system read). Nothing is
+# re-derived from season totals: every premise comes from one finished
+# game's result dict -- its per-player game_stats lines, its scores,
+# its overtime/shootout flags, its notable Goal events. The sim core
+# reliably records all of these (quick-sim flattens per-player
+# g/a/shots/saves into game_stats; GameSim writes its own game_stats;
+# both report overtime/shootout; hat-trick/shutout detection in
+# narrative_incidents reads the same per-game lines at game time).
+#
+# Story premises, all derived from real finished-game state:
+#   - HAT TRICK: a skater's game_stats line has g >= 3.
+#   - FIVE/FOR POINT: a skater's line has g + a >= 5 / >= 4 (a 5-point
+#     night that includes 3+ goals names the hat trick inside).
+#   - SHUTOUT: the team's opponent scored 0 AND the starter (the first
+#     goalie on the roster -- the same attribution rule the engine uses
+#     when it bumps stats.shutouts) has a game_stats line with
+#     saves >= 1. The line's own goals_against is NOT trusted (the
+#     quick-sim flattening hardcodes it to 0); the score is the witness.
+#   - OT WINNER: the result went to overtime (not a shootout), the
+#     final margin is exactly 1, and the last 'Goal' notable event with
+#     period > 3 names a real player on the winning team. Shootout
+#     winners never fire (a shootout is not an OT winner).
+#
+# Fail-closed gates: in-season only (Oct-Apr; preseason exhibitions are
+# September, never read); NHL results only; every result must be a
+# well-formed dict with real team objects and non-negative integer
+# scores; hero subjects must be real player objects with real names and
+# real teams -- "Unknown Player"/"Unknown Team" never render; one story
+# per (game, player) (the biggest feat wins); at most 3 stories per day.
+# One-shot keys carry the game day, so a second heroic night later in
+# the season gets its own story but a re-generated news day never
+# repeats one; keys are marked ONLY for stories actually returned.
+# Player identity is the object (id() disambiguates duplicate display
+# names; per the R8a adversarial finding, id() reuse can only suppress
+# a story, never fabricate one).
+# ---------------------------------------------------------------------------
+
+# One-shot window longer than any season -- each (game day, player,
+# feat) fires at most once.
+HEROICS_WINDOW_DAYS = 400
+# At most this many heroics stories per news day.
+HEROICS_MAX_PER_DAY = 3
+# Newsworthiness per feat (mirrors narrative_incidents' weights).
+_HEROICS_WEIGHTS = {
+    "five_point": 16,
+    "hat_trick": 15,
+    "shutout": 12,
+    "ot_winner": 11,
+    "four_point": 10,
+}
+
+
+def _hero_line_num(line, *names):
+    """First numeric value under any of the names in a game_stats line;
+    0 on missing/junk (a premise built on missing stats must not
+    render)."""
+    for n in names:
+        try:
+            v = (line or {}).get(n)
+        except Exception:
+            v = None
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            return int(v)
+        except Exception:
+            continue
+    return 0
+
+
+def _hero_results(app, game_date):
+    """The finished games of the day just simmed. Daily news runs after
+    the date increment (simulate_day / mainline advance), so the games
+    belong to game_date - 1 day. Returns a list of result dicts, [] on
+    any degenerate state."""
+    try:
+        league = getattr(app, "league", None)
+        idx = getattr(league, "_results_by_date", None)
+        if not isinstance(idx, dict):
+            return []
+        day = _safe(lambda: game_date - timedelta(days=1))
+        if day is None:
+            return []
+        results = idx.get(day)
+        return results if isinstance(results, list) else []
+    except Exception:
+        return []
+
+
+def _hero_teams_ok(home, away):
+    """Both real NHL team objects with real names."""
+    for t in (home, away):
+        if t is None:
+            return False
+        if not (_safe(lambda: t.team_name, "") or ""):
+            return False
+        if ((_safe(lambda: t.league_name, "") or "")
+                != "National Hockey League"):
+            return False
+    return True
+
+
+def _hero_team_of(p, home, away):
+    """Authoritative team for a player: roster membership (object
+    identity) first, the player's team_name label second. Never
+    invents one."""
+    try:
+        pidn = id(p)
+        for t in (home, away):
+            for rp in getattr(t, "roster", None) or []:
+                if id(rp) == pidn:
+                    return _safe(lambda: t.team_name, "") or ""
+    except Exception:
+        pass
+    return _safe(lambda: p.team_name, "") or ""
+
+
+def _hero_starter_goalie(team):
+    """The starter by the engine's own attribution rule: the first
+    goalie on the roster -- the same rule _process_single_game_result
+    uses when crediting stats.shutouts. None when no goalie is on the
+    roster."""
+    try:
+        for p in getattr(team, "roster", None) or []:
+            if _td_pos_group(p) == "Goalie":
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _hero_ot_scorer(result):
+    """(event, player) for the OT winner: the last 'Goal' notable event
+    with period > 3. Shootout goals are separate 'Shootout Goal'
+    events and never match. None on degenerate state."""
+    try:
+        evs = result.get("notable_events") or []
+        last = None
+        for e in evs:
+            if not isinstance(e, dict):
+                continue
+            if e.get("event") != "Goal":
+                continue
+            try:
+                if int(e.get("period", 0) or 0) <= 3:
+                    continue
+            except Exception:
+                continue
+            if e.get("player") is None:
+                continue
+            last = e
+        return last
+    except Exception:
+        return None
+
+
+_HAT_TRICK_TEMPLATES = [
+    "HAT TRICK: {name} ({team}) lit the lamp {g} times as {team} beat "
+    "{opp} {score}.",
+    "HAT TRICK: {name} put on a show -- {g} goals -- in {team}'s "
+    "{score} win over {opp}.",
+    "HAT TRICK: {opp} had no answer for {name}, whose {g}-goal night "
+    "powered {team} to a {score} victory.",
+]
+
+_HAT_TRICK_LOSS_TEMPLATES = [
+    "HAT TRICK: {name}'s {g}-goal night wasn't enough as {team} fell "
+    "{score} to {opp}.",
+    "HAT TRICK: {name} scored {g} for {team}, but {opp} still took it "
+    "{score}.",
+]
+
+_FIVE_POINT_TEMPLATES = [
+    "FIVE-POINT NIGHT: {name} ({team}) torched {opp} for {pts} points "
+    "({g} goals, {a} assists){hat} in a {score} win.",
+    "FIVE-POINT NIGHT: {name} was unstoppable -- {pts} points{hat} -- "
+    "as {team} beat {opp} {score}.",
+    "FIVE-POINT NIGHT: {name}'s {pts}-point{hat} explosion carried "
+    "{team} past {opp} {score}.",
+]
+
+_FIVE_POINT_LOSS_TEMPLATES = [
+    "FIVE-POINT NIGHT: {name} put up {pts} points{hat} for {team}, but "
+    "{opp} won {score} anyway.",
+]
+
+_FOUR_POINT_TEMPLATES = [
+    "BIG NIGHT: {name} ({team}) piled up {pts} points ({g} goals, {a} "
+    "assists) in {team}'s {score} win over {opp}.",
+    "BIG NIGHT: {name} factored in on {pts} points as {team} beat "
+    "{opp} {score}.",
+    "BIG NIGHT: {pts} points for {name} ({team}) in a {score} win over "
+    "{opp}.",
+]
+
+_FOUR_POINT_LOSS_TEMPLATES = [
+    "BIG NIGHT: {name}'s {pts}-point effort for {team} came in a "
+    "{score} loss to {opp}.",
+]
+
+_SHUTOUT_TEMPLATES = [
+    "SHUTOUT: {name} ({team}) turned aside all {saves} shots as {team} "
+    "blanked {opp} {score}.",
+    "SHUTOUT: {name} was perfect -- {saves} saves, zero goals against "
+    "-- in {team}'s {score} shutout of {opp}.",
+    "SHUTOUT: {opp} couldn't solve {name} ({saves} saves) as {team} "
+    "won {score}.",
+]
+
+_OT_WINNER_TEMPLATES = [
+    "OT HERO: {name} ({team}) ended it in overtime -- {score} over "
+    "{opp}.",
+    "OT HERO: {name} played overtime hero, lifting {team} to a "
+    "{score} OT win over {opp}.",
+    "OVERTIME WINNER: {name} ({team}) beat {opp} {score} with the "
+    "extra-frame decider.",
+]
+
+
+def _heroics_stories(app, game_date, rng):
+    """Game-heroics coverage for the day just simmed.
+
+    Repeat keys are marked ONLY for stories actually returned: marking
+    a key for a story that gets truncated would suppress it forever
+    (the one-shot window is longer than a season).
+    """
+    try:
+        if not _in_season(game_date):
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
+        game_day = _safe(lambda: game_date - timedelta(days=1))
+        if game_day is None:
+            return []
+        results = _hero_results(app, game_date)
+        if not results:
+            return []
+        day_iso = _safe(lambda: game_day.isoformat(), "") or ""
+        if not day_iso:
+            return []
+        candidates = []
+        for res in results:
+            if not isinstance(res, dict):
+                continue
+            home = res.get("home_team")
+            away = res.get("away_team")
+            if not _hero_teams_ok(home, away):
+                continue
+            hn = home.team_name
+            an = away.team_name
+            hs = _safe(lambda: int(res.get("home_score")), None)
+            aws = _safe(lambda: int(res.get("away_score")), None)
+            if hs is None or aws is None or hs < 0 or aws < 0:
+                continue
+            if isinstance(res.get("home_score"), bool) or isinstance(
+                    res.get("away_score"), bool):
+                continue
+            winner = res.get("winner")
+            wname = _safe(lambda: winner.team_name, "") or ""
+            if wname not in (hn, an):
+                # A finished game has a winner; anything else is
+                # uninterpretable state, not a story.
+                continue
+            overtime = bool(res.get("overtime"))
+            shootout = bool(res.get("shootout"))
+            gstats = res.get("game_stats")
+            if not isinstance(gstats, dict):
+                gstats = {}
+            # One story per (game, player): the biggest feat wins.
+            best = {}
+            for _pid, line in gstats.items():
+                if not isinstance(line, dict):
+                    continue
+                p = line.get("player")
+                name = _pname(p)
+                if not name or name == "Unknown Player":
+                    continue
+                if _td_pos_group(p) not in ("Forward", "Defense"):
+                    continue
+                team = _hero_team_of(p, home, away)
+                if not team or team == "Unknown Team":
+                    continue
+                if team not in (hn, an):
+                    continue
+                g = _hero_line_num(line, "g", "goals")
+                a = _hero_line_num(line, "a", "assists")
+                if g < 0 or a < 0:
+                    continue
+                pts = g + a
+                # A 5-point night outranks a bare hat trick (the five-point
+                # templates name the hat trick inside when one is part
+                # of it).
+                if pts >= 5:
+                    kind = "five_point"
+                elif g >= 3:
+                    kind = "hat_trick"
+                elif pts >= 4:
+                    kind = "four_point"
+                else:
+                    continue
+                weight = _HEROICS_WEIGHTS[kind]
+                cur = best.get(id(p))
+                if cur is not None and cur[1] >= weight:
+                    continue
+                best[id(p)] = (kind, weight, p, name, team, g, a, pts)
+            # Shutout: opponent held scoreless, the team scored too (a
+            # 0-0 final is degenerate state, not a shutout), and the
+            # starter faced rubber.
+            for t, own_score, opp_score, opp in ((home, hs, aws, an),
+                                                (away, aws, hs, hn)):
+                try:
+                    if opp_score != 0 or own_score < 1:
+                        continue
+                    tname = t.team_name
+                    if wname != tname:
+                        continue
+                    sg = _hero_starter_goalie(t)
+                    if sg is None:
+                        continue
+                    line = None
+                    for _pid, _ln in gstats.items():
+                        if (isinstance(_ln, dict)
+                                and _ln.get("player") is not None
+                                and id(_ln.get("player")) == id(sg)):
+                            line = _ln
+                            break
+                    if line is None:
+                        continue
+                    saves = _hero_line_num(line, "saves")
+                    if saves < 1:
+                        continue
+                    sname = _pname(sg)
+                    if not sname or sname == "Unknown Player":
+                        continue
+                    cur = best.get(id(sg))
+                    if cur is not None and cur[1] >= _HEROICS_WEIGHTS[
+                            "shutout"]:
+                        continue
+                    best[id(sg)] = ("shutout", _HEROICS_WEIGHTS["shutout"],
+                                    sg, sname, tname, 0, 0, saves)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "heroics shutout check failed")
+                    continue
+            # OT winner: overtime (never shootout), one-goal final, the
+            # last OT Goal event names a real player on the winner.
+            if overtime and not shootout and abs(hs - aws) == 1:
+                try:
+                    ev = _hero_ot_scorer(res)
+                    if ev is not None:
+                        p = ev.get("player")
+                        name = _pname(p)
+                        team = _hero_team_of(p, home, away)
+                        if (name and name != "Unknown Player" and team
+                                and team != "Unknown Team"
+                                and team == wname):
+                            cur = best.get(id(p))
+                            if cur is None or cur[1] < _HEROICS_WEIGHTS[
+                                    "ot_winner"]:
+                                best[id(p)] = (
+                                    "ot_winner",
+                                    _HEROICS_WEIGHTS["ot_winner"],
+                                    p, name, team, 0, 0, 0)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "heroics OT check failed")
+            # Render the per-game winners.
+            for _pidn, (kind, weight, p, name, team, g, a, pts) in \
+                    best.items():
+                try:
+                    if team == hn:
+                        mine, theirs, opp = hs, aws, an
+                    else:
+                        mine, theirs, opp = aws, hs, hn
+                    score = f"{mine}-{theirs}"
+                    won = (team == wname)
+                    if kind == "hat_trick":
+                        tpls = (_HAT_TRICK_TEMPLATES if won
+                                else _HAT_TRICK_LOSS_TEMPLATES)
+                        story = rng.choice(tpls).format(
+                            name=name, team=team, g=g, opp=opp,
+                            score=score)
+                    elif kind == "five_point":
+                        hat = (" -- including a hat trick"
+                               if g >= 3 else "")
+                        tpls = (_FIVE_POINT_TEMPLATES if won
+                                else _FIVE_POINT_LOSS_TEMPLATES)
+                        story = rng.choice(tpls).format(
+                            name=name, team=team, pts=pts, g=g, a=a,
+                            hat=hat, opp=opp, score=score)
+                    elif kind == "four_point":
+                        tpls = (_FOUR_POINT_TEMPLATES if won
+                                else _FOUR_POINT_LOSS_TEMPLATES)
+                        story = rng.choice(tpls).format(
+                            name=name, team=team, pts=pts, g=g, a=a,
+                            opp=opp, score=score)
+                    elif kind == "shutout":
+                        story = rng.choice(_SHUTOUT_TEMPLATES).format(
+                            name=name, team=team, saves=pts, opp=opp,
+                            score=score)
+                    elif kind == "ot_winner":
+                        story = rng.choice(_OT_WINNER_TEMPLATES).format(
+                            name=name, team=team, opp=opp, score=score)
+                    else:
+                        continue
+                    key = (f"heroics:{season_year}:{kind}:{day_iso}:"
+                           f"{name}#{id(p)}")
+                    if not _recent_ok(app, key, "heroics", game_date,
+                                      window=HEROICS_WINDOW_DAYS):
+                        continue
+                    candidates.append((weight, story, key))
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "heroics render failed")
+                    continue
+    except Exception:
+        logging.getLogger(__name__).exception("heroics bucket failed")
+        return []
+    # Newsworthiness order; the window is long enough that every feat
+    # still gets its one shot on a later heroics day.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    chosen = candidates[:HEROICS_MAX_PER_DAY]
+    for _w, story, key in chosen:
+        _mark_recent(app, key, "heroics", game_date)
+    return [s for _w, s, _k in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -2792,6 +3227,7 @@ _GENERATORS = [
     ("playoff_race", _playoff_race_stories, 0.65),
     ("trade_deadline", _trade_deadline_stories, 0.60),
     ("award_races", _award_race_stories, 0.58),
+    ("heroics", _heroics_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
