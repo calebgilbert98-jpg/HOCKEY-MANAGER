@@ -18,8 +18,31 @@ except Exception:
     _PIL_OK = False
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_cache")
-_CACHE_TAG = "v5"  # bump when the art style changes so old cached faces refresh
+_CACHE_TAG = "v6"  # bump when the art style changes so old cached faces refresh
 _MEMO = {}
+
+# Forge-generated pixel-art portrait pool (Oct 15, 2026 — Caleb-approved style).
+# 64 portraits; players are assigned one deterministically (not 1:1 unique).
+_POOL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "portraits")
+_POOL_COUNT = 64
+
+
+def _pool_portrait(player, size=128):
+    """Pixel-art portrait from the pool, deterministic per player.
+
+    Returns None when the pool assets are missing so callers fall back
+    to procedural generation.
+    """
+    try:
+        rng = random.Random(str(_seed_for(player)) + "|pixelpool")
+        idx = rng.randint(1, _POOL_COUNT)
+        path = os.path.join(_POOL_DIR, f"pixel_{idx:02d}.png")
+        if os.path.exists(path):
+            from PIL import Image as _I
+            return _I.open(path).convert("RGBA").resize((size, size), _I.NEAREST)
+    except Exception:
+        pass
+    return None
 
 # Skin tones with undertones (base, shadow, highlight)
 SKIN_TONES = [
@@ -122,9 +145,16 @@ def generate_face_image(player, size=128):
     Deterministic per player id: skin tone, face shape, hair style/color,
     beard, eyes, age effects (grey hair, wrinkles) and more are all derived
     from a seeded RNG. All alpha blending via _overlay().
+
+    Pixel-art pool portraits (assets/portraits) take precedence when present;
+    procedural generation remains as fallback.
     """
     if not _PIL_OK:
         return None
+
+    pooled = _pool_portrait(player, size=size)
+    if pooled is not None:
+        return pooled
 
     rng = random.Random(_seed_for(player))
     age = getattr(player, "age", 25)
