@@ -1297,6 +1297,378 @@ def _performance_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# Playoff race bucket (R8a)
+#
+# Covers the biggest Press Box gap: the stretch run. Three premises, all
+# derived from real team records via playoff-cutoff math (never invented):
+#   - PLAYOFF RACE: the final spot in a conference is contested (first team
+#     out is alive and within PLAYOFF_RACE_BAND_PTS of the last team in).
+#   - CLINCHED: a team has mathematically locked a berth (fewer than S
+#     teams can still finish above it, ties counted against -- conservative).
+#   - ELIMINATED: a team can no longer reach the cutoff (S teams already
+#     sit above its maximum achievable points -- conservative).
+#
+# Fail-closed gates: NHL teams only (mirrors playoff_system's own filter);
+# in-season only; the stretch-run window requires median GP >= 60, every
+# team's season still alive (remaining >= 1), and a sane GP spread --
+# anything off and the bucket stays silent. Clinch/elimination stories are
+# once-per-season per team (season_year in the key, window > any season).
+# ---------------------------------------------------------------------------
+
+# Stretch-run window: median team games played before the race is real.
+PLAYOFF_RACE_MIN_MEDIAN_GP = 60
+# Max GP spread inside a conference pool before the state is distrusted.
+PLAYOFF_RACE_MAX_GP_SPREAD = 10
+# Points band around the final playoff spot that counts as "the race".
+PLAYOFF_RACE_BAND_PTS = 4
+# One-shot story types use a window longer than any season so they fire at
+# most once per season per team (season_year is part of the repeat key).
+PLAYOFF_RACE_SEASON_WINDOW = 400
+
+
+def _pr_league(app):
+    gm = _safe(lambda: app.game_manager)
+    return _safe(lambda: gm.league) or _safe(lambda: app.league)
+
+
+def _pr_season_len(app):
+    """Games per team this season. None when unknown or unserious.
+
+    The engine stores this on the league (game_classes.py); fall back to
+    the game manager for duck-typed fixtures, else fail closed.
+    """
+    n = _safe(lambda: int(_pr_league(app).season_games_count), None)
+    if n is None:
+        gm = _safe(lambda: app.game_manager) or app
+        n = _safe(lambda: int(gm.season_games_count), None)
+    if not n or n < 60:
+        return None
+    return n
+
+
+def _pr_season_year(app, game_date):
+    lg = _pr_league(app)
+    y = _safe(lambda: int(lg.season_year), None)
+    if y:
+        return y
+    return _safe(lambda: int(game_date.year), 0) or 0
+
+
+def _pr_conference(t):
+    """Conference grouping mirroring playoff_system._conference_of."""
+    conf = _safe(lambda: t.conference, "") or ""
+    if conf in ("Eastern", "Western"):
+        return conf
+    div = _safe(lambda: t.division, "") or ""
+    if div in ("Atlantic", "Metropolitan"):
+        return "Eastern"
+    if div in ("Central", "Pacific"):
+        return "Western"
+    return "Eastern"
+
+
+def _pr_pool_records(pool, season_len):
+    """(team, gp, pts, max_pts, name, wins) for every pool team.
+
+    None on bad state (fail closed -- a pool whose records can't be read
+    gets no stories, never a guessed one)."""
+    rows = []
+    for t in pool:
+        try:
+            w, l, otl = _team_record(t)
+            gp = w + l + otl
+            if gp < 0 or gp > season_len:
+                return None
+            pts = 2 * w + otl
+            rows.append((t, gp, pts, pts + 2 * (season_len - gp),
+                         _tname(t), w))
+        except Exception:
+            return None
+    return rows
+
+
+def _pr_window_ok(rows, season_len):
+    """The stretch-run window: late season, everyone still alive, sane GP."""
+    if not rows:
+        return False
+    gps = sorted(r[1] for r in rows)
+    if gps[-1] - gps[0] > PLAYOFF_RACE_MAX_GP_SPREAD:
+        return False
+    median_gp = gps[len(gps) // 2]
+    if median_gp < PLAYOFF_RACE_MIN_MEDIAN_GP:
+        return False
+    if min(season_len - gp for gp in gps) < 1:
+        return False
+    return True
+
+
+def _pr_cutoff_math(rows, spots):
+    """Playoff-cutoff math for one conference pool.
+
+    Returns dict with ranked rows (points desc, wins desc, name), the set
+    of clinched team names, the set of eliminated team names, and the
+    last-in / first-out rows. Conservative on both ends: a competitor who
+    can only TIE blocks a clinch, and a team is only eliminated when S
+    teams already sit strictly above its ceiling.
+    """
+    ranked = sorted(rows, key=lambda r: (-r[2], -r[5], r[4]))
+    clinched, eliminated = set(), set()
+    for t, gp, pts, max_pts, name, w in ranked:
+        # Teams (other than this one) that can still finish above it.
+        can_pass = sum(1 for o in ranked
+                       if o[4] != name and o[3] > pts)
+        if can_pass < spots:
+            clinched.add(name)
+        # Teams already sitting above this team's ceiling.
+        above_ceiling = sum(1 for o in ranked
+                            if o[4] != name and o[2] > max_pts)
+        if above_ceiling >= spots:
+            eliminated.add(name)
+    return {
+        "ranked": ranked,
+        "clinched": clinched,
+        "eliminated": eliminated,
+        "last_in": ranked[spots - 1] if len(ranked) >= spots else None,
+        "first_out": ranked[spots] if len(ranked) > spots else None,
+    }
+
+
+def _pr_race_story(conf, math, rng):
+    """The final spot is genuinely contested: story or None."""
+    last_in = math["last_in"]
+    first_out = math["first_out"]
+    if last_in is None or first_out is None:
+        return None
+    if first_out[4] in math["eliminated"]:
+        return None
+    if last_in[4] in math["clinched"]:
+        return None
+    gap = last_in[2] - first_out[2]
+    if gap < 0 or gap > PLAYOFF_RACE_BAND_PTS:
+        return None
+    # Name the teams in the band around the line (never the decided ones).
+    line_pts = last_in[2]
+    bubble = [r for r in math["ranked"]
+              if abs(r[2] - line_pts) <= PLAYOFF_RACE_BAND_PTS
+              and r[4] not in math["clinched"]
+              and r[4] not in math["eliminated"]
+              and r[4] != "Unknown Team"]
+    if len(bubble) < 2:
+        return None
+    # At least one team on each side of the line -- otherwise it isn't
+    # a race, it's a coronation.
+    above = [r for r in bubble if r[2] >= line_pts]
+    below = [r for r in bubble if r[2] < line_pts]
+    if not above or not below:
+        return None
+    bubble.sort(key=lambda r: (-r[2], r[4]))
+    named = bubble[:4]
+    teams_str = ", ".join(f"{r[4]} ({r[2]} pts)" for r in named[:-1])
+    teams_str += f" and {named[-1][4]} ({named[-1][2]} pts)"
+    # r[3] is max_pts, r[2] is pts: (max_pts - pts) / 2 = games remaining.
+    min_left = min((r[3] - r[2]) // 2 for r in named)
+    story = rng.choice([
+        "PLAYOFF RACE: {teams} are all within {band} points of the final "
+        "{conf} playoff spot with {games} games to go.",
+        "It's a logjam in the {conf}: {teams} separated by almost nothing "
+        "around the final playoff spot.",
+        "PLAYOFF RACE: The final {conf} spot is up for grabs -- {teams}, "
+        "with {games} games left to settle it.",
+        "Nobody wants to blink in the {conf}: {teams} within {band} points "
+        "of the last playoff berth.",
+        "PLAYOFF RACE: {teams} -- that's the {conf} bubble, and {games} "
+        "games remain to sort it out.",
+        "The {conf} stretch run is chaos: {teams} all within {band} points "
+        "of the final spot.",
+        "PLAYOFF RACE: Every point matters now -- {teams} are jammed "
+        "together at the {conf} cutoff.",
+        "{teams}: the {conf} playoff race, with {games} games to decide it.",
+        "PLAYOFF RACE: The {conf} bubble is a traffic jam -- {teams}, all "
+        "within {band} points of the line.",
+        "Down the stretch in the {conf}: {teams}, and only {games} games "
+        "to separate them.",
+        "PLAYOFF RACE: {teams} are fighting for one {conf} playoff spot -- "
+        "{games} games left.",
+        "The {conf} cutoff is a knife fight: {teams} within {band} points.",
+        "PLAYOFF RACE: {teams} -- separated by almost nothing, with the "
+        "final {conf} spot on the line.",
+        "Scoreboard watching season in the {conf}: {teams}, {games} games "
+        "to go.",
+        "PLAYOFF RACE: The last {conf} berth runs through {teams}.",
+        "It's coming down to the wire in the {conf}: {teams} within "
+        "{band} points of the final spot.",
+        "PLAYOFF RACE: {games} games left, and the {conf} bubble reads "
+        "{teams}.",
+        "The {conf} playoff picture is a mess -- {teams}, all within "
+        "{band} points of the line.",
+    ]).format(teams=teams_str, band=PLAYOFF_RACE_BAND_PTS, conf=conf,
+              games=min_left)
+    return story
+
+
+def _pr_clinch_pending(math, game_date, rng, season_year, app):
+    """(story, key, story_type) for newly-clinched teams -- marking is left
+    to the caller so keys are only marked for stories actually returned."""
+    pending = []
+    for t, gp, pts, max_pts, name, _w in math["ranked"]:
+        if name in math["eliminated"] or name == "Unknown Team":
+            continue
+        if name not in math["clinched"]:
+            continue
+        key = f"playoff:{season_year}:{name}"
+        if not _recent_ok(app, key, "clinch", game_date,
+                          window=PLAYOFF_RACE_SEASON_WINDOW):
+            continue
+        w, l, otl = _team_record(t)
+        story = rng.choice([
+            "CLINCHED: {team} has officially punched its playoff ticket at "
+            "{w}-{l}-{otl} ({pts} points).",
+            "{team} is in -- a {w}-{l}-{otl} record ({pts} points) locks up "
+            "a playoff berth.",
+            "CLINCHED: The math says {team} can't miss now -- {w}-{l}-{otl}, "
+            "{pts} points, playoffs bound.",
+            "Party time: {team} has clinched a playoff spot at "
+            "{w}-{l}-{otl}.",
+            "CLINCHED: {team} ({w}-{l}-{otl}, {pts} points) is officially "
+            "playing past April.",
+            "No more scoreboard watching for {team} -- {w}-{l}-{otl} seals "
+            "a playoff berth.",
+            "CLINCHED: {team} locks it up at {w}-{l}-{otl} with {pts} "
+            "points banked.",
+            "{w}-{l}-{otl} and in: {team} has clinched its playoff spot.",
+            "CLINCHED: {team} can start printing playoff tickets -- "
+            "{w}-{l}-{otl} gets it done.",
+            "CLINCHED: {pts} points ({w}-{l}-{otl}) -- {team} is officially "
+            "a playoff team.",
+            "CLINCHED: The {team} are going dancing -- {w}-{l}-{otl} "
+            "clinch the berth.",
+            "{team} takes care of business: {w}-{l}-{otl}, and the "
+            "playoffs are official.",
+            "CLINCHED: {pts} points does it -- {team} is playoff-bound at "
+            "{w}-{l}-{otl}.",
+            "Book the travel: {team} has clinched at {w}-{l}-{otl}.",
+            "CLINCHED: {team} ({pts} points) officially joins the playoff "
+            "field.",
+            "The {team} celebration is real -- {w}-{l}-{otl} clinches a "
+            "playoff berth.",
+            "CLINCHED: {team} needed the points and got them -- "
+            "{w}-{l}-{otl}, playoffs secured.",
+            "{team} is officially in the tournament at {w}-{l}-{otl}.",
+        ]).format(team=name, w=w, l=l, otl=otl, pts=pts)
+        pending.append((story, key, "clinch"))
+        if len(pending) >= 1:
+            break
+    return pending
+
+
+def _pr_elimination_pending(math, game_date, rng, season_year, app):
+    """(story, key, story_type) for newly-eliminated teams -- marking is
+    left to the caller so keys are only marked for stories returned."""
+    pending = []
+    for t, gp, pts, max_pts, name, _w in reversed(math["ranked"]):
+        if name == "Unknown Team":
+            continue
+        if name not in math["eliminated"]:
+            continue
+        key = f"playoff:{season_year}:{name}"
+        if not _recent_ok(app, key, "eliminated", game_date,
+                          window=PLAYOFF_RACE_SEASON_WINDOW):
+            continue
+        w, l, otl = _team_record(t)
+        story = rng.choice([
+            "ELIMINATED: {team} is officially out of the playoff picture "
+            "at {w}-{l}-{otl}.",
+            "The math is cruel: {team} ({w}-{l}-{otl}) can't reach the "
+            "playoffs anymore.",
+            "ELIMINATED: The {team} season ends in April -- {w}-{l}-{otl} "
+            "isn't enough.",
+            "{team} is playing out the string now -- officially eliminated "
+            "at {w}-{l}-{otl}.",
+            "ELIMINATED: The {team} are done -- {w}-{l}-{otl} can't get "
+            "there.",
+            "It's over for {team}: eliminated from playoff contention at "
+            "{w}-{l}-{otl}.",
+            "ELIMINATED: {team} ({w}-{l}-{otl}) runs out of road -- the "
+            "playoffs are out of reach.",
+            "The {team} nightmare is official: eliminated at {w}-{l}-{otl}.",
+            "ELIMINATED: {w}-{l}-{otl} for {team} -- the math finally says "
+            "no.",
+            "{team} won't see the postseason -- eliminated at {w}-{l}-{otl}.",
+            "ELIMINATED: The {team} season is a {w}-{l}-{otl} what-could-"
+            "have-been.",
+            "Turn out the lights: {team} is eliminated at {w}-{l}-{otl}.",
+            "ELIMINATED: {team} can't climb back into the race from "
+            "{w}-{l}-{otl}.",
+            "The {team} are officially planning for next year -- "
+            "{w}-{l}-{otl}.",
+            "ELIMINATED: No miracle left for {team} ({w}-{l}-{otl}).",
+            "{team} joins the eliminated list at {w}-{l}-{otl}.",
+            "ELIMINATED: The {team} fall short -- {w}-{l}-{otl} ends the "
+            "dream.",
+            "Mathematically done: {team} is out at {w}-{l}-{otl}.",
+        ]).format(team=name, w=w, l=l, otl=otl)
+        pending.append((story, key, "eliminated"))
+        if len(pending) >= 1:
+            break
+    return pending
+
+
+def _playoff_race_stories(app, game_date, rng):
+    """Playoff race / clinch / elimination coverage for the stretch run.
+
+    Repeat keys are marked ONLY for stories actually returned: marking a
+    key for a story that gets truncated would suppress it forever (the
+    one-shot window is longer than a season).
+    """
+    pending = []
+    try:
+        if not _in_season(game_date):
+            return []
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return []
+        season_year = _pr_season_year(app, game_date)
+        nhl = [t for t in _all_teams(app)
+               if (_safe(lambda: t.league_name, "") or "")
+               == "National Hockey League"]
+        if len(nhl) < 4:
+            return []
+        pools = {}
+        for t in nhl:
+            pools.setdefault(_pr_conference(t), []).append(t)
+        for conf in sorted(pools):
+            pool = pools[conf]
+            if len(pool) < 4:
+                continue
+            rows = _pr_pool_records(pool, season_len)
+            if not rows:
+                continue
+            if not _pr_window_ok(rows, season_len):
+                continue
+            spots = len(pool) // 2
+            if spots < 1:
+                continue
+            math = _pr_cutoff_math(rows, spots)
+            pending.extend(_pr_clinch_pending(math, game_date, rng,
+                                              season_year, app))
+            pending.extend(_pr_elimination_pending(math, game_date, rng,
+                                                   season_year, app))
+            race = _pr_race_story(conf, math, rng)
+            if race is not None:
+                key = f"league:playoff_race:{season_year}:{conf}"
+                if _recent_ok(app, key, "race", game_date):
+                    pending.append((race, key, "race"))
+            if len(pending) >= 2:
+                break
+    except Exception:
+        return []
+    chosen = pending[:2]
+    for story, key, stype in chosen:
+        _mark_recent(app, key, stype, game_date)
+    return [s for s, _k, _t in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -1309,6 +1681,7 @@ _GENERATORS = [
     ("milestone", _milestone_watch, 0.35),
     ("depth", _depth_stories, 0.50),
     ("performance", _performance_stories, 0.55),
+    ("playoff_race", _playoff_race_stories, 0.65),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
