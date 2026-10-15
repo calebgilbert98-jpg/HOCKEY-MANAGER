@@ -2550,14 +2550,16 @@ def _ar_art_ross_pending(race, roster_map, season_year, app, game_date,
     trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
              else (f" with {rname} in pursuit" if rname else ""))
     # Template 3 ("Nobody has more points than X") asserts strict points
-    # maximality, but art_ross_race sorts by score = points + 3-star
-    # bonus -- a star-boosted player can lead the race with fewer points.
-    # That template is only eligible on a strict points lead (or no
+    # maximality over the WHOLE field, but art_ross_race sorts by score
+    # = points + 3-star bonus -- a star-boosted player can lead the race
+    # while a third player (not the runner-up) holds the points lead.
+    # That template is only eligible when the leader strictly outscores
+    # EVERY other candidate on points (vacuously true with no
     # runner-up); the other two assert race leadership, which holds by
     # construction.
-    strict_points_lead = (len(race) < 2
-                           or (race[0].get("points") or 0)
-                           > (race[1].get("points") or 0))
+    lead_pts = race[0].get("points") or 0
+    strict_points_lead = all(lead_pts > (r.get("points") or 0)
+                             for r in race[1:])
     templates = (_ART_ROSS_TEMPLATES if strict_points_lead
                  else _ART_ROSS_TEMPLATES[:2])
     story = rng.choice(templates).format(

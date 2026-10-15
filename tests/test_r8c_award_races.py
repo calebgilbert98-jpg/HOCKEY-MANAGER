@@ -415,8 +415,33 @@ def test_art_ross_star_boost_never_claims_false_maximality():
     assert all("Star Boosted" in s and "53 points" in s for s in seen)
 
 
-def test_art_ross_strict_points_lead_template3_fires_true():
-    # With a genuine strict points lead, template 3 is eligible and its
+def test_art_ross_third_player_points_lead_suppresses_template3():
+    # The maximality gate must hold over the WHOLE field, not just the
+    # runner-up: star bonus can order A(101) > B(100) > C(105) by score
+    # while C holds the points lead. Template 3 must never fire then.
+    a = mkplayer("Star", "Lead", "C", skater_stats(50, 51, 55),
+                 team="Aces", stars={"first": 18, "second": 0,
+                                     "third": 0})      # 101 pts
+    b = mkplayer("Run", "Star", "C", skater_stats(50, 50, 55),
+                 team="Aces", stars={"first": 20, "second": 0,
+                                     "third": 0})      # 100 pts
+    c = mkplayer("Quiet", "Storm", "C", skater_stats(55, 50, 55),
+                 team="Bees")                          # 105 pts
+    app, d = std_app([[a, b], [c], [], []])
+    players = [p for t in app.league.teams for p in t.roster]
+    rm = ar.roster_team_map(app.league.teams)
+    race = ar.art_ross_race([p for p in players
+                             if dn._td_pos_group(p) == "Forward"])
+    order = [(r["player"].first_name, r["points"]) for r in race]
+    assert order == [("Star", 101), ("Run", 100), ("Quiet", 105)], order
+    for seed in range(120):
+        item = dn._ar_art_ross_pending(race, rm, 2026, app, d,
+                                       random.Random(seed))
+        assert item is not None
+        assert "Nobody has more points" not in item[0], item[0]
+
+
+def test_art_ross_strict_points_lead_template3_fires_true():    # With a genuine strict points lead, template 3 is eligible and its
     # maximality claim is true.
     lead = mkplayer("Nikita", "Omega", "RW", skater_stats(35, 65, 55),
                     team="Bees")
