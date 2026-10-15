@@ -2353,6 +2353,416 @@ def _trade_deadline_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# Award races bucket (R8c)
+#
+# Covers the Press Box gap for Hart / Art Ross / Vezina / Norris / Calder
+# via awards_race.py (the same race functions the awards UI reads -- no
+# re-derived math, the bucket is a presentation layer over real
+# computations on real player stats).
+#
+# Story premises, all derived from real league state (never invented):
+#   - HART RACE: the hart_race leader -- name, points, goals, real team
+#     (authoritative roster_map, never the stale team_name label), and
+#     the real points gap to the runner-up when one exists.
+#   - ART ROSS RACE: the scoring-title leader and the real points margin.
+#   - NORRIS RACE: the defenseman leader (points + plus/minus). A forward
+#     outscoring every defenseman is correctly NOT named.
+#   - VEZINA RACE: the goalie leader (real SV% / GAA / wins).
+#   - CALDER RACE: the eligible-rookie leader (calder_eligible's real
+#     age + prior-games rules decide eligibility; skaters and goalies
+#     each render in their own stat frame).
+#
+# Fail-closed gates: in-season only; the race window is the second half
+# of the regular season (median team GP >= 50% of season length, GP
+# spread sane, every team still has >= 1 game left) -- award races are
+# not meaningful in October and must never fire in the offseason or
+# after the schedule ends. One-shot stories per season per leader
+# (season_year is in the repeat key, and the leader's identity is part
+# of it, so a changed leader later in the season gets his own story).
+# Player identity is the object (id() disambiguates duplicate display
+# names; per the R8a adversarial finding, id() reuse can only suppress
+# a story, never fabricate one).
+# ---------------------------------------------------------------------------
+
+# Award races are only meaningful once teams are well into the season.
+AWARD_RACE_MIN_GP_FRACTION = 0.5
+# One-shot story types use a window longer than any season so each race
+# leader fires at most once per season.
+AWARD_RACE_SEASON_WINDOW = 400
+
+
+def _ar_stat(p, *names):
+    """Season-stat read mirroring awards_race._stat: p.stats.* first,
+    then the flat attribute (QA fakes / old saves hand-set flat attrs).
+    Zero/None reads as 0 -- a premise built on missing stats is a
+    premise that must not render."""
+    stats = _safe(lambda: p.stats)
+    for n in names:
+        if stats is not None:
+            v = _safe(lambda: getattr(stats, n))
+            if v:
+                return v
+        v = _safe(lambda: getattr(p, n))
+        if v:
+            return v
+    return 0
+
+
+def _ar_team_of(player, roster_map):
+    """Authoritative team name for a player: roster membership first,
+    the (possibly stale) team_name label second. Never invents one.
+
+    Roster membership is authoritative: when the player's id IS in the
+    map, its value stands even when empty (a nameless team must fail
+    closed, not fall back to a possibly stale label). The label is only
+    a fallback for players absent from the map entirely."""
+    try:
+        pid = int(getattr(player, "id", -1) or -1)
+    except Exception:
+        pid = -1
+    if roster_map is not None and pid in roster_map:
+        return roster_map[pid] or ""
+    return _safe(lambda: player.team_name, "") or ""
+
+
+def _ar_window_ok(rows, season_len):
+    """The award-race window: second half of the regular season, sane GP
+    spread, and nobody's schedule finished yet."""
+    if not rows:
+        return False
+    gps = sorted(r[1] for r in rows)
+    if gps[-1] - gps[0] > PLAYOFF_RACE_MAX_GP_SPREAD:
+        return False
+    median_gp = gps[len(gps) // 2]
+    if median_gp < AWARD_RACE_MIN_GP_FRACTION * season_len:
+        return False
+    if min(season_len - gp for gp in gps) < 1:
+        return False
+    return True
+
+
+def _ar_lead(race):
+    """(player, name, gp) for a race leader, or None on degenerate state."""
+    if not race:
+        return None
+    p = race[0].get("player")
+    if p is None:
+        return None
+    name = _pname(p)
+    if not name or name == "Unknown Player":
+        return None
+    gp = _ar_stat(p, "games_played")
+    if not isinstance(gp, (int, float)) or gp <= 0:
+        return None
+    return p, name, int(gp)
+
+
+def _ar_key(season_year, kind, name, player):
+    """One-shot repeat key per season per race per leader. id()
+    disambiguates players that share a display name."""
+    return f"awards:{season_year}:{kind}:{name}#{id(player)}"
+
+
+def _ar_trail(race):
+    """(runner_name, points_gap) for the runner-up, or (None, None)."""
+    if len(race) < 2:
+        return None, None
+    runner = race[1].get("player")
+    rname = _pname(runner) if runner is not None else ""
+    if not rname or rname == "Unknown Player":
+        return None, None
+    try:
+        gap = int(race[0].get("points") or 0) - int(race[1].get("points") or 0)
+    except Exception:
+        return None, None
+    return rname, gap
+
+
+_HART_TEMPLATES = [
+    "HART RACE: {name} ({team}) is setting the MVP pace -- {pts} points "
+    "({g} goals) in {gp} games{trail}.",
+    "{name} leads the Hart race: {pts} points in {gp} games for {team}"
+    "{trail}.",
+    "HART RACE: The MVP frontrunner is {name} -- {pts} points ({g} "
+    "goals), pacing {team}{trail}.",
+]
+
+
+def _ar_hart_pending(race, roster_map, season_year, app, game_date, rng):
+    """(story, key, stype, tightness) for the Hart leader. Marking is left
+    to the caller so the key is only marked for a story actually
+    returned. tightness = points gap to the runner-up (smaller = more
+    newsworthy); None when there is no runner-up."""
+    lead = _ar_lead(race)
+    if lead is None:
+        return None
+    p, name, gp = lead
+    row = race[0]
+    pts = row.get("points") or 0
+    goals = row.get("goals") or 0
+    if pts <= 0:
+        return None
+    team = _ar_team_of(p, roster_map)
+    if not team or team == "Unknown Team":
+        return None
+    key = _ar_key(season_year, "hart", name, p)
+    if not _recent_ok(app, key, "award", game_date,
+                      window=AWARD_RACE_SEASON_WINDOW):
+        return None
+    rname, gap = _ar_trail(race)
+    trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
+             else (f" with {rname} in pursuit" if rname else ""))
+    story = rng.choice(_HART_TEMPLATES).format(
+        name=name, team=team, pts=pts, g=goals, gp=gp, trail=trail)
+    tightness = gap if isinstance(gap, int) and gap >= 0 else 10 ** 6
+    return story, key, "award", tightness
+
+
+_ART_ROSS_TEMPLATES = [
+    "ART ROSS RACE: {name} ({team}) leads the scoring-title chase at "
+    "{pts} points in {gp} games{trail}.",
+    "{name} paces the Art Ross race -- {pts} points ({g} goals, {a} "
+    "assists) for {team}{trail}.",
+    "ART ROSS RACE: Nobody has more points than {name} ({team}): {pts} "
+    "in {gp} games{trail}.",
+]
+
+
+def _ar_art_ross_pending(race, roster_map, season_year, app, game_date,
+                         rng):
+    lead = _ar_lead(race)
+    if lead is None:
+        return None
+    p, name, gp = lead
+    row = race[0]
+    pts = row.get("points") or 0
+    if pts <= 0:
+        return None
+    team = _ar_team_of(p, roster_map)
+    if not team or team == "Unknown Team":
+        return None
+    key = _ar_key(season_year, "art_ross", name, p)
+    if not _recent_ok(app, key, "award", game_date,
+                      window=AWARD_RACE_SEASON_WINDOW):
+        return None
+    rname, gap = _ar_trail(race)
+    trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
+             else (f" with {rname} in pursuit" if rname else ""))
+    story = rng.choice(_ART_ROSS_TEMPLATES).format(
+        name=name, team=team, pts=pts, g=row.get("goals") or 0,
+        a=row.get("assists") or 0, gp=gp, trail=trail)
+    tightness = gap if isinstance(gap, int) and gap >= 0 else 10 ** 6
+    return story, key, "award", tightness
+
+
+_NORRIS_TEMPLATES = [
+    "NORRIS RACE: {name} ({team}) is the defenseman to beat -- {pts} "
+    "points and a {pm} rating in {gp} games{trail}.",
+    "{name} leads the Norris race: {pts} points from the blue line for "
+    "{team}{trail}.",
+    "NORRIS RACE: The best defenseman in hockey right now is {name} "
+    "({team}) -- {pts} points, {pm}{trail}.",
+]
+
+
+def _ar_norris_pending(race, roster_map, season_year, app, game_date, rng):
+    lead = _ar_lead(race)
+    if lead is None:
+        return None
+    p, name, gp = lead
+    row = race[0]
+    pts = row.get("points") or 0
+    if pts <= 0:
+        return None
+    team = _ar_team_of(p, roster_map)
+    if not team or team == "Unknown Team":
+        return None
+    key = _ar_key(season_year, "norris", name, p)
+    if not _recent_ok(app, key, "award", game_date,
+                      window=AWARD_RACE_SEASON_WINDOW):
+        return None
+    rname, gap = _ar_trail(race)
+    trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
+             else (f" with {rname} in pursuit" if rname else ""))
+    try:
+        pm = f"{int(row.get('plus_minus') or 0):+d}"
+    except Exception:
+        pm = "+0"
+    story = rng.choice(_NORRIS_TEMPLATES).format(
+        name=name, team=team, pts=pts, pm=pm, gp=gp, trail=trail)
+    tightness = gap if isinstance(gap, int) and gap >= 0 else 10 ** 6
+    return story, key, "award", tightness
+
+
+_VEZINA_TEMPLATES = [
+    "VEZINA RACE: {name} ({team}) is the goalie to beat -- a {sv} save "
+    "percentage, {gaa} GAA and {w} wins{trail}.",
+    "{name} leads the Vezina race: {sv} SV%, {gaa} GAA for {team}{trail}.",
+    "VEZINA RACE: Between the pipes, nobody has been better than {name} "
+    "({team}) -- {sv}, {gaa} GAA, {w} wins{trail}.",
+]
+
+
+def _ar_vezina_pending(race, roster_map, season_year, app, game_date, rng):
+    lead = _ar_lead(race)
+    if lead is None:
+        return None
+    p, name, gp = lead
+    row = race[0]
+    sv = row.get("sv_pct") or 0.0
+    gaa = row.get("gaa")
+    wins = row.get("wins") or 0
+    # A .000 SV% or negative GAA is degenerate stat state, not a race.
+    if not (0.5 < sv < 1.0) or gaa is None or gaa < 0:
+        return None
+    team = _ar_team_of(p, roster_map)
+    if not team or team == "Unknown Team":
+        return None
+    key = _ar_key(season_year, "vezina", name, p)
+    if not _recent_ok(app, key, "award", game_date,
+                      window=AWARD_RACE_SEASON_WINDOW):
+        return None
+    runner = race[1].get("player") if len(race) > 1 else None
+    rname = _pname(runner) if runner is not None else ""
+    if not rname or rname == "Unknown Player":
+        rname = None
+    trail = f" with {rname} in pursuit" if rname else ""
+    story = rng.choice(_VEZINA_TEMPLATES).format(
+        name=name, team=team, sv=f"{sv:.3f}", gaa=f"{gaa:.2f}", w=wins,
+        gp=gp, trail=trail)
+    if len(race) < 2:
+        tightness = 10 ** 6
+    else:
+        try:
+            gap = abs(float(sv) - float(race[1].get("sv_pct") or sv))
+        except Exception:
+            gap = 0.0
+        # Same tightness units as the skater races (points): a .010 SV%
+        # gap is roughly as newsworthy as a 1-point gap.
+        tightness = gap * 100.0
+    return story, key, "award", tightness
+
+
+_CALDER_TEMPLATES = [
+    "CALDER RACE: Rookie {name} ({team}) leads the freshman class -- "
+    "{statline} in {gp} games{trail}.",
+    "{name} ({team}) is the rookie to beat: {statline} in {gp} games"
+    "{trail}.",
+    "CALDER RACE: The top rookie so far is {name} -- {statline} for "
+    "{team}{trail}.",
+]
+
+
+def _ar_calder_pending(race, roster_map, season_year, app, game_date, rng):
+    lead = _ar_lead(race)
+    if lead is None:
+        return None
+    p, name, gp = lead
+    row = race[0]
+    is_goalie = bool(row.get("goalie"))
+    if is_goalie:
+        sv = row.get("sv_pct") or 0.0
+        if not (0.5 < sv < 1.0):
+            return None
+        statline = (f"a {sv:.3f} save percentage and "
+                    f"{row.get('wins') or 0} wins")
+        tightness = 10 ** 6
+    else:
+        pts = row.get("points")
+        if pts is None or pts <= 0:
+            return None
+        statline = f"{pts} points ({row.get('goals') or 0} goals)"
+        _rname, gap = _ar_trail(race)
+        tightness = gap if isinstance(gap, int) and gap >= 0 else 10 ** 6
+    team = _ar_team_of(p, roster_map)
+    if not team or team == "Unknown Team":
+        return None
+    key = _ar_key(season_year, "calder", name, p)
+    if not _recent_ok(app, key, "award", game_date,
+                      window=AWARD_RACE_SEASON_WINDOW):
+        return None
+    rname, gap = _ar_trail(race)
+    trail = (f", {gap} clear of {rname}" if rname and gap and gap > 0
+             else (f" with {rname} in pursuit" if rname else ""))
+    story = rng.choice(_CALDER_TEMPLATES).format(
+        name=name, team=team, statline=statline, gp=gp, trail=trail)
+    return story, key, "award", tightness
+
+
+def _award_race_stories(app, game_date, rng):
+    """Award-race coverage for the second half of the season.
+
+    Repeat keys are marked ONLY for stories actually returned: marking a
+    key for a story that gets truncated would suppress it forever (the
+    one-shot window is longer than a season).
+    """
+    pending = []
+    try:
+        if not _in_season(game_date):
+            return []
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
+        nhl = [t for t in _all_teams(app)
+               if (_safe(lambda: t.league_name, "") or "")
+               == "National Hockey League"]
+        if len(nhl) < 4:
+            return []
+        rows = _pr_pool_records(nhl, season_len)
+        if not rows or not _ar_window_ok(rows, season_len):
+            return []
+        try:
+            import awards_race as _ar
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "award race bucket: awards_race import failed")
+            return []
+        nhl_ids = {id(t) for t in nhl}
+        players = [p for p, t in _all_players(app) if id(t) in nhl_ids]
+        if not players:
+            return []
+        roster_map = _ar.roster_team_map(nhl)
+        team_pct = {r[4]: (r[2] / (2 * r[1]) if r[1] > 0 else 0.0)
+                    for r in rows}
+        skaters = [p for p in players
+                   if _td_pos_group(p) in ("Forward", "Defense")]
+        goalies = [p for p in players if _td_pos_group(p) == "Goalie"]
+        cseason = _ar.calder_season_year(game_date)
+        races = [
+            (_ar_hart_pending,
+             _ar.hart_race(players, team_pct, roster_map=roster_map)),
+            (_ar_art_ross_pending, _ar.art_ross_race(skaters)),
+            (_ar_norris_pending, _ar.norris_race(players)),
+            (_ar_vezina_pending, _ar.vezina_race(goalies)),
+            (_ar_calder_pending,
+             _ar.calder_race(players, season_year=cseason)),
+        ]
+        for builder, race in races:
+            try:
+                item = builder(race, roster_map, season_year, app,
+                               game_date, rng)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "award race builder failed")
+                continue
+            if item is not None:
+                pending.append(item)
+    except Exception:
+        logging.getLogger(__name__).exception("award race bucket failed")
+        return []
+    # Newsworthiness order: the tightest race leads; the window is long
+    # enough that every race still gets its one shot per season.
+    pending.sort(key=lambda item: item[3])
+    chosen = pending[:2]
+    for story, key, stype, _tight in chosen:
+        _mark_recent(app, key, stype, game_date)
+    return [s for s, _k, _t, _x in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -2367,6 +2777,7 @@ _GENERATORS = [
     ("performance", _performance_stories, 0.55),
     ("playoff_race", _playoff_race_stories, 0.65),
     ("trade_deadline", _trade_deadline_stories, 0.60),
+    ("award_races", _award_race_stories, 0.58),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
