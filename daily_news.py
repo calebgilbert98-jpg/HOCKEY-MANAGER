@@ -1414,9 +1414,12 @@ def _pr_cutoff_math(rows, spots):
     ranked = sorted(rows, key=lambda r: (-r[2], -r[5], r[4]))
     clinched, eliminated = set(), set()
     for t, gp, pts, max_pts, name, w in ranked:
-        # Teams (other than this one) that can still finish above it.
+        # Teams (other than this one) that can still finish at-or-above
+        # it. A competitor who can only TIE still blocks the clinch: the
+        # story claims the berth is official, and a tie plus a lost
+        # tiebreaker knocks a team out -- so ties count against.
         can_pass = sum(1 for o in ranked
-                       if o[4] != name and o[3] > pts)
+                       if o[4] != name and o[3] >= pts)
         if can_pass < spots:
             clinched.add(name)
         # Teams already sitting above this team's ceiling.

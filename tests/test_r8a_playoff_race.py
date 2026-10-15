@@ -134,30 +134,31 @@ def test_elimination_premise_true():
 
 
 def test_tie_blocks_clinch_conservative():
-    # Leader's points reachable (not just passable) by 4 chasers ->
-    # no clinch story even though nobody can PASS the leader.
-    teams = [mkteam("Aces", "Eastern", 40, 30, 0),     # 80 pts, gp 70
-             mkteam("Bees", "Eastern", 34, 32, 12),   # 80 pts, gp 78? no...
-             ]
-    # Build precisely: 6-team pool, leader 80 pts / 12 games left (max 104
-    # for chasers), 4 chasers able to reach exactly 80.
+    # Aces 80 pts (gp 70). Four chasers at 56 pts (gp 70) have ceiling
+    # exactly 80: they can TIE Aces but never pass. The clinch story
+    # claims the berth is official, and a tie + lost tiebreaker knocks a
+    # team out -- so ties must block the clinch (conservative rule).
     teams = [
-        mkteam("Aces", "Eastern", 40, 30, 0),          # 80 pts, gp 70
-        mkteam("Bees", "Eastern", 28, 30, 12),         # 68 pts, gp 70
-        mkteam("Cats", "Eastern", 28, 30, 12),
-        mkteam("Dogs", "Eastern", 28, 30, 12),
-        mkteam("Elks", "Eastern", 28, 30, 12),
-        mkteam("Fins", "Eastern", 20, 40, 10),         # 50 pts
+        mkteam("Aces", "Eastern", 40, 30, 0),    # 80 pts, gp 70
+        mkteam("Bees", "Eastern", 28, 42, 0),    # 56 pts, max 80
+        mkteam("Cats", "Eastern", 28, 42, 0),
+        mkteam("Dogs", "Eastern", 28, 42, 0),
+        mkteam("Elks", "Eastern", 28, 42, 0),
+        mkteam("Fins", "Eastern", 25, 45, 0),    # 50 pts, max 74
     ]
     app = mkapp(teams)
     rows = dn._pr_pool_records(teams, 82)
+    assert all(r[3] == 80 for r in rows[1:5]), "chasers must max at 80"
     math = dn._pr_cutoff_math(rows, 3)
-    # 4 chasers can reach 80 (tie) but none can exceed it -> conservative:
-    # Aces must NOT be marked clinched.
     assert "Aces" not in math["clinched"], math["clinched"]
     stories = dn._playoff_race_stories(app, date(2027, 3, 10),
                                        random.Random(7))
-    assert not any("Aces" in s and "CLINCHED" in s for s in stories)
+    assert not any("Aces" in s and "clinch" in s.lower() for s in stories)
+    # Sanity: with the tie-block removed the old code DID call this a
+    # clinch -- i.e. this fixture discriminates the two rules.
+    can_pass_strict = sum(1 for o in rows
+                          if o[4] != "Aces" and o[3] > 80)
+    assert can_pass_strict == 0
 
 
 def test_race_story_premise_true():
