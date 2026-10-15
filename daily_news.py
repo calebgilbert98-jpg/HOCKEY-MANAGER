@@ -248,7 +248,13 @@ _current_window = REPEAT_WINDOW_DAYS
 
 
 def _recent_ok(app, entity_key, story_type, game_date, window=None):
-    """True if this entity hasn't had this story type within the window."""
+    """True if this entity hasn't had this story type within the window.
+
+    F3 (R8g adversarial): an unreadable date delta used to fail OPEN
+    (default 999 >= window -> True), so a non-date game_date re-fired the
+    same one-shot story every day. An unreadable delta now fails CLOSED
+    (suppress) -- for repeat-suppression this is the safe direction.
+    """
     window = window if window is not None else _current_window
     try:
         recent = getattr(app, "_daily_news_recent", None)
@@ -257,24 +263,51 @@ def _recent_ok(app, entity_key, story_type, game_date, window=None):
         last = recent.get((entity_key, story_type))
         if last is None:
             return True
-        delta = _safe(lambda: (game_date - last).days, 999)
-        return delta is None or delta >= window
+        # Marks are (date, window) tuples; bare dates are legacy values
+        # from before marks carried their window.
+        last_date = last[0] if isinstance(last, tuple) else last
+        delta = (game_date - last_date).days
+        return delta >= window
     except Exception:
-        return True
+        return False
 
 
-def _mark_recent(app, entity_key, story_type, game_date):
+def _mark_age_days(v, today):
+    d = v[0] if isinstance(v, tuple) else v
+    return _safe(lambda: today - d.toordinal(), 10 ** 9)
+
+
+def _mark_window_days(v):
+    w = v[1] if isinstance(v, tuple) and len(v) == 2 else None
+    try:
+        w = int(w)
+    except (TypeError, ValueError):
+        w = None
+    # Legacy bare-date marks fall back to the old flat 60-day cutoff.
+    return w if w and w > 0 else 60
+
+
+def _mark_recent(app, entity_key, story_type, game_date, window=None):
+    """Record a story firing. The mark's window travels with it (B1):
+    the old flat 60-day prune deleted 400-day one-shot marks early,
+    allowing same-season re-fires (R8g, R8e). Prune now drops only marks
+    older than their own window.
+    """
     try:
         recent = getattr(app, "_daily_news_recent", None)
         if not isinstance(recent, dict):
             recent = {}
             app._daily_news_recent = recent
-        recent[(entity_key, story_type)] = game_date
-        # Prune old entries so the dict can't grow unbounded
+        w = window if window is not None else _current_window
+        recent[(entity_key, story_type)] = (game_date, w)
+        # Prune marks older than their own window so the dict can't grow
+        # unbounded; long-window one-shot marks survive their full window.
         if len(recent) > 2000:
-            cutoff = _safe(lambda: game_date.toordinal() - 60, 0)
+            today = _safe(lambda: game_date.toordinal(), None)
+            if today is None:
+                return
             for k in [k for k, v in recent.items()
-                      if _safe(lambda: v.toordinal(), 0) < cutoff]:
+                      if _mark_age_days(v, today) > _mark_window_days(v)]:
                 del recent[k]
     except Exception:
         pass
@@ -3397,7 +3430,7 @@ def _streaks_stories(app, game_date, rng):
         deduped.append(cand)
     chosen = deduped[:STREAKS_MAX_PER_DAY]
     for _n, _lt, _nm, _story, key in chosen:
-        _mark_recent(app, key, "losing_streak", game_date)
+        _mark_recent(app, key, "losing_streak", game_date, STREAKS_WINDOW_DAYS)
     return [s for _n, _lt, _nm, s, _k in chosen]
 
 
@@ -3639,6 +3672,182 @@ def _rivalry_hype_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# R8g -- Extensions-signed bucket
+# ---------------------------------------------------------------------------
+# Positive mirror of the holdout bucket: where holdout fires on stars with
+# <=1 year left ("the clock is ticking"), this fires on stars locked up
+# long-term (years_remaining >= 4): "signed through" stories.
+#
+# Honest design decision: there is no signing-EVENT ledger anywhere in the
+# engine. Verified in code: the write paths that raise years_remaining are
+# the user negotiation flow (_finalize_contract_signing, multiplayer
+# accept paths in game_manager.py) AND the AI UFA signing path
+# (ufa_consideration.py:595 _sign_ai_winner, wired into the daily loop at
+# game_manager.py:5460) -- so real signing events do occur in headless
+# sims, and the state-based premise ("a star is secured long-term") holds
+# for both user and AI signings. The mirror is therefore STATE-based: a
+# star under a long deal is a true, independently verifiable fact, the same
+# way holdout's "star with <=1 year" is. No claim of "just signed" -- only
+# the deal that exists.
+#
+# Fact surface (tight, like holdout): player name, team name, OVR, years
+# remaining, and the signed-through year (season_start_year +
+# years_remaining; e.g. a 5-year deal during 2026-27 covers 26-27 through
+# 30-31, expiring summer 2031). No salary/AAV claims.
+#
+# Fail-closed: `_ext_years` returns the years only from a REAL contract
+# object. `_contract_years_left`'s 99-fallback (no contract info at all) is
+# treated as unknown -- a fabricated "through 2125" is worse than silence.
+# One story per (season, player) per season; the year-round gate mirrors
+# holdout (contract state is true in-season and offseason alike).
+#
+# Mark-only-returned (R8e pattern): repeat keys are marked ONLY for stories
+# actually returned, so the standing `_generate` target-cap key-drop issue
+# (affecting R8a-f) cannot suppress this bucket's stories forever.
+
+_EXT_STAR_OVR = 82       # same star bar as the holdout bucket
+_EXT_MIN_YEARS = 4       # long-term security threshold
+_EXT_MAX_PER_DAY = 2
+_EXT_ONE_SHOT_WINDOW = 400  # longer than a season: one story per (season, player)
+
+_EXTENSION_TEMPLATES = [
+    "EXTENSION: {name} isn't going anywhere -- the {ovr} OVR star is signed through {through} with {team}.",
+    "{team} has {name} locked up through {through}: {years} more {years_word} for the {ovr} OVR star.",
+    "EXTENSION: {name} ({ovr} OVR) is {team}'s long-term cornerstone -- under contract through {through}.",
+    "The {team} faithful can relax: {name} is signed through {through}, {years} {years_word} of {ovr} OVR hockey.",
+    "EXTENSION: {name} committed to {team} through {through} -- long-term security for an {ovr} OVR talent.",
+    "{name}'s future is settled in {team}: the {ovr} OVR star is locked up through {through}.",
+    "EXTENSION: {team} locked up {name} through {through} -- {years} {years_word} of runway for their {ovr} OVR cornerstone.",
+    "Long-term ink in {team}: {name} ({ovr} OVR) is signed through {through}.",
+    "EXTENSION: {name} is {team} property through {through} -- the {ovr} OVR star's deal has {years} {years_word} left.",
+    "{team} built around {name} for a reason -- the {ovr} OVR star is under contract through {through}.",
+    "EXTENSION: No drama in {team} -- {name} ({ovr} OVR) is signed through {through}.",
+    "{name} isn't hitting the market anytime soon: {years} {years_word} left on the {team} deal, through {through}.",
+    "EXTENSION: {team}'s window stays open -- {name} ({ovr} OVR) is locked up through {through}.",
+    "The {team} core has its anchor: {name} signed through {through}, {years} {years_word} at {ovr} OVR.",
+    "EXTENSION: {name} chose {team} through {through} -- the {ovr} OVR star's long-term deal keeps the band together.",
+]
+
+
+def _ext_years(p):
+    """Real years remaining on a real contract, or None.
+
+    Mirrors _contract_years_left but FAIL-CLOSED: the type is checked on
+    the RAW attribute BEFORE any coercion (F1: "5"/4.9/True must never
+    qualify -- the docstring promises "only a genuine positive int"),
+    the 99-fallback (no contract info) and out-of-range values are
+    unknown, not "long-term".
+    """
+    c = _safe(lambda: p.contract, None)
+    if c is None:
+        return None
+    raw = _safe(lambda: getattr(c, "years_remaining", None), None)
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    if raw <= 0 or raw > 50:
+        return None
+    return raw
+
+
+def _ext_season_year(app, game_date):
+    """Season-start year for the through-year arithmetic, fail-closed.
+
+    `_pr_season_year` falls back to the calendar year when the league does
+    not carry one -- but Jan-Apr belongs to the season that STARTED the
+    previous calendar year, so that fallback would overstate the
+    signed-through year by one in the second half of the season. Prefer
+    the game's own season_year; derive from the calendar only with the
+    Oct-Dec vs Jan-Apr split applied; 0 when unknown.
+
+    F5: insane years render them as fact -- so an insane league value must
+    fail closed (silent), while a merely MISSING value may still derive
+    from the calendar when unambiguous (Jan-Apr / Oct-Dec).
+    """
+    raw = _safe(lambda: getattr(_pr_league(app), "season_year", None), None)
+    y = None
+    if raw is not None:
+        try:
+            y = int(raw)
+        except (TypeError, ValueError):
+            y = None
+    if y is not None:
+        if 1900 <= y <= 2200:
+            return y
+        return 0  # corrupt league data: fail closed, never "through 6"
+    try:
+        m = game_date.month
+        if m in (1, 2, 3, 4):
+            return game_date.year - 1
+        if m in (10, 11, 12):
+            return game_date.year
+    except Exception:
+        pass
+    return 0
+
+
+def _extension_stories(app, game_date, rng):
+    """Long-term lockup stories for star players (positive holdout mirror)."""
+    try:
+        season_year = _ext_season_year(app, game_date)
+        if not season_year:
+            return []
+        candidates = []
+        for p, t in _all_players(app):
+            try:
+                ovr = _ovr(p)
+                if not _ovr_ok(ovr) or ovr < _EXT_STAR_OVR:
+                    continue
+                yrs = _ext_years(p)
+                if yrs is None or yrs < _EXT_MIN_YEARS:
+                    continue
+                name = _pname(p)
+                team = _tname(t)
+                if not name or name == "Unknown Player" \
+                        or not team or team == "Unknown Team":
+                    continue
+                through = season_year + yrs
+                story = rng.choice(_EXTENSION_TEMPLATES).format(
+                    name=name, team=team, ovr=int(ovr), years=yrs,
+                    years_word="year" if yrs == 1 else "years",
+                    through=through)
+                # Guard against placeholder-y output.
+                if "Unknown" in story:
+                    continue
+                # F2: id-only keys collide after save/load (player_id_counter
+                # is never restored -- draft classes restart at 0), letting
+                # an unrelated id-collider permanently suppress a star's
+                # story. R8e pattern: name#id disambiguates.
+                key = (f"extension:{season_year}:{name}#"
+                       f"{_safe(lambda: p.id, id(p))}")
+                if not _recent_ok(app, key, "extension", game_date,
+                                  window=_EXT_ONE_SHOT_WINDOW):
+                    continue
+                candidates.append((ovr, yrs, name, story, key))
+            except Exception:
+                continue
+    except Exception:
+        logging.getLogger(__name__).exception("extensions bucket failed")
+        return []
+    # Newsworthiness: biggest star first, longest lockup breaks ties; then
+    # dedupe identical (name, story-key) pairs and cap. F4: dedupe is on
+    # name+key, not name alone -- two different stars sharing a name on
+    # different teams render different text and both deserve to fire.
+    candidates.sort(key=lambda c: (-c[0], -c[1], c[2]))
+    deduped = []
+    seen = set()
+    for cand in candidates:
+        pair = (cand[2], cand[4])
+        if pair in seen:
+            continue
+        seen.add(pair)
+        deduped.append(cand)
+    chosen = deduped[:_EXT_MAX_PER_DAY]
+    for _ovr_, _yrs, _nm, _story, key in chosen:
+        _mark_recent(app, key, "extension", game_date, _EXT_ONE_SHOT_WINDOW)
+    return [s for _ovr_, _yrs, _nm, s, _k in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -3657,6 +3866,7 @@ _GENERATORS = [
     ("heroics", _heroics_stories, 0.60),
     ("streaks", _streaks_stories, 0.60),
     ("rivalry_hype", _rivalry_hype_stories, 0.60),
+    ("extension", _extension_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
