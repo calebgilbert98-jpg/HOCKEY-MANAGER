@@ -23,7 +23,7 @@ Design notes:
 import logging
 import math
 import random
-from datetime import date
+from datetime import date, timedelta
 
 # Variety window: don't repeat the same story type about the same entity
 # within this many game-days.
@@ -1854,6 +1854,494 @@ def _playoff_race_stories(app, game_date, rng):
     return [s for s, _k, _t in chosen]
 
 
+# ---------------------------------------------------------------------------
+# Trade deadline week bucket (R8b)
+#
+# Covers the deadline-week Press Box gap: buyers-vs-sellers framing tied to
+# the real trade-deadline window. The deadline DATE is the canonical one the
+# Trade Deadline Center uses -- trade_deadline_manager.trade_deadline_date
+# (last regular-season game minus 40 days per CBA 13.12(j); March 8
+# fallback). The center reads it via TradeDeadlineManager.deadline_date();
+# this bucket reads the same module-level function directly so the calendar
+# always agrees (the center's screen module is never imported -- it drags
+# tkinter into headless).
+#
+# Story premises, all derived from real league state (never invented):
+#   - DEADLINE FRAME: the countdown (days to the deadline) plus the real
+#     points leader as the buyers' headliner and the real cellar team as
+#     the sellers' headliner.
+#   - BUYER WATCH: a top-third-by-points club is buying; its shopping list
+#     is the positional group with the biggest real roster shortfall
+#     (12F/6D/2G complement), with its real cap space when readable.
+#   - SELLER WATCH: a bottom-third club is selling; the chip named is a
+#     real roster player on a real expiring contract (years_remaining == 0
+#     via _contract_years_left), best OVR first.
+#   - TRADE REPORT: a real completed deal from gm.trade_history whose
+#     defensively parsed date falls in the deadline window, between two
+#     clubs that exist in the live league.
+#
+# Fail-closed gates: the window is exactly deadline-7..deadline inclusive;
+# anything outside stays silent (never renders). NHL teams only;
+# in-season only; sane GP (median >= 40, spread <= 15, every team still
+# has >= 1 game left). One-shot stories per season (season_year is in the
+# repeat key). Team identity in the buyer/seller split is the team OBJECT,
+# never the display name (duplicate names must not cross-contaminate).
+# ---------------------------------------------------------------------------
+
+# Deadline-week window: stories fire on deadline day and the 7 days before.
+TRADE_DEADLINE_WEEK_DAYS = 7
+# Stretch GP sanity inside the window (the deadline lands ~75% through).
+TRADE_DEADLINE_MIN_MEDIAN_GP = 40
+TRADE_DEADLINE_MAX_GP_SPREAD = 15
+# One-shot story types use a window longer than any season so they fire at
+# most once per season per team (season_year is part of the repeat key).
+TRADE_DEADLINE_SEASON_WINDOW = 400
+# Standard NHL complement the buyer-need math is measured against
+# (same 12F/6D/2G the deadline manager's _team_needs uses).
+_TD_COMPLEMENT = (("Forward", 12), ("Defense", 6), ("Goalie", 2))
+
+
+def _td_league(app):
+    gm = _safe(lambda: app.game_manager)
+    return _safe(lambda: gm.league) or _safe(lambda: app.league)
+
+
+def _td_deadline(app):
+    """This season's real trade deadline as a date, or None (fail closed).
+
+    Canonical source: trade_deadline_manager.trade_deadline_date -- the
+    same function the Trade Deadline Center's manager reads. Imported
+    lazily so a broken manager module degrades to silence, never to a
+    crashed news cycle.
+    """
+    try:
+        from trade_deadline_manager import trade_deadline_date
+    except Exception:
+        return None
+    try:
+        dd = trade_deadline_date(_td_league(app))
+    except Exception:
+        return None
+    try:
+        # trade_deadline_date promises a date; tolerate a datetime.
+        if hasattr(dd, "date") and not isinstance(dd, date):
+            dd = dd.date()
+    except Exception:
+        return None
+    return dd if isinstance(dd, date) else None
+
+
+def _td_gate(app, game_date, rows, season_len):
+    """(deadline_date, days_left) when the deadline-week window is live.
+
+    (None, None) otherwise -- fail closed on every bad input: outside
+    Oct-Apr, no derivable deadline, outside deadline-7..deadline, ragged
+    GP, or no games left.
+    """
+    if not _in_season(game_date):
+        return None, None
+    deadline = _td_deadline(app)
+    if deadline is None:
+        return None, None
+    try:
+        days_left = (deadline - game_date).days
+    except Exception:
+        return None, None
+    if days_left < 0 or days_left > TRADE_DEADLINE_WEEK_DAYS:
+        return None, None
+    if not rows:
+        return None, None
+    gps = sorted(r[1] for r in rows)
+    if gps[-1] - gps[0] > TRADE_DEADLINE_MAX_GP_SPREAD:
+        return None, None
+    if gps[len(gps) // 2] < TRADE_DEADLINE_MIN_MEDIAN_GP:
+        return None, None
+    if min(season_len - gp for gp in gps) < 1:
+        return None, None
+    return deadline, days_left
+
+
+def _td_buyers_sellers(rows):
+    """Top third by points = buyers; bottom third = sellers (worst-first).
+
+    Mirrors trade_deadline_manager._buyer_seller_split's rule. Team
+    identity is the object; duplicate display names can't cross the line.
+    """
+    ranked = sorted(rows, key=lambda r: (-r[2], -r[5], r[4]))
+    n = max(2, len(ranked) // 3)
+    return ranked[:n], list(reversed(ranked[-n:]))
+
+
+def _td_pos_group(p):
+    """'Forward' | 'Defense' | 'Goalie' | None from the real position."""
+    pos = str(_pos(p) or "").upper()
+    if pos in ("C", "LW", "RW"):
+        return "Forward"
+    if pos in ("LD", "RD", "D"):
+        return "Defense"
+    if pos == "G":
+        return "Goalie"
+    return None
+
+
+def _td_roster_counts(team):
+    """Real F/D/G body counts. None when the roster can't be read."""
+    counts = {"Forward": 0, "Defense": 0, "Goalie": 0}
+    try:
+        roster = list(team.roster)
+    except Exception:
+        return None
+    for p in roster:
+        g = _td_pos_group(p)
+        if g is not None:
+            counts[g] += 1
+    return counts
+
+
+def _td_primary_need(team):
+    """Biggest positional shortfall vs the 12F/6D/2G complement.
+
+    'Depth' when the complement is full; None when the roster can't be
+    read (fail closed -- no need story without a real roster).
+    """
+    counts = _td_roster_counts(team)
+    if counts is None:
+        return None
+    needs = {k: max(0, want - counts[k]) for k, want in _TD_COMPLEMENT}
+    if not any(needs.values()):
+        return "Depth"
+    # Tie-break: scarcest real-world commodity first (same order the
+    # deadline manager's _team_primary_need uses).
+    best = max(needs.values())
+    for key, _want in _TD_COMPLEMENT:
+        if needs[key] == best:
+            return key
+    return "Depth"
+
+
+def _td_rental_chips(team):
+    """Real expiring-contract players (years_remaining == 0), best OVR first.
+
+    Each chip: (player, name, group, ovr_int). Nameless players
+    ("Unknown Player") and insane OVRs never qualify -- the seller story
+    stays silent instead of rendering one.
+    """
+    chips = []
+    for p in _safe(lambda: list(team.roster), []) or []:
+        try:
+            if _contract_years_left(p) != 0:
+                continue
+            name = _pname(p)
+            if not name or name == "Unknown Player":
+                continue
+            ovr = _ovr(p)
+            if not _ovr_ok(ovr):
+                continue
+            group = _td_pos_group(p)
+            if group is None:
+                continue
+            chips.append((p, name, group, int(ovr)))
+        except Exception:
+            continue
+    chips.sort(key=lambda c: -c[3])
+    return chips
+
+
+def _td_parse_trade_date(value):
+    """Parse a CompletedTrade.date (free-form) to a date, or None.
+
+    Never raises. tzinfo is stripped so naive and aware values always
+    compare cleanly.
+    """
+    try:
+        from datetime import datetime as _dt
+        if isinstance(value, _dt):
+            return value.replace(tzinfo=None).date()
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+            try:
+                return _dt.strptime(text, fmt).date()
+            except Exception:
+                continue
+        try:
+            return _dt.fromisoformat(text).replace(tzinfo=None).date()
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _td_recent_trades(app, deadline):
+    """Real completed trades in the deadline window, newest first.
+
+    Source: gm.trade_history (trade_engine.CompletedTrade records). Each
+    item: {'date', 'a', 'b', 'summary', 'a_gave', 'b_gave'}. Only trades
+    where BOTH teams exist in the live league -- stray names never leak
+    in. Deterministic. Never raises.
+    """
+    items = []
+    league = _td_league(app)
+    real = {_tname(t) for t in _safe(lambda: list(league.teams), []) or []}
+    real.discard("Unknown Team")
+    gm = _safe(lambda: app.game_manager) or app
+    try:
+        history = list(getattr(gm, "trade_history", None) or [])
+    except Exception:
+        history = []
+    lo = deadline - timedelta(days=TRADE_DEADLINE_WEEK_DAYS)
+    for tr in history:
+        try:
+            a = str(getattr(tr, "team_a", "") or "").strip()
+            b = str(getattr(tr, "team_b", "") or "").strip()
+            if not a or not b or a not in real or b not in real:
+                continue
+            d = _td_parse_trade_date(getattr(tr, "date", None))
+            if d is None or d < lo or d > deadline:
+                continue
+            items.append({
+                "date": d, "a": a, "b": b,
+                "summary": str(getattr(tr, "summary", "") or "").strip(),
+                "a_gave": [str(x) for x in
+                           (getattr(tr, "a_gave", None) or [])],
+                "b_gave": [str(x) for x in
+                           (getattr(tr, "b_gave", None) or [])],
+            })
+        except Exception:
+            continue
+    items.sort(key=lambda i: (i["date"], i["a"], i["b"]), reverse=True)
+    return items
+
+
+def _td_team_key(season_year, t, name, kind):
+    """Repeat key for one-shot team stories. id() disambiguates teams that
+    share a display name (or are both nameless); the dict is
+    session-scoped and team objects live in the league, so it is stable
+    for the dedup window's purposes."""
+    return f"deadline:{season_year}:{kind}:{name}#{id(t)}"
+
+
+_TD_FRAME_TEMPLATES = [
+    "DEADLINE WEEK: The trade deadline {when} -- {lead} ({lrec}, {lpts} "
+    "points) headline the buyers' market while {cellar} ({crec}, {cpts} "
+    "points) top the sellers' board.",
+    "The trade deadline {when}. Buyers are circling: {lead} leads the "
+    "league at {lrec} ({lpts} points). Sellers are listening: {cellar} "
+    "sits last at {crec} ({cpts} points).",
+    "DEADLINE WEEK: {days} to the deadline ({ddate}). {lead} ({lrec}, "
+    "{lpts} points) are the team to beat in the buyers' market; {cellar} "
+    "({crec}, {cpts} points) headline the sellers.",
+    "The clock is ticking -- the trade deadline {when}. {lead} ({lrec}, "
+    "{lpts} points) set the pace for buyers; {cellar} ({crec}, {cpts} "
+    "points) lead the sellers' list.",
+]
+
+
+def _td_frame_pending(rows, buyers, sellers, days_left, deadline,
+                      season_year, app, game_date, rng):
+    """(story, key, story_type) for the deadline-week frame -- one shot per
+    season. Marking is left to the caller so the key is only marked for a
+    story actually returned."""
+    if not buyers or not sellers:
+        return []
+    lead, cellar = buyers[0], sellers[0]
+    if lead[4] == "Unknown Team" or cellar[4] == "Unknown Team":
+        return []
+    key = f"deadline:{season_year}:frame"
+    if not _recent_ok(app, key, "frame", game_date,
+                      window=TRADE_DEADLINE_SEASON_WINDOW):
+        return []
+    lw, ll, lotl = _team_record(lead[0])
+    cw, cl, cotl = _team_record(cellar[0])
+    dstr = deadline.strftime("%b %d")
+    if days_left == 0:
+        when = f"is TODAY ({dstr})"
+    elif days_left == 1:
+        when = f"is tomorrow ({dstr})"
+    else:
+        when = f"is {days_left} days away ({dstr})"
+    story = rng.choice(_TD_FRAME_TEMPLATES).format(
+        when=when, lead=lead[4], cellar=cellar[4],
+        lrec=f"{lw}-{ll}-{lotl}", crec=f"{cw}-{cl}-{cotl}",
+        lpts=lead[2], cpts=cellar[2],
+        days="1 day" if days_left == 1 else f"{days_left} days",
+        ddate=dstr)
+    return [(story, key, "frame")]
+
+
+_TD_BUYER_TEMPLATES = [
+    "BUYER WATCH: {team} ({rec}, {pts} points) are deadline buyers -- "
+    "shopping for {need}{cap}.",
+    "{team} ({rec}) is buying at the deadline: {need} tops the shopping "
+    "list{cap}.",
+    "BUYER WATCH: At {pts} points ({rec}), {team} is all-in -- the ask "
+    "around the league is {need}{cap}.",
+    "Deadline buyers: {team} ({rec}, {pts} points) want {need}{cap}.",
+]
+
+_TD_NEED_LABEL = {
+    "Forward": "forward help",
+    "Defense": "blue-line help",
+    "Goalie": "goaltending depth",
+    "Depth": "depth pieces",
+}
+
+
+def _td_buyer_pending(buyers, season_year, app, game_date, rng):
+    """(story, key, story_type) for buyer clubs -- one per team per season.
+    Marking is left to the caller."""
+    pending = []
+    for t, gp, pts, max_pts, name, w in buyers:
+        if name == "Unknown Team":
+            continue
+        need = _td_primary_need(t)
+        if need is None:
+            continue
+        key = _td_team_key(season_year, t, name, "buyer")
+        if not _recent_ok(app, key, "buyer", game_date,
+                          window=TRADE_DEADLINE_SEASON_WINDOW):
+            continue
+        rw, rl, rotl = _team_record(t)
+        cap = _safe(lambda: int(t.cap_space), None)
+        cap_str = (f" with ${cap / 1_000_000:.1f}M in cap space"
+                   if isinstance(cap, int) and cap > 0 else "")
+        story = rng.choice(_TD_BUYER_TEMPLATES).format(
+            team=name, rec=f"{rw}-{rl}-{rotl}", pts=pts,
+            need=_TD_NEED_LABEL[need], cap=cap_str)
+        pending.append((story, key, "buyer"))
+        if len(pending) >= 1:
+            break
+    return pending
+
+
+_TD_SELLER_TEMPLATES = [
+    "SELLER WATCH: {team} ({rec}) are listening on offers -- {chip} "
+    "({pos}, {ovr} OVR) is playing on an expiring contract.",
+    "{team} ({rec}) headline the sellers' market: {chip} ({pos}, "
+    "{ovr} OVR) is the rental chip drawing calls.",
+    "SELLER WATCH: {team} is selling at {rec} -- {chip} ({pos}, {ovr} "
+    "OVR) is on an expiring deal and could move.",
+    "Rental market: {chip} ({pos}, {ovr} OVR) of the {rec} {team} is the "
+    "name rival GMs keep asking about.",
+]
+
+_TD_POS_LABEL = {"Forward": "forward", "Defense": "defenseman",
+                 "Goalie": "goaltender"}
+
+
+def _td_seller_pending(sellers, season_year, app, game_date, rng):
+    """(story, key, story_type) for seller clubs -- one per team per season.
+    A seller with no real expiring-contract chip stays silent (fail
+    closed). Marking is left to the caller."""
+    pending = []
+    for t, gp, pts, max_pts, name, w in sellers:
+        if name == "Unknown Team":
+            continue
+        chips = _td_rental_chips(t)
+        if not chips:
+            continue
+        key = _td_team_key(season_year, t, name, "seller")
+        if not _recent_ok(app, key, "seller", game_date,
+                          window=TRADE_DEADLINE_SEASON_WINDOW):
+            continue
+        _p, chip_name, group, ovr = chips[0]
+        rw, rl, rotl = _team_record(t)
+        story = rng.choice(_TD_SELLER_TEMPLATES).format(
+            team=name, rec=f"{rw}-{rl}-{rotl}", chip=chip_name,
+            pos=_TD_POS_LABEL[group], ovr=ovr)
+        pending.append((story, key, "seller"))
+        if len(pending) >= 1:
+            break
+    return pending
+
+
+_TD_TRADE_TEMPLATES = [
+    "DEADLINE DEAL: {a} and {b} struck a deal -- {detail}",
+    "Done deal at the deadline: {a} and {b} completed a trade -- {detail}",
+    "DEADLINE DEAL: It's official -- {a} and {b} made a trade: {detail}",
+]
+
+
+def _td_trade_pending(trades, season_year, app, game_date, rng):
+    """(story, key, story_type) for real completed deadline deals.
+
+    One story per trade (the key carries the date + both clubs). A trade
+    with no usable detail (no summary, no asset lists) stays silent.
+    Marking is left to the caller."""
+    pending = []
+    for tr in trades[:3]:
+        if tr["summary"]:
+            detail = tr["summary"]
+        else:
+            bits = []
+            if tr["a_gave"]:
+                bits.append(f"{tr['a']} gets {', '.join(tr['a_gave'])}")
+            if tr["b_gave"]:
+                bits.append(f"{tr['b']} gets {', '.join(tr['b_gave'])}")
+            if not bits:
+                continue
+            detail = "; ".join(bits)
+        key = (f"deadline:{season_year}:trade:"
+               f"{tr['date'].isoformat()}:{tr['a']}#{tr['b']}")
+        if not _recent_ok(app, key, "trade", game_date,
+                          window=TRADE_DEADLINE_SEASON_WINDOW):
+            continue
+        story = rng.choice(_TD_TRADE_TEMPLATES).format(
+            a=tr["a"], b=tr["b"], detail=detail)
+        pending.append((story, key, "trade"))
+        if len(pending) >= 1:
+            break
+    return pending
+
+
+def _trade_deadline_stories(app, game_date, rng):
+    """Trade-deadline week coverage: buyers-vs-sellers framing + real deals.
+
+    Repeat keys are marked ONLY for stories actually returned: marking a
+    key for a story that gets truncated would suppress it forever (the
+    one-shot window is longer than a season).
+    """
+    pending = []
+    try:
+        if not _in_season(game_date):
+            return []
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
+        league = _td_league(app)
+        nhl = [t for t in _safe(lambda: list(league.teams), []) or []
+               if (_safe(lambda: t.league_name, "") or "")
+               == "National Hockey League"]
+        if len(nhl) < 4:
+            return []
+        rows = _pr_pool_records(nhl, season_len)
+        deadline, days_left = _td_gate(app, game_date, rows, season_len)
+        if deadline is None:
+            return []
+        buyers, sellers = _td_buyers_sellers(rows)
+        # Newsworthiness order: the frame anchors the week, then real
+        # completed deals, then buyer/seller watches.
+        pending.extend(_td_frame_pending(rows, buyers, sellers, days_left,
+                                         deadline, season_year, app,
+                                         game_date, rng))
+        pending.extend(_td_trade_pending(_td_recent_trades(app, deadline),
+                                         season_year, app, game_date, rng))
+        pending.extend(_td_buyer_pending(buyers, season_year, app,
+                                         game_date, rng))
+        pending.extend(_td_seller_pending(sellers, season_year, app,
+                                           game_date, rng))
+    except Exception:
+        logging.getLogger(__name__).exception("trade deadline bucket failed")
+        return []
+    chosen = pending[:2]
+    for story, key, stype in chosen:
+        _mark_recent(app, key, stype, game_date)
+    return [s for s, _k, _t in chosen]
+
 
 # ---------------------------------------------------------------------------
 # Main entry
@@ -1869,6 +2357,7 @@ _GENERATORS = [
     ("depth", _depth_stories, 0.50),
     ("performance", _performance_stories, 0.55),
     ("playoff_race", _playoff_race_stories, 0.65),
+    ("trade_deadline", _trade_deadline_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
