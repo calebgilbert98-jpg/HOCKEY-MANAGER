@@ -161,18 +161,18 @@ def get_market(league):
         if not isinstance(m, dict):
             m = {"listings": [], "seq": 0, "deal_cooldown": {},
                  "relist_cooldown": {}, "rumor_log": [],
-                 "shortlist_nudges": {}}
+                 "shortlist_nudges": {}, "trade_ledger": []}
             league.trade_market = m
         for k, v in (("listings", []), ("seq", 0), ("deal_cooldown", {}),
                      ("relist_cooldown", {}), ("rumor_log", []),
-                     ("shortlist_nudges", {})):
+                     ("shortlist_nudges", {}), ("trade_ledger", [])):
             if k not in m:
                 m[k] = v
         return m
     except Exception:
         return {"listings": [], "seq": 0, "deal_cooldown": {},
                 "relist_cooldown": {}, "rumor_log": [],
-                "shortlist_nudges": {}}
+                "shortlist_nudges": {}, "trade_ledger": []}
 
 
 def get_trade_blocks(league):
@@ -192,7 +192,7 @@ def clear_for_new_season(league):
     try:
         league.trade_market = {"listings": [], "seq": 0, "deal_cooldown": {},
                                "relist_cooldown": {}, "rumor_log": [],
-                               "shortlist_nudges": {}}
+                               "shortlist_nudges": {}, "trade_ledger": []}
         league.trade_blocks = {}
     except Exception:
         pass
@@ -1066,11 +1066,16 @@ def _headliner_package_ok(app, league, player, seller, bidder, assets):
 
 
 def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
-                         target):
+                         target, retention=None):
     """Shape a headliner bid into a real package: a young roster player and
     a 1st (or blue-chip prospect) lead the offer. Swaps in from the
     candidate pool when needed; respects MAX_BID_ASSETS and the cap; never
-    raises; returns the (possibly unchanged) chosen list."""
+    raises; returns the (possibly unchanged) chosen list.
+
+    retention: optional {player_id: pct} from an R7 retention bid -- the
+    cap checks stay under the bid's own terms so the overlay can't break
+    the retention math the bid was sized on.
+    """
     try:
         import trade_engine as te
         from game_classes import DraftPick
@@ -1083,7 +1088,8 @@ def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
                 if len(chosen) < MAX_BID_ASSETS:
                     try:
                         if not te._cap_ok_after(bidder, chosen + [asset],
-                                                [player]):
+                                                [player],
+                                                retention=retention):
                             return
                     except Exception:
                         pass
@@ -1107,7 +1113,8 @@ def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
                 trial = [a for i, a in enumerate(chosen) if i != drop_i]
                 trial.append(asset)
                 try:
-                    if not te._cap_ok_after(bidder, trial, [player]):
+                    if not te._cap_ok_after(bidder, trial, [player],
+                                            retention=retention):
                         return
                 except Exception:
                     pass
@@ -1739,13 +1746,55 @@ def _attach_cap_dump_sweetener(app, league, seller, player, listing, ask):
         return ask
 
 
-def build_bid(app, league, bidder, player, seller, ask_points, n_bidders=1):
-    """Build one opening offer sized to ask x eagerness. Returns a list of
-    live asset objects (owned by bidder) or []. Never raises. Read-only
-    until the caller executes.
+class Bid(list):
+    """A build_bid result: the offered asset list plus optional
+    retained-salary terms.
+
+    A plain list subclass so every existing call site keeps working
+    unchanged (truthiness, iteration, list(...), sum(...), `in`). The
+    ``retention`` attribute maps player id -> pct (1-50): proposed
+    retained-salary terms on the piece being acquired (the SELLER retains).
+    Empty when the bid needs no retention. Callers that execute the bid
+    must thread ``bid.retention`` into ai_consider_trade / execute_trade --
+    list(assets) alone drops it, by design (e.g. user-sale offers, where
+    the current negotiation path has no retention affordance).
+    """
+    def __init__(self, assets=(), retention=None):
+        super().__init__(assets)
+        try:
+            self.retention = dict(retention or {})
+        except Exception:
+            self.retention = {}
+
+
+# R7: cap for the salary-matching bundle inside a bid (the remaining slot
+# goes to picks for value top-up; MAX_BID_ASSETS bounds the whole offer).
+_MAX_SALARY_MATCH_PLAYERS = 2
+# R7: small buffer so the salary-matching bundle clears the dry-check with
+# margin against integer rounding between the cap-hit helpers.
+_SALARY_MATCH_MARGIN = 100_000
+
+
+def build_bid(app, league, bidder, player, seller, ask_points, n_bidders=1,
+              allow_retention=True):
+    """Build one opening offer sized to ask x eagerness. Returns a Bid (a
+    list of live asset objects owned by bidder, possibly empty) carrying
+    optional ``.retention`` terms ({player_id: pct} the seller is asked to
+    retain). Never raises. Read-only until the caller executes.
 
     n_bidders: how many clubs are in on this listing (1 = uncontested).
     Feeds the D44 overpay-to-close premium.
+
+    allow_retention: False on user-sale listings -- the AI bidder may not
+    ask the human seller to retain salary through a negotiation path that
+    has no retention affordance.
+
+    Three passes: (1) picks-first greedy fill (unchanged -- ample-cap
+    bidders resolve here exactly as before); (2) R7 salary matching when
+    the cap blocks picks-only (movable contracts cover the shortfall,
+    picks top up value); (3) R7 seller retention when no salary package
+    exists (minimal pct that makes a picks package fit, seller slot
+    preflighted).
     """
     try:
         import trade_engine as te
@@ -1902,27 +1951,237 @@ def build_bid(app, league, bidder, player, seller, ask_points, n_bidders=1):
             return 1
         order = {"pick": 0, "prospect": 1, "depth": 2}
         cands.sort(key=lambda c: (order.get(c[0], 9), _need_rank(c), _av(c)))
+
+        def _whole_ok(out_list, retention=None):
+            try:
+                return bool(te._cap_ok_after(bidder, list(out_list), [player],
+                                             retention=retention))
+            except Exception:
+                return True
+
+        # Pass 1 (unchanged): cheapest-first fill until target reached
+        # (picks before prospects before roster players -- GMs spend
+        # futures first), with a cap dry-check as we build: bidder must
+        # stay legal.
         chosen, total = [], 0
         for _kind, asset in cands:
             if len(chosen) >= MAX_BID_ASSETS:
                 break
-            # Cap dry-check as we build: bidder must stay legal.
-            try:
-                if not te._cap_ok_after(bidder, chosen + [asset], [player]):
-                    continue
-            except Exception:
-                pass
+            if not _whole_ok(chosen + [asset]):
+                continue
             chosen.append(asset)
             total += _av((_kind, asset))
             if total >= target:
                 break
+        retention = {}
+        if total < target:
+            # Pass 2 (R7): salary matching. Pass 1 stalls when no single
+            # asset clears the cap dry-check -- the greedy per-asset check
+            # can never assemble multi-player salary matching. Build the
+            # money out of movable contracts, then top up with picks.
+            # Dominance guard (reviewer B round 1): only replace pass 1's
+            # bid when the salary package is actually worth more -- pass 1
+            # can already assemble a legal multi-player package below ask.
+            sm_assets, sm_total = _salary_matched_bid(
+                te, bidder, player, cands, target, _av)
+            if sm_assets and _whole_ok(sm_assets) and \
+                    (not chosen or sm_total > total):
+                chosen, total = sm_assets, sm_total
+        if not chosen and allow_retention:
+            # Pass 3 (R7): seller retention. No salary package exists, so
+            # ask the seller to retain the minimal pct that makes a picks
+            # package fit (slot preflighted; never on user-sale listings).
+            _ret = _retention_bid(te, bidder, seller, player, cands,
+                                  target, _av)
+            if _ret is not None:
+                _r_assets, retention = _ret
+                if _r_assets and _whole_ok(_r_assets, retention):
+                    chosen = _r_assets
+                    total = sum(_av(("pick", a)) for a in chosen)
         # Headliner pieces get package-shaped offers (see overlay above).
         if _is_headliner(player):
             chosen = _shape_headliner_bid(app, league, bidder, player, seller,
-                                          chosen, cands, target)
-        return chosen
+                                          chosen, cands, target,
+                                          retention=retention or None)
+            chosen = list(chosen)
+        return Bid(chosen, retention)
     except Exception:
-        return []
+        return Bid()
+
+
+def _salary_matched_bid(te, bidder, player, cands, target, _av):
+    """R7 pass 2: build a cap-legal bid out of movable salary.
+
+    When the bidder's effective space can't absorb the incoming hit,
+    select the smallest set of movable roster contracts (biggest hit
+    first -- the classic one-contract framework deal; cheapest value on
+    ties, so overpaid money moves first) covering
+    ``incoming_hit - effective_space + margin``, then top up with picks
+    (zero cap) toward the value target. The candidate pool carries the
+    same eligibility as the main fill (not core, not UNTOUCHABLE-tier,
+    veto-clean). Returns (assets, total_value) or ([], 0). Never raises.
+    """
+    try:
+        try:
+            in_hit = int(te._player_cap_hit(player))
+        except Exception:
+            in_hit = 0
+        if in_hit <= 0:
+            return [], 0
+        try:
+            space = int(te._effective_cap_space(bidder))
+        except Exception:
+            space = 0
+        need_out = in_hit - space + _SALARY_MATCH_MARGIN
+        if need_out <= 0:
+            return [], 0
+        salaried = []
+        for kind, a in cands:
+            if kind == "pick":
+                continue
+            try:
+                hit = int(te._player_cap_hit(a))
+            except Exception:
+                hit = 0
+            if hit <= 0:
+                continue
+            try:
+                v = _av((kind, a))
+            except Exception:
+                v = 0
+            salaried.append((hit, v, kind, a))
+        if not salaried:
+            return [], 0
+        salaried.sort(key=lambda t: (-t[0], t[1]))
+        bundle, shed = [], 0
+        for hit, _v, kind, a in salaried:
+            if len(bundle) >= _MAX_SALARY_MATCH_PLAYERS:
+                break
+            bundle.append((kind, a))
+            shed += hit
+            if shed >= need_out:
+                break
+        if shed < need_out:
+            return [], 0
+        out = [a for _k, a in bundle]
+        try:
+            if not te._cap_ok_after(bidder, out, [player]):
+                return [], 0
+        except Exception:
+            pass
+        total = sum(_av(c) for c in bundle)
+        _out_ids = {id(a) for a in out}
+        for kind, a in cands:
+            if len(out) >= MAX_BID_ASSETS or total >= target:
+                break
+            if kind != "pick" or id(a) in _out_ids:
+                continue
+            try:
+                if not te._cap_ok_after(bidder, out + [a], [player]):
+                    continue
+            except Exception:
+                pass
+            out.append(a)
+            _out_ids.add(id(a))
+            total += _av((kind, a))
+        return out, total
+    except Exception:
+        return [], 0
+
+
+def _retention_bid(te, bidder, seller, player, cands, target, _av):
+    """R7 pass 3: propose seller retention when no salary package exists.
+
+    Computes the minimal retention pct (1-50) that makes a picks-only
+    package cap-legal for the bidder, and preflights the seller side
+    (free retention slot + full CBA term validation). The bidder still
+    meets the full ask in asset value -- retention is a cap mechanism,
+    not a discount. Returns (assets, {player_id: pct}) or None.
+    Never raises.
+    """
+    try:
+        import math
+        try:
+            pid = getattr(player, "id", None)
+            in_hit = int(te._player_cap_hit(player))
+        except Exception:
+            return None
+        if pid is None or in_hit <= 0:
+            return None
+        try:
+            space = int(te._effective_cap_space(bidder))
+        except Exception:
+            space = 0
+        shortfall = in_hit - space
+        if shortfall <= 0:
+            return None
+        pct = int(math.ceil(shortfall * 100.0 / in_hit))
+        if pct > int(te.MAX_RETENTION_PCT):
+            return None
+        try:
+            if int(te.retention_slots_used(seller)) >= \
+                    int(te.MAX_RETENTION_SLOTS):
+                return None
+        except Exception:
+            pass
+        try:
+            ok, _why = te.apply_retention_dry_run(seller, player, pct)
+        except Exception:
+            ok = False
+        if not ok:
+            return None
+        retention = {pid: pct}
+        # R7 seller compensation (reviewers B/C round 1): retention is not
+        # free -- the seller keeps pct% of the hit as dead cap and burns
+        # one of 3 scarce retention slots. Price it at HALF the game's
+        # cap-dump rate (D46b charges 200 pts per $1M of dead money; a
+        # seller who listed the player is a willing participant, not a
+        # dump victim, so the consent price is a modest sweetener, not a
+        # full dump toll), applied to the ANNUAL retained hit. The bidder
+        # must meet target + premium: that premium IS the seller's consent
+        # price. If the bidder can't pay it, there is no retention deal.
+        try:
+            _rate = float(te._DUMP_TOLL_PER_M46B) / 2.0
+        except Exception:
+            _rate = 100.0
+        try:
+            _premium = int(round(_rate * (in_hit * pct / 100.0) / 1_000_000))
+        except Exception:
+            _premium = 0
+        goal = target + _premium
+        # Pick the BEST assets first (not cheapest-first): the bidder must
+        # actually reach the consent price. Picks and prospects both work
+        # (prospects are low-salary, so they fit the retention-created
+        # room); roster veterans don't (pass 2 already failed on salary).
+        # If the package can't reach the consent price, there is no
+        # retention deal -- the seller is never asked to retain for free.
+        _pay = sorted(
+            (c for c in cands if c[0] in ("pick", "prospect")),
+            key=lambda c: _av(c), reverse=True)
+        out, total = [], 0
+        for kind, a in _pay:
+            if len(out) >= MAX_BID_ASSETS or total >= goal:
+                break
+            # Prospects add salary: verify the retention still covers it.
+            try:
+                if kind != "pick" and not te._cap_ok_after(
+                        bidder, out + [a], [player], retention=retention):
+                    continue
+            except Exception:
+                pass
+            out.append(a)
+            total += _av((kind, a))
+        if not out or total < goal:
+            return None
+        try:
+            if not te._cap_ok_after(bidder, out, [player],
+                                    retention=retention):
+                return None
+        except Exception:
+            pass
+        return out, retention
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2021,14 +2280,19 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                 if listing.get("rounds", 0) > 0:
                     assets = _escalate_bid(app, league, listing, bidder,
                                            player, seller, ask,
-                                           esc_mult=params.get("esc_mult", 1.0))
+                                           esc_mult=params.get("esc_mult", 1.0),
+                                           allow_retention=not user_sale)
                 if assets is None:
                     assets = build_bid(app, league, bidder, player, seller,
-                                       ask, n_bidders=len(bidders))
+                                       ask, n_bidders=len(bidders),
+                                       allow_retention=not user_sale)
                 if not assets:
                     continue
                 # User sale: no engine evaluation here -- the best bid goes
-                # to the user as a real negotiation offer.
+                # to the user as a real negotiation offer. list() drops the
+                # Bid's retention terms: the negotiation path has no
+                # retention affordance, so AI bidders never ask the human
+                # seller to retain (R7 scope note).
                 if user_sale:
                     user_bids.append((bidder, list(assets)))
                     continue
@@ -2057,11 +2321,16 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                                 continue
                 except Exception:
                     pass
+                # R7: thread the bid's retention terms into the AI's
+                # evaluation -- the cap check prices the retained money.
+                # (User-sale bids never carry retention; see above.)
+                _bid_retention = getattr(assets, "retention", None) or None
                 try:
                     resp = te.ai_consider_trade(
                         bidder, [player], list(assets),
                         user_team=seller, patience=patience,
-                        situational=tsl.situational_context(app, bidder, seller))
+                        situational=tsl.situational_context(app, bidder, seller),
+                        retention=_bid_retention)
                 except TypeError:
                     resp = te.ai_consider_trade(
                         bidder, [player], list(assets),
@@ -2073,14 +2342,21 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                     ok, why = _headliner_package_ok(app, league, player,
                                                     seller, bidder,
                                                     list(assets))
+                    # R7: keep the Bid (not a plain list) -- list() would
+                    # strip .retention, and a retention-sized bid would then
+                    # execute at the full cap hit it was never priced for
+                    # (reviewers A/B/C round 1). The copy is defensive: later
+                    # mutation of `assets` must not rewrite the stored bid.
+                    _stored = Bid(list(assets), _bid_retention)
                     if ok:
-                        accepted.append((bidder, list(assets), resp))
+                        accepted.append((bidder, _stored, resp))
                     else:
-                        counters.append((bidder, list(assets), resp))
+                        counters.append((bidder, _stored, resp))
                         _stash_counter(listing, bname, resp, today)
                         listing["note"] = f"holding out for a package ({why})"
                 elif decision == "counter":
-                    counters.append((bidder, list(assets), resp))
+                    counters.append(
+                        (bidder, Bid(list(assets), _bid_retention), resp))
                     # Stash the counter terms for next round's escalation.
                     _stash_counter(listing, bname, resp, today)
                 else:
@@ -2271,7 +2547,7 @@ def _has_consolation(market, seller_name, bidder_name, today):
 
 
 def _escalate_bid(app, league, listing, bidder, player, seller, ask,
-                  esc_mult=1.0):
+                  esc_mult=1.0, allow_retention=True):
     """Answer the seller's last counter: add the wanted asset if owned and
     cap-clean, else sweeten with the next-best asset. Gated by
     ESCALATION_BASE x esc_mult (heat) x boldness x desperation.
@@ -2307,7 +2583,8 @@ def _escalate_bid(app, league, listing, bidder, player, seller, ask,
             (1.0 + 0.6 * _risk)
         if random.random() > gate:
             return None  # GM walks from the counter
-        base = build_bid(app, league, bidder, player, seller, ask)
+        base = build_bid(app, league, bidder, player, seller, ask,
+                         allow_retention=allow_retention)
         if not base:
             return None
         base_ids = set()
@@ -2333,7 +2610,9 @@ def _escalate_bid(app, league, listing, bidder, player, seller, ask,
             try:
                 if te.trade_vetoes(bidder, seller, [live]):
                     continue
-                if not te._cap_ok_after(bidder, base + [live], [player]):
+                if not te._cap_ok_after(bidder, base + [live], [player],
+                                         retention=getattr(base, "retention",
+                                                           None) or None):
                     continue
             except Exception:
                 pass
@@ -2391,7 +2670,11 @@ def _execute_market_deal(app, league, listing, player, seller, bidder, assets, t
             pass
         trade = te.execute_trade(
             seller, bidder, seller_assets, list(assets),
-            date_str=_iso(today), league=getattr(app, "league", None))
+            date_str=_iso(today), league=getattr(app, "league", None),
+            # R7: the bid's retention terms travel to execution -- the
+            # engine preflights them (slots, 50% max, 75-day clock) and
+            # records them against the retaining (selling) club.
+            retention=getattr(assets, "retention", None) or None)
         _clear_waiver(player)
         summary = getattr(trade, "summary", "") or ""
         if summary.startswith("BLOCKED:"):
@@ -2467,6 +2750,15 @@ def _close_expired(app, league, market, listing, today):
             listing["status"] = "expired"
             return
         sname = listing.get("seller", "")
+        # R7: retention is never proposed on user-sale listings (the
+        # negotiation path has no retention affordance). Counters can't
+        # exist on user sales today (they `continue` before _stash_counter),
+        # but gate explicitly for defense in depth (reviewer B round 1).
+        try:
+            _user_sale = (sname == getattr(getattr(app, "user_team", None),
+                                          "team_name", ""))
+        except Exception:
+            _user_sale = False
         # Best counter-able bid: re-run the last counter terms at 90% ask.
         best = None
         best_val = 0
@@ -2486,12 +2778,16 @@ def _close_expired(app, league, market, listing, today):
                           for ref in (b.get("want_added", []) or [])]
                 assets = [a for a in assets if a is not None]
                 base = build_bid(app, league, bidder, player, seller,
-                                 float(listing.get("ask_points", 0) or 0) * 0.9)
+                                 float(listing.get("ask_points", 0) or 0) * 0.9,
+                                 allow_retention=not _user_sale)
                 for a in base:
                     if a not in assets and len(assets) < MAX_BID_ASSETS:
                         assets.append(a)
                 if not assets:
                     continue
+                # R7: keep the rebuilt bid's retention terms (the merged
+                # list is plain -- re-wrap so execution prices them).
+                assets = Bid(assets, getattr(base, "retention", None))
                 val = sum(te.asset_value(a) for a in assets)
                 if val > best_val:
                     best_val = val

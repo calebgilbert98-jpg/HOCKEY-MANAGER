@@ -2795,10 +2795,16 @@ class AITeamManager:
                     sit = tsl.situational_context(None, team, best_owner)
                 except Exception:
                     sit = None
+                # R7: the proactive AI path uses the same bid builder, so it
+                # gets salary matching + retention proposals too. Retention
+                # is safe here: this path never targets the human club
+                # (is_human_managed owners are skipped above).
+                _pro_retention = getattr(assets, "retention", None) or None
                 try:
                     resp = te.ai_consider_trade(
                         team, [best], list(assets), user_team=best_owner,
-                        patience=1.0, situational=sit)
+                        patience=1.0, situational=sit,
+                        retention=_pro_retention)
                 except TypeError:
                     resp = te.ai_consider_trade(
                         team, [best], list(assets), user_team=best_owner,
@@ -2833,7 +2839,8 @@ class AITeamManager:
             try:
                 trade = te.execute_trade(
                     best_owner, team, [best], list(assets),
-                    date_str=today.isoformat(), league=league)
+                    date_str=today.isoformat(), league=league,
+                    retention=_pro_retention)
             except Exception:
                 trade = None
             if trade is None or \
