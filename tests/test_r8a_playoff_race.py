@@ -190,6 +190,53 @@ def test_race_story_premise_true():
             assert abs(row[2] - line_pts) <= dn.PLAYOFF_RACE_BAND_PTS
 
 
+def test_race_fires_on_tie_at_the_line():
+    # Last-in and first-out tied exactly at the cutoff: the race is
+    # maximally live. (With a strict below-the-line requirement this
+    # stayed silent -- a false negative.)
+    teams = [
+        mkteam("Aces", "Eastern", 45, 25, 0),    # 90 pts, gp 70
+        mkteam("Bees", "Eastern", 41, 29, 0),    # 82 pts, gp 70
+        mkteam("Cats", "Eastern", 40, 30, 0),    # 80 pts, gp 70 (last in)
+        mkteam("Dogs", "Eastern", 40, 30, 0),    # 80 pts, gp 70 (first out)
+        mkteam("Elks", "Eastern", 35, 35, 0),    # 70 pts, gp 70
+        mkteam("Fins", "Eastern", 20, 50, 0),    # 40 pts, gp 70
+    ]
+    app = mkapp(teams)
+    rows = dn._pr_pool_records(teams, 82)
+    math = dn._pr_cutoff_math(rows, 3)
+    assert math["last_in"][2] == math["first_out"][2] == 80
+    assert "Cats" not in math["clinched"]  # 3 can reach >= 80, not < 3
+    stories = dn._playoff_race_stories(app, date(2027, 3, 10),
+                                       random.Random(11))
+    race = [s for s in stories if "pts)" in s]
+    assert race, f"no race story on a tied cutoff: {stories}"
+    assert any("Cats" in s and "Dogs" in s for s in race)
+
+
+def test_race_omits_games_when_remaining_differs():
+    # Named bubble teams with different games remaining: no story may
+    # state a shared games number (it would be false for some of them).
+    teams = [
+        mkteam("Aces", "Eastern", 45, 25, 0),    # 90 pts, gp 70 (12 left)
+        mkteam("Bees", "Eastern", 38, 32, 0),    # 76 pts, gp 70 (12 left)
+        mkteam("Cats", "Eastern", 37, 33, 0),    # 74 pts, gp 70 (12 left)
+        mkteam("Dogs", "Eastern", 37, 29, 0),    # 74 pts, gp 66 (16 left)
+        mkteam("Elks", "Eastern", 36, 30, 0),    # 72 pts, gp 66 (16 left)
+        mkteam("Fins", "Eastern", 20, 50, 0),    # 40 pts, gp 70
+    ]
+    app = mkapp(teams)
+    rows = dn._pr_pool_records(teams, 82)
+    math = dn._pr_cutoff_math(rows, 3)
+    assert math["last_in"][2] - math["first_out"][2] <= 4
+    stories = dn._playoff_race_stories(app, date(2027, 3, 10),
+                                       random.Random(12))
+    race = [s for s in stories if "pts)" in s]
+    assert race, f"no race story: {stories}"
+    for s in race:
+        assert "game" not in s.lower(), f"shared games number stated: {s}"
+
+
 def test_no_unknown_team_rendered():
     teams = eastern(70)
     teams[2] = types.SimpleNamespace(

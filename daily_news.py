@@ -1436,6 +1436,48 @@ def _pr_cutoff_math(rows, spots):
     }
 
 
+# Race templates without a games-remaining clause (always safe).
+_PR_RACE_TEMPLATES = [
+    "It's a logjam in the {conf}: {teams} separated by almost nothing "
+    "around the final playoff spot.",
+    "Nobody wants to blink in the {conf}: {teams} within {band} points "
+    "of the last playoff berth.",
+    "The {conf} stretch run is chaos: {teams} all within {band} points "
+    "of the final spot.",
+    "PLAYOFF RACE: Every point matters now -- {teams} are jammed "
+    "together at the {conf} cutoff.",
+    "PLAYOFF RACE: The {conf} bubble is a traffic jam -- {teams}, all "
+    "within {band} points of the line.",
+    "The {conf} cutoff is a knife fight: {teams} within {band} points.",
+    "PLAYOFF RACE: {teams} -- separated by almost nothing, with the "
+    "final {conf} spot on the line.",
+    "PLAYOFF RACE: The last {conf} berth runs through {teams}.",
+    "It's coming down to the wire in the {conf}: {teams} within "
+    "{band} points of the final spot.",
+    "The {conf} playoff picture is a mess -- {teams}, all within "
+    "{band} points of the line.",
+]
+
+# Race templates with a games-remaining clause -- only used when every
+# named team has the same number of games left (else the shared number
+# would be false for some of them). {games_str} is pre-pluralized.
+_PR_RACE_TEMPLATES_GAMES = [
+    "PLAYOFF RACE: {teams} are all within {band} points of the final "
+    "{conf} playoff spot with {games_str} to go.",
+    "PLAYOFF RACE: The final {conf} spot is up for grabs -- {teams}, "
+    "with {games_str} left to settle it.",
+    "PLAYOFF RACE: {teams} -- that's the {conf} bubble, with {games_str} "
+    "left to sort it out.",
+    "{teams}: the {conf} playoff race, with {games_str} to decide it.",
+    "Down the stretch in the {conf}: {teams}, and only {games_str} "
+    "to separate them.",
+    "PLAYOFF RACE: {teams} are fighting for one {conf} playoff spot -- "
+    "{games_str} left.",
+    "Scoreboard watching season in the {conf}: {teams}, {games_str} to go.",
+    "PLAYOFF RACE: {games_str} left, and the {conf} bubble reads {teams}.",
+]
+
+
 def _pr_race_story(conf, math, rng):
     """The final spot is genuinely contested: story or None."""
     last_in = math["last_in"]
@@ -1459,9 +1501,11 @@ def _pr_race_story(conf, math, rng):
     if len(bubble) < 2:
         return None
     # At least one team on each side of the line -- otherwise it isn't
-    # a race, it's a coronation.
+    # a race, it's a coronation. Teams sitting exactly ON the line count
+    # for both sides: a tie at the cutoff is the most contested a race
+    # gets (with strict <, a dead-even final spot would stay silent).
     above = [r for r in bubble if r[2] >= line_pts]
-    below = [r for r in bubble if r[2] < line_pts]
+    below = [r for r in bubble if r[2] <= line_pts]
     if not above or not below:
         return None
     bubble.sort(key=lambda r: (-r[2], r[4]))
@@ -1469,44 +1513,17 @@ def _pr_race_story(conf, math, rng):
     teams_str = ", ".join(f"{r[4]} ({r[2]} pts)" for r in named[:-1])
     teams_str += f" and {named[-1][4]} ({named[-1][2]} pts)"
     # r[3] is max_pts, r[2] is pts: (max_pts - pts) / 2 = games remaining.
-    min_left = min((r[3] - r[2]) // 2 for r in named)
-    story = rng.choice([
-        "PLAYOFF RACE: {teams} are all within {band} points of the final "
-        "{conf} playoff spot with {games} games to go.",
-        "It's a logjam in the {conf}: {teams} separated by almost nothing "
-        "around the final playoff spot.",
-        "PLAYOFF RACE: The final {conf} spot is up for grabs -- {teams}, "
-        "with {games} games left to settle it.",
-        "Nobody wants to blink in the {conf}: {teams} within {band} points "
-        "of the last playoff berth.",
-        "PLAYOFF RACE: {teams} -- that's the {conf} bubble, and {games} "
-        "games remain to sort it out.",
-        "The {conf} stretch run is chaos: {teams} all within {band} points "
-        "of the final spot.",
-        "PLAYOFF RACE: Every point matters now -- {teams} are jammed "
-        "together at the {conf} cutoff.",
-        "{teams}: the {conf} playoff race, with {games} games to decide it.",
-        "PLAYOFF RACE: The {conf} bubble is a traffic jam -- {teams}, all "
-        "within {band} points of the line.",
-        "Down the stretch in the {conf}: {teams}, and only {games} games "
-        "to separate them.",
-        "PLAYOFF RACE: {teams} are fighting for one {conf} playoff spot -- "
-        "{games} games left.",
-        "The {conf} cutoff is a knife fight: {teams} within {band} points.",
-        "PLAYOFF RACE: {teams} -- separated by almost nothing, with the "
-        "final {conf} spot on the line.",
-        "Scoreboard watching season in the {conf}: {teams}, {games} games "
-        "to go.",
-        "PLAYOFF RACE: The last {conf} berth runs through {teams}.",
-        "It's coming down to the wire in the {conf}: {teams} within "
-        "{band} points of the final spot.",
-        "PLAYOFF RACE: {games} games left, and the {conf} bubble reads "
-        "{teams}.",
-        "The {conf} playoff picture is a mess -- {teams}, all within "
-        "{band} points of the line.",
-    ]).format(teams=teams_str, band=PLAYOFF_RACE_BAND_PTS, conf=conf,
-              games=min_left)
-    return story
+    # A shared games number is only stated when every named team has the
+    # same number left; otherwise the templates without a games clause are
+    # used (stating the minimum would be false for the teams with more).
+    remainings = sorted({(r[3] - r[2]) // 2 for r in named})
+    templates = _PR_RACE_TEMPLATES
+    fmt = dict(teams=teams_str, band=PLAYOFF_RACE_BAND_PTS, conf=conf)
+    if len(remainings) == 1:
+        n = remainings[0]
+        fmt["games_str"] = f"{n} game" if n == 1 else f"{n} games"
+        templates = templates + _PR_RACE_TEMPLATES_GAMES
+    return rng.choice(templates).format(**fmt)
 
 
 def _pr_clinch_pending(math, game_date, rng, season_year, app):
