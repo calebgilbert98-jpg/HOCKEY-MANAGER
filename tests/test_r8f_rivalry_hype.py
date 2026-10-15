@@ -122,10 +122,20 @@ check("season_year falls back to calendar year",
       len(run_bucket(app, DAY)) == 1)
 
 # Pregame buildup: tomorrow's game fires; day-after-tomorrow does not.
-app = mkapp([h, a], [(date(2027, 1, 16), h, a)], rivalries)
+# Wording must say "tomorrow night" for tomorrow-scheduled games, never
+# the false "tonight" (A-F1/B-F2 regression).
+w1, w2 = mkteam("WhenA", 30, 15, 5), mkteam("WhenB", 28, 17, 4)
+wr = []
+heat_up(wr, w1, w2, 45)
+tmr_stories = [run_bucket(mkapp([w1, w2], [(date(2027, 1, 16), w1, w2)],
+                                wr), DAY, seed=s)[0]
+               for s in range(12)]
 check("next-day matchup fires (pregame buildup)",
-      len(run_bucket(app, DAY)) == 1)
-app = mkapp([h, a], [(date(2027, 1, 17), h, a)], rivalries)
+      len(tmr_stories) == 12)
+check("tomorrow-scheduled wording: 'tomorrow night', never 'tonight'",
+      all("tonight" not in s for s in tmr_stories)
+      and any("tomorrow night" in s for s in tmr_stories))
+app = mkapp([w1, w2], [(date(2027, 1, 17), w1, w2)], wr)
 check("two-days-out matchup is silent", run_bucket(app, DAY) == [])
 
 # Malformed schedule entries: fail closed, never raise.
@@ -212,6 +222,82 @@ check("missing record attrs do not raise, story fires",
 # No league at all: fail closed.
 app = types.SimpleNamespace(_daily_news_recent={})
 check("no league -> silent, no raise", run_bucket(app, DAY) == [])
+
+# -- review-fix regression tests -------------------------------------------
+# Fix 1: _rivalry_when maps scheduled day to honest wording.
+check("_rivalry_when today -> tonight", dn._rivalry_when(DAY, DAY) == "tonight")
+check("_rivalry_when tomorrow -> tomorrow night",
+      dn._rivalry_when(date(2027, 1, 16), DAY) == "tomorrow night")
+check("_rivalry_when yesterday -> None",
+      dn._rivalry_when(date(2027, 1, 14), DAY) is None)
+check("_rivalry_when junk -> None", dn._rivalry_when("nope", DAY) is None)
+check("_rivalry_when junk game_date -> None",
+      dn._rivalry_when(DAY, "nope") is None)
+
+# Fix 1: today-scheduled games say "tonight", never "tomorrow".
+today_stories = [run_bucket(mkapp([w1, w2], [(DAY, w1, w2)], wr), DAY,
+                            seed=s)[0]
+                 for s in range(12)]
+check("today-scheduled wording: 'tonight', never 'tomorrow'",
+      all("tomorrow" not in s for s in today_stories)
+      and any("tonight" in s for s in today_stories))
+
+# Fix 2: one-shot key is orientation-free -- a (t2,t1) mirror the next day
+# must NOT re-fire after (t1,t2) fired the day before (B-F3 regression).
+m1, m2 = mkteam("M1A", 25, 20, 3), mkteam("M1B", 24, 21, 4)
+mr = []
+heat_up(mr, m1, m2, 45)
+app = mkapp([m1, m2], [(DAY, m1, m2), (date(2027, 1, 16), m2, m1)], mr)
+mirror_d1 = run_bucket(app, DAY)
+mirror_d2 = run_bucket(app, date(2027, 1, 16))
+check("cross-day mirror: exactly 1 story total across both days",
+      len(mirror_d1) + len(mirror_d2) == 1)
+
+# Floor pin: heat 34 silent, heat 35 fires (guards HEAT_MIN drift).
+b1, b2 = mkteam("FloorA", 22, 20, 4), mkteam("FloorB", 21, 21, 5)
+fr34 = []
+heat_up(fr34, b1, b2, 34)
+check("heat 34 is silent (floor pin)",
+      run_bucket(mkapp([b1, b2], [(DAY, b1, b2)], fr34), DAY) == [])
+fr35 = []
+heat_up(fr35, b1, b2, 35)
+check("heat 35 fires (floor pin)",
+      len(run_bucket(mkapp([b1, b2], [(DAY, b1, b2)], fr35), DAY)) == 1)
+
+# Cap second-chance: the pair bumped by the 2/day cap on D-1 fires on game
+# day instead, since keys are marked only for returned stories.
+c60a, c60b = mkteam("Cap60A", 30, 10, 5), mkteam("Cap60B", 29, 11, 6)
+c50a, c50b = mkteam("Cap50A", 28, 12, 4), mkteam("Cap50B", 27, 13, 5)
+c40a, c40b = mkteam("Cap40A", 26, 14, 3), mkteam("Cap40B", 25, 15, 4)
+cr = []
+heat_up(cr, c60a, c60b, 60)
+heat_up(cr, c50a, c50b, 50)
+heat_up(cr, c40a, c40b, 40)
+teams = [c60a, c60b, c50a, c50b, c40a, c40b]
+sched = [(DAY, c60a, c60b), (DAY, c50a, c50b), (DAY, c40a, c40b)]
+app = mkapp(teams, sched, cr)
+pre = run_bucket(app, date(2027, 1, 14))
+game = run_bucket(app, DAY)
+pre_text = " ".join(pre)
+game_text = " ".join(game)
+check("cap second-chance: pregame day fires the 2 hottest (60, 50)",
+      len(pre) == 2 and "Cap60A" in pre_text and "Cap50A" in pre_text
+      and "Cap40A" not in pre_text)
+check("cap second-chance: game day fires the bumped pair (40) only",
+      len(game) == 1 and "Cap40A" in game_text
+      and "Cap60A" not in game_text and "Cap50A" not in game_text)
+check("cap second-chance: all 3 pairs fire exactly once across two days",
+      len(pre) + len(game) == 3)
+
+# Cross-season re-fire: a new season_year is a fresh one-shot key.
+s1, s2 = mkteam("SeasA", 32, 10, 4), mkteam("SeasB", 30, 12, 5)
+sr = []
+heat_up(sr, s1, s2, 45)
+app = mkapp([s1, s2], [(DAY, s1, s2)], sr, season_year=2026)
+check("cross-season setup fires first season", len(run_bucket(app, DAY)) == 1)
+app = mkapp([s1, s2], [(DAY, s1, s2)], sr, season_year=2027)
+check("same pair re-fires next season (fresh key + fresh recent)",
+      len(run_bucket(app, DAY)) == 1)
 
 # -- registration ------------------------------------------------------------
 names = [g[0] for g in dn._GENERATORS]

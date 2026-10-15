@@ -3429,9 +3429,15 @@ def _streaks_stories(app, game_date, rng):
 # stay true on teams + records + band alone. No invented causes, scores,
 # streaks, or history.
 #
-# One story per (season, home, away, band) -- keys are id(t)-disambiguated
-# to survive duplicate team names (R8a lesson) and are marked ONLY for
-# stories actually returned. Capped at 2/day, ordered by heat desc.
+# The {when} slot renders "tonight" for games scheduled today and
+# "tomorrow night" for games scheduled tomorrow (via _rivalry_when, fail
+# closed). Two templates are deliberately time-free.
+#
+# One story per (season, pair, band) -- the key is orientation-free:
+# (t1,t2) and (t2,t1) are the same pair (matches the within-day dedupe).
+# Keys are id(t)-disambiguated to survive duplicate team names (R8a lesson)
+# and are marked ONLY for stories actually returned. Capped at 2/day,
+# ordered by heat desc.
 
 RIVALRY_HYPE_HEAT_MIN = 35       # "Heated rivalry" band floor
 RIVALRY_HYPE_BAD_BLOOD = 65      # "Bad blood" band floor
@@ -3443,22 +3449,22 @@ RIVALRY_HYPE_WINDOW_DAYS = 400
 _RIVALRY_BAND_TAGS = frozenset({"Bad blood", "Heated rivalry"})
 
 _RIVALRY_HEATED_TEMPLATES = [
-    "HEATED RIVALRY: {home} hosts {away} tonight -- {hw}-{hl}-{hotl} "
+    "HEATED RIVALRY: {home} hosts {away} {when} -- {hw}-{hl}-{hotl} "
     "against {aw}-{al}-{aotl}.",
-    "A heated rivalry hits the ice tonight: {away} ({aw}-{al}-{aotl}) "
+    "A heated rivalry hits the ice {when}: {away} ({aw}-{al}-{aotl}) "
     "visits {home} ({hw}-{hl}-{hotl}).",
-    "Circle the calendar: {home} and {away} meet tonight in a heated "
+    "Circle the calendar: {home} and {away} meet {when} in a heated "
     "rivalry -- {hw}-{hl}-{hotl} versus {aw}-{al}-{aotl}.",
     "{away} comes to town to face {home} in a heated rivalry matchup: "
     "{aw}-{al}-{aotl} against {hw}-{hl}-{hotl}.",
 ]
 
 _RIVALRY_BADBLOOD_TEMPLATES = [
-    "BAD BLOOD: {home} vs {away} tonight -- {hw}-{hl}-{hotl} against "
+    "BAD BLOOD: {home} vs {away} {when} -- {hw}-{hl}-{hotl} against "
     "{aw}-{al}-{aotl}.",
     "Bad blood on the ice: {home} ({hw}-{hl}-{hotl}) hosts {away} "
-    "({aw}-{al}-{aotl}) tonight.",
-    "Expect a nasty one tonight -- {away} ({aw}-{al}-{aotl}) visits {home} "
+    "({aw}-{al}-{aotl}) {when}.",
+    "Expect a nasty one {when} -- {away} ({aw}-{al}-{aotl}) visits {home} "
     "({hw}-{hl}-{hotl}), and there is bad blood between these two.",
     "BAD BLOOD: {away} at {home}. The records read {aw}-{al}-{aotl} and "
     "{hw}-{hl}-{hotl}, but this one is never about the standings.",
@@ -3486,6 +3492,24 @@ def _rivalry_sched_day_ok(sched_date, game_date):
         return False
     except Exception:
         return False
+
+
+def _rivalry_when(sched_date, game_date):
+    """'tonight' or 'tomorrow night' for the scheduled game day.
+    Fail closed: None unless the scheduled day is exactly today or
+    tomorrow (the caller already gates on _rivalry_sched_day_ok)."""
+    try:
+        d = sched_date.date() if hasattr(sched_date, "date") else sched_date
+        g = game_date.date() if hasattr(game_date, "date") else game_date
+        if not isinstance(d, date) or not isinstance(g, date):
+            return None
+        if d == g:
+            return "tonight"
+        if d == g + timedelta(days=1):
+            return "tomorrow night"
+        return None
+    except Exception:
+        return None
 
 
 def _rivalry_resolve_team(ref, teams):
@@ -3541,6 +3565,9 @@ def _rivalry_hype_stories(app, game_date, rng):
                 sched_date, home_ref, away_ref = entry
                 if not _rivalry_sched_day_ok(sched_date, game_date):
                     continue
+                when = _rivalry_when(sched_date, game_date)
+                if when is None:
+                    continue
                 home = _rivalry_resolve_team(home_ref, teams)
                 away = _rivalry_resolve_team(away_ref, teams)
                 if home is None or away is None:
@@ -3569,12 +3596,17 @@ def _rivalry_hype_stories(app, game_date, rng):
                         if band == "bad blood"
                         else _RIVALRY_HEATED_TEMPLATES)
                 story = rng.choice(tpls).format(
-                    home=hname, away=aname, band=band,
+                    home=hname, away=aname, band=band, when=when,
                     hw=hw, hl=hl, hotl=hotl, aw=aw, al=al, aotl=aotl)
                 if tagbit:
                     story = story + tagbit
-                key = (f"rivalry_hype:{season_year}:{hname}#{id(home)}:"
-                       f"{aname}#{id(away)}:{band}")
+                # Orientation-free key: (t1,t2) and (t2,t1) are the same
+                # pair, matching the within-day dedupe below.
+                i1, i2 = id(home), id(away)
+                kn1, kn2 = (aname, hname) if i1 > i2 else (hname, aname)
+                i1, i2 = (i2, i1) if i1 > i2 else (i1, i2)
+                key = (f"rivalry_hype:{season_year}:{kn1}#{i1}:{kn2}#{i2}:"
+                       f"{band}")
                 if not _recent_ok(app, key, "rivalry_hype", game_date,
                                   window=RIVALRY_HYPE_WINDOW_DAYS):
                     continue
