@@ -3237,6 +3237,171 @@ def _heroics_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# R8e -- Losing-streaks bucket
+# ---------------------------------------------------------------------------
+# The presser tracks a win-streak-5+ question; the Press Box had no losing
+# side. This bucket is the mirror: active losing streaks derived from real
+# game results.
+#
+# Grounding: GameManager._record_game_result appends one entry per game to
+# team.recent_results -- 'W', 'L', or 'OTL', chronological with the newest
+# game last, front-trimmed at 30 entries. The losing streak is the count of
+# trailing non-win entries. 'L' and 'OTL' both extend it: an OT loss is a
+# loss (update_record snaps win_streak on ANY loss and bumps ot_losses, and
+# NHL standings print OTLs inside the L-column streak). The first 'W' -- or
+# any unrecognized/missing entry -- snaps it. Sim paths that never call
+# _record_game_result leave no trail, so the bucket stays silent there
+# (fail-silent, spec-compliant).
+#
+# Cross-season guard: reset_season_record never clears recent_results, so a
+# trailing April skid can leak into October. The streak is therefore capped
+# at this season's games played -- a skid can never be longer than the
+# games on the ledger (and never longer than the 30-entry trail trim) --
+# and must be backed by at least that many losses+OTLs on the record
+# (corrupt-state cross-check, cf. heroics' g <= team goals).
+#
+# Templates name only what the engine knows: the team, the streak length,
+# and the true W-L-OTL record. They never claim causes (goaltending,
+# coaching, schedule), never name a start date (the trail carries no
+# dates), never assert day-over-day trends (the bucket reads one day's
+# snapshot -- no "keeps getting worse"/"continues"), and never do
+# playoff math.
+# One story per (season, team, streak length): streak growth re-fires with
+# the new number; repeat keys are marked ONLY for stories actually
+# returned (the one-shot window outlasts a season).
+
+# Mirror of the presser's win-streak-5+ threshold.
+STREAKS_MIN = 5
+# Escalation band: 8+ straight losses is a freefall, not a slump.
+STREAKS_FREEFALL = 8
+# At most this many losing-streak stories per news day.
+STREAKS_MAX_PER_DAY = 2
+# One-shot window longer than any season -- each (season, team, streak
+# length) fires at most once.
+STREAKS_WINDOW_DAYS = 400
+
+_LOSING_TEMPLATES = [
+    "SLUMP WATCH: {team} has lost {n} straight, and the {w}-{l}-{otl} ledger says it all.",
+    "{n} straight losses for {team} -- the record reads {w}-{l}-{otl}.",
+    "SLUMP WATCH: The losses are piling up -- {n} in a row for {team} ({w}-{l}-{otl}).",
+    "{team} can't buy a win: {n} straight defeats, {w}-{l}-{otl} on the season.",
+    "SLUMP WATCH: {n} in a row for {team}. The standings don't lie: {w}-{l}-{otl}.",
+    "The skid hits {n}: {team} has dropped {n} straight ({w}-{l}-{otl}).",
+    "SLUMP WATCH: {team} is {w}-{l}-{otl} after {n} consecutive losses.",
+    "{n} straight defeats for {team} -- the record sits at {w}-{l}-{otl}.",
+    "Another loss for {team}: {n} in a row, now {w}-{l}-{otl}.",
+    "SLUMP WATCH: {n} straight losses have {team} at {w}-{l}-{otl}.",
+]
+
+_FREEFALL_TEMPLATES = [
+    "FREEFALL: {team} has dropped {n} straight, now {w}-{l}-{otl}.",
+    "FREEFALL: {n} consecutive losses for {team} -- the record is {w}-{l}-{otl}.",
+    "{n} in a row. {team} is in freefall at {w}-{l}-{otl}.",
+    "FREEFALL: The {team} skid is now {n} games ({w}-{l}-{otl}).",
+    "FREEFALL: {n} straight losses for {team} ({w}-{l}-{otl}).",
+    "FREEFALL: {team} hasn't won in {n} games -- the record is {w}-{l}-{otl}.",
+    "The {team} freefall has reached {n} games ({w}-{l}-{otl}).",
+    "FREEFALL: {n} losses on the bounce for {team} ({w}-{l}-{otl}).",
+]
+
+
+def _streak_current_losing(team):
+    """Current losing streak from team.recent_results.
+
+    Counts trailing 'L'/'OTL' entries; the first 'W' or any
+    unrecognized/missing entry snaps it. Returns 0 when the feed is
+    missing, empty, or unreadable.
+    """
+    try:
+        trail = getattr(team, "recent_results", None)
+        if not isinstance(trail, list) or not trail:
+            return 0
+        n = 0
+        for entry in reversed(trail):
+            code = str(entry).strip().upper()
+            if code in ("L", "OTL"):
+                n += 1
+            else:
+                break
+        return n
+    except Exception:
+        return 0
+
+
+def _streak_band(n):
+    """Template band for a streak length: 'freefall' at 8+, else 'skid'."""
+    return "freefall" if n >= STREAKS_FREEFALL else "skid"
+
+
+def _streaks_stories(app, game_date, rng):
+    """Losing-streak coverage for teams on a real skid.
+
+    Repeat keys are marked ONLY for stories actually returned: marking
+    a key for a story that gets truncated would suppress it forever
+    (the one-shot window is longer than a season).
+    """
+    try:
+        if not _in_season(game_date):
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
+        candidates = []
+        for t in _all_teams(app):
+            try:
+                n = _streak_current_losing(t)
+                if n < STREAKS_MIN:
+                    continue
+                name = _tname(t)
+                if not name or name == "Unknown Team":
+                    continue
+                w, l, otl = _team_record(t)
+                gp = w + l + otl
+                # Cross-season guard: the trail can hold last season's
+                # games (reset_season_record never clears it), so the
+                # streak can never exceed this season's games played.
+                n = min(n, gp)
+                if n < STREAKS_MIN:
+                    continue
+                # Corrupt-state cross-check: the ledger must hold the skid.
+                if (l + otl) < n:
+                    continue
+                tpls = (_FREEFALL_TEMPLATES
+                        if _streak_band(n) == "freefall"
+                        else _LOSING_TEMPLATES)
+                story = rng.choice(tpls).format(
+                    team=name, n=n, w=w, l=l, otl=otl, gp=gp)
+                # id(t) disambiguates duplicate team names (R8a lesson);
+                # the name+length shape keeps keys stable day to day.
+                key = f"losing_streak:{season_year}:{name}#{id(t)}:{n}"
+                if not _recent_ok(app, key, "losing_streak", game_date,
+                                  window=STREAKS_WINDOW_DAYS):
+                    continue
+                candidates.append((n, l + otl, name, story, key))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "losing-streaks team check failed")
+                continue
+    except Exception:
+        logging.getLogger(__name__).exception("losing-streaks bucket failed")
+        return []
+    # Newsworthiness: longest skid first, worse ledger breaks ties; then
+    # dedupe duplicate team names (same text would render twice) and cap.
+    candidates.sort(key=lambda c: (-c[0], -c[1], c[2]))
+    deduped = []
+    seen = set()
+    for cand in candidates:
+        if cand[2] in seen:
+            continue
+        seen.add(cand[2])
+        deduped.append(cand)
+    chosen = deduped[:STREAKS_MAX_PER_DAY]
+    for _n, _lt, _nm, _story, key in chosen:
+        _mark_recent(app, key, "losing_streak", game_date)
+    return [s for _n, _lt, _nm, s, _k in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -3253,6 +3418,7 @@ _GENERATORS = [
     ("trade_deadline", _trade_deadline_stories, 0.60),
     ("award_races", _award_race_stories, 0.58),
     ("heroics", _heroics_stories, 0.60),
+    ("streaks", _streaks_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
