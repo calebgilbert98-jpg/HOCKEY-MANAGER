@@ -1922,13 +1922,10 @@ def _td_deadline(app):
         dd = trade_deadline_date(_td_league(app))
     except Exception:
         return None
-    try:
-        # trade_deadline_date promises a date; tolerate a datetime.
-        if hasattr(dd, "date") and not isinstance(dd, date):
-            dd = dd.date()
-    except Exception:
-        return None
-    return dd if isinstance(dd, date) else None
+    # trade_deadline_date promises a date. datetime is a date subclass,
+    # but date-vs-datetime arithmetic raises downstream, so only a true
+    # date is accepted -- anything else fails closed here.
+    return dd if type(dd) is date else None
 
 
 def _td_gate(app, game_date, rows, season_len):
@@ -2073,13 +2070,15 @@ def _td_parse_trade_date(value):
         return None
 
 
-def _td_recent_trades(app, deadline):
+def _td_recent_trades(app, game_date, deadline):
     """Real completed trades in the deadline window, newest first.
 
     Source: gm.trade_history (trade_engine.CompletedTrade records). Each
     item: {'date', 'a', 'b', 'summary', 'a_gave', 'b_gave'}. Only trades
-    where BOTH teams exist in the live league -- stray names never leak
-    in. Deterministic. Never raises.
+    where BOTH teams exist in the live league AND differ from each other;
+    BLOCKED preflight records (no assets moved) are not deals and never
+    render; the trade date must not be after the current game day.
+    Stray names never leak in. Deterministic. Never raises.
     """
     items = []
     league = _td_league(app)
@@ -2095,14 +2094,21 @@ def _td_recent_trades(app, deadline):
         try:
             a = str(getattr(tr, "team_a", "") or "").strip()
             b = str(getattr(tr, "team_b", "") or "").strip()
-            if not a or not b or a not in real or b not in real:
+            if not a or not b or a == b or a not in real or b not in real:
+                continue
+            summary = str(getattr(tr, "summary", "") or "").strip()
+            if summary.startswith("BLOCKED:"):
                 continue
             d = _td_parse_trade_date(getattr(tr, "date", None))
             if d is None or d < lo or d > deadline:
                 continue
+            try:
+                if d > game_date:
+                    continue
+            except Exception:
+                continue
             items.append({
-                "date": d, "a": a, "b": b,
-                "summary": str(getattr(tr, "summary", "") or "").strip(),
+                "date": d, "a": a, "b": b, "summary": summary,
                 "a_gave": [str(x) for x in
                            (getattr(tr, "a_gave", None) or [])],
                 "b_gave": [str(x) for x in
@@ -2138,7 +2144,7 @@ _TD_FRAME_TEMPLATES = [
 ]
 
 
-def _td_frame_pending(rows, buyers, sellers, days_left, deadline,
+def _td_frame_pending(buyers, sellers, days_left, deadline,
                       season_year, app, game_date, rng):
     """(story, key, story_type) for the deadline-week frame -- one shot per
     season. Marking is left to the caller so the key is only marked for a
@@ -2165,7 +2171,9 @@ def _td_frame_pending(rows, buyers, sellers, days_left, deadline,
         when=when, lead=lead[4], cellar=cellar[4],
         lrec=f"{lw}-{ll}-{lotl}", crec=f"{cw}-{cl}-{cotl}",
         lpts=lead[2], cpts=cellar[2],
-        days="1 day" if days_left == 1 else f"{days_left} days",
+        days=("Deadline day" if days_left == 0
+              else "1 day" if days_left == 1
+              else f"{days_left} days"),
         ddate=dstr)
     return [(story, key, "frame")]
 
@@ -2325,10 +2333,11 @@ def _trade_deadline_stories(app, game_date, rng):
         buyers, sellers = _td_buyers_sellers(rows)
         # Newsworthiness order: the frame anchors the week, then real
         # completed deals, then buyer/seller watches.
-        pending.extend(_td_frame_pending(rows, buyers, sellers, days_left,
+        pending.extend(_td_frame_pending(buyers, sellers, days_left,
                                          deadline, season_year, app,
                                          game_date, rng))
-        pending.extend(_td_trade_pending(_td_recent_trades(app, deadline),
+        pending.extend(_td_trade_pending(_td_recent_trades(app, game_date,
+                                                         deadline),
                                          season_year, app, game_date, rng))
         pending.extend(_td_buyer_pending(buyers, season_year, app,
                                          game_date, rng))

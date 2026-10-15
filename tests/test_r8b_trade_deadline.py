@@ -96,6 +96,13 @@ def pool(chip_team="Ibex"):
 
 
 DEADLINE = date(2027, 3, 1)  # 2027-04-10 minus 40 days
+DDSTR = DEADLINE.strftime("%b %d")  # every frame template renders the date
+
+
+def is_frame(s):
+    """Frame-story detector robust to template choice (all four frame
+    templates render the deadline date; no other story type does)."""
+    return DDSTR in s
 
 
 def fire_all(app, start, days):
@@ -172,7 +179,7 @@ def test_frame_countdown_true():
     app = mkapp(pool())
     stories = dn._trade_deadline_stories(app, date(2027, 2, 26),
                                          random.Random(2))
-    frame = [s for s in stories if "DEADLINE WEEK" in s]
+    frame = [s for s in stories if is_frame(s)]
     assert frame, stories
     s = frame[0]
     assert "3 days away" in s, s
@@ -184,7 +191,7 @@ def test_frame_countdown_true():
 def test_frame_says_today_on_deadline_day():
     app = mkapp(pool())
     stories = dn._trade_deadline_stories(app, DEADLINE, random.Random(2))
-    frame = [s for s in stories if "DEADLINE WEEK" in s]
+    frame = [s for s in stories if is_frame(s)]
     assert frame and "is TODAY" in frame[0], stories
 
 
@@ -347,7 +354,7 @@ def test_once_per_season_per_team():
     assert d1
     d2 = dn._trade_deadline_stories(app, date(2027, 2, 27), random.Random(4))
     assert not any("Aces" in s for s in d2), d2
-    assert not any("DEADLINE WEEK" in s for s in d2), d2
+    assert not any(is_frame(s) for s in d2), d2
 
 
 def test_max_two_stories_per_day():
@@ -403,6 +410,64 @@ def test_buyers_sellers_split_matches_manager_rule():
     ranked = sorted(rows, key=lambda r: (-r[2], -r[5], r[4]))
     assert [r[4] for r in buyers] == [r[4] for r in ranked[:3]]
     assert [r[4] for r in sellers] == [r[4] for r in ranked[-3:]][::-1]
+
+
+def test_frame_deadline_day_no_zero_days():
+    # REV-B: template 2 renders "{days} to the deadline" -- on deadline
+    # day that must never read "0 days to the deadline".
+    app = mkapp(pool())
+    for seed in range(40):
+        stories = dn._trade_deadline_stories(app, DEADLINE,
+                                             random.Random(seed))
+        assert not any("0 days to the deadline" in s for s in stories), \
+            stories
+        app._daily_news_recent = {}
+
+
+def test_trade_report_ignores_self_trade():
+    # REV-C: a team_a == team_b record is degenerate, not a deal.
+    app = mkapp(pool())
+    app.trade_history = [mkdeal("2027-02-25 15:30:00", "Aces", "Aces")]
+    stories = fire_all(app, DEADLINE, 1)
+    assert not any("Aces and Aces" in s for s in stories), stories
+
+
+def test_trade_report_ignores_blocked_summary():
+    # REV-C: execute_trade's BLOCKED preflight records ("No assets
+    # moved.") are not completed deals.
+    app = mkapp(pool())
+    blocked = mkdeal("2027-02-25 15:30:00", "Aces", "Dogs",
+                     summary="BLOCKED: Aces would be unable to dress a full "
+                             "lineup after this trade. No assets moved.")
+    app.trade_history = [blocked]
+    stories = fire_all(app, DEADLINE, 1)
+    assert not any("BLOCKED" in s for s in stories), stories
+    deal = [s for s in stories
+            if "aces" in s.lower() and "dogs" in s.lower()
+            and ("deal" in s.lower() or "trade" in s.lower())]
+    assert not deal, stories
+
+
+def test_trade_report_ignores_future_dated_trade():
+    # REV-C observation: a trade dated after the current game day (but
+    # within the window) hasn't happened yet from the reader's
+    # perspective -- it must stay silent until its date arrives.
+    app = mkapp(pool())
+    app.trade_history = [mkdeal("2027-02-28 15:30:00", "Aces", "Dogs")]
+    early = dn._trade_deadline_stories(app, date(2027, 2, 26),
+                                       random.Random(1))
+    deal = [s for s in early
+            if "aces" in s.lower() and "dogs" in s.lower()
+            and ("deal" in s.lower() or "trade" in s.lower())]
+    assert not deal, early
+    # ...but it fires once its date is reached.
+    app._daily_news_recent = {}
+    on_time = dn._trade_deadline_stories(app, date(2027, 2, 28),
+                                         random.Random(2))
+    deal = [s for s in on_time
+            if "aces" in s.lower() and "dogs" in s.lower()
+            and ("deal" in s.lower() or "trade" in s.lower())]
+    assert deal, on_time
 
 
 if __name__ == "__main__":
