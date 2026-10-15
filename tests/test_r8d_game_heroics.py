@@ -132,6 +132,33 @@ def test_hat_trick_in_loss_never_claims_win():
     assert not any("win over" in s or "victory" in s for s in sts), names(sts)
 
 
+# ------------------------------------------- reviewer B round-1 finding F4
+
+def test_preseason_game_day_silent_on_oct1_news():
+    # Reviewer B F4: the in-season gate tests the GAME day, not the news
+    # day -- a Sept 30 preseason game stays unread on Oct 1 news.
+    d = std_pair()
+    res = mkresult(d["home"], d["away"], 5, 2, {1: line(d["s1"], g=3)})
+    lg = types.SimpleNamespace(
+        teams=[], season_year=2026,
+        _results_by_date={date(2026, 9, 30): [res]})
+    app = types.SimpleNamespace(league=lg, _daily_news_recent={})
+    assert dn._heroics_stories(app, date(2026, 10, 1),
+                               random.Random(7)) == []
+
+
+def test_october_game_day_fires():
+    # The same shape on an in-season game day still fires.
+    d = std_pair()
+    res = mkresult(d["home"], d["away"], 5, 2, {1: line(d["s1"], g=3)})
+    lg = types.SimpleNamespace(
+        teams=[], season_year=2026,
+        _results_by_date={date(2026, 10, 14): [res]})
+    app = types.SimpleNamespace(league=lg, _daily_news_recent={})
+    sts = dn._heroics_stories(app, date(2026, 10, 15), random.Random(7))
+    assert any("Sid Crosby" in s for s in sts), names(sts)
+
+
 # ------------------------------------------- reviewer C round-1 killshots
 
 def test_line_capped_by_team_score_hat_trick():

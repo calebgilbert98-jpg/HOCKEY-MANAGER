@@ -2786,11 +2786,19 @@ def _award_race_stories(app, game_date, rng):
 # three-star logger and the career-moments system read). Nothing is
 # re-derived from season totals: every premise comes from one finished
 # game's result dict -- its per-player game_stats lines, its scores,
-# its overtime/shootout flags, its notable Goal events. The sim core
-# reliably records all of these (quick-sim flattens per-player
-# g/a/shots/saves into game_stats; GameSim writes its own game_stats;
-# both report overtime/shootout; hat-trick/shutout detection in
-# narrative_incidents reads the same per-game lines at game time).
+# its overtime/shootout flags, its notable Goal events.
+#
+# Where the per-game state comes from (verified against the sim core,
+# reviewer B): GameSim writes per-player g/a/saves lines into
+# game_stats on full-detail leagues (the user's league runs full, so
+# user-team AND CPU-vs-CPU NHL games all carry lines); the quick-sim
+# flattening in _process_single_game_result covers the detailed
+# non-GameSim path. 'Quick'-detail leagues record no per-game lines in
+# batch results -- the bucket stays silent there (fail silent, never
+# synthesize). Notable 'Goal'-with-period events are the same feed
+# stars._ot_scorer_id reads for the three-star OT bonus; current
+# production paths don't emit them, so the OT-winner kind fails silent
+# unless a sim path records them -- again per spec.
 #
 # Story premises, all derived from real finished-game state:
 #   - HAT TRICK: a skater's game_stats line has g >= 3.
@@ -2804,10 +2812,12 @@ def _award_race_stories(app, game_date, rng):
 #   - OT WINNER: the result went to overtime (not a shootout), the
 #     final margin is exactly 1, and the last 'Goal' notable event with
 #     period > 3 names a real player on the winning team. Shootout
-#     winners never fire (a shootout is not an OT winner).
+#     winners never fire (a shootout is not an OT winner). Fails silent
+#     when no sim path records such events (see above).
 #
-# Fail-closed gates: in-season only (Oct-Apr; preseason exhibitions are
-# September, never read); NHL results only; every result must be a
+# Fail-closed gates: the in-season gate tests the GAME day (Oct-Apr;
+# preseason exhibitions are September, never read -- even when the news
+# runs on Oct 1); NHL results only; every result must be a
 # well-formed dict with real team objects and non-negative integer
 # scores; hero subjects must be real player objects with real names and
 # real teams -- "Unknown Player"/"Unknown Team" never render; one story
@@ -3017,13 +3027,16 @@ def _heroics_stories(app, game_date, rng):
     (the one-shot window is longer than a season).
     """
     try:
-        if not _in_season(game_date):
+        game_day = _safe(lambda: game_date - timedelta(days=1))
+        if game_day is None:
+            return []
+        # The in-season gate tests the GAME day, not the news day: the
+        # results belong to game_day, so a Sept 30 preseason game stays
+        # unread even when the news runs on Oct 1 (reviewer B F4).
+        if not _in_season(game_day):
             return []
         season_year = _pr_season_year(app, game_date)
         if not season_year:
-            return []
-        game_day = _safe(lambda: game_date - timedelta(days=1))
-        if game_day is None:
             return []
         results = _hero_results(app, game_date)
         if not results:
