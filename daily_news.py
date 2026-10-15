@@ -3402,6 +3402,243 @@ def _streaks_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# R8f -- Rivalry hype bucket
+# ---------------------------------------------------------------------------
+# Pregame buildup for scheduled matchups that the narrative systems have
+# already marked as feuds. This is the league-wide daily-news surface --
+# different from the user-game-only _rivalry_pregame headline (which fires
+# at heat>=50 for the user's own games); user games may appear here too,
+# but no text is shared with that headline.
+#
+# Grounding: narrative_ledger.matchup_narrative(home, away, league, ledger)
+# reads the rivalry store (league.rivalries heat), the ledger's grudge
+# memory + playoff-series history, and each club's iconic-games list. It
+# never raises. Heat semantics: >=35 appends the "Heated rivalry" tag,
+# >=65 inserts "Bad blood". A matchup is "live" at heat >= 35.
+#
+# Schedule: league.schedule holds (date, home_team, away_team) tuples but
+# can ALSO hold (date, event_type, event_data) entries -- entries are
+# validated defensively (3-tuple, both sides team-like, different teams,
+# date in {today, tomorrow} for pregame buildup). Malformed entries are
+# skipped, never raised.
+#
+# Templates name ONLY what the engine knows: the two teams, their real
+# W-L-OTL records, the heat band, and REAL hype_tags. The band's own tag
+# ("Bad blood"/"Heated rivalry") is filtered out of the rendered tag list
+# -- the band is already stated -- and stories with no remaining tags
+# stay true on teams + records + band alone. No invented causes, scores,
+# streaks, or history.
+#
+# The {when} slot renders "tonight" for games scheduled today and
+# "tomorrow night" for games scheduled tomorrow (via _rivalry_when, fail
+# closed). Two templates are deliberately time-free.
+#
+# One story per (season, pair, band) -- the key is orientation-free:
+# (t1,t2) and (t2,t1) are the same pair (matches the within-day dedupe).
+# Keys are id(t)-disambiguated to survive duplicate team names (R8a lesson)
+# and are marked ONLY for stories actually returned. Capped at 2/day,
+# ordered by heat desc.
+
+RIVALRY_HYPE_HEAT_MIN = 35       # "Heated rivalry" band floor
+RIVALRY_HYPE_BAD_BLOOD = 65      # "Bad blood" band floor
+RIVALRY_HYPE_MAX_PER_DAY = 2
+# One-shot window outlasts a season (mirrors streaks' 400).
+RIVALRY_HYPE_WINDOW_DAYS = 400
+# Band labels already rendered as hype_tags by matchup_narrative -- the
+# templates state the band themselves, so these are never listed twice.
+_RIVALRY_BAND_TAGS = frozenset({"Bad blood", "Heated rivalry"})
+
+_RIVALRY_HEATED_TEMPLATES = [
+    "HEATED RIVALRY: {home} hosts {away} {when} -- {hw}-{hl}-{hotl} "
+    "against {aw}-{al}-{aotl}.",
+    "A heated rivalry hits the ice {when}: {away} ({aw}-{al}-{aotl}) "
+    "visits {home} ({hw}-{hl}-{hotl}).",
+    "Circle the calendar: {home} and {away} meet {when} in a heated "
+    "rivalry -- {hw}-{hl}-{hotl} versus {aw}-{al}-{aotl}.",
+    "{away} comes to town to face {home} in a heated rivalry matchup: "
+    "{aw}-{al}-{aotl} against {hw}-{hl}-{hotl}.",
+]
+
+_RIVALRY_BADBLOOD_TEMPLATES = [
+    "BAD BLOOD: {home} vs {away} {when} -- {hw}-{hl}-{hotl} against "
+    "{aw}-{al}-{aotl}.",
+    "Bad blood on the ice: {home} ({hw}-{hl}-{hotl}) hosts {away} "
+    "({aw}-{al}-{aotl}) {when}.",
+    "Expect a nasty one {when} -- {away} ({aw}-{al}-{aotl}) visits {home} "
+    "({hw}-{hl}-{hotl}), and there is bad blood between these two.",
+    "BAD BLOOD: {away} at {home}. The records read {aw}-{al}-{aotl} and "
+    "{hw}-{hl}-{hotl}, but this one is never about the standings.",
+]
+
+
+def _rivalry_heat_band(heat):
+    """Heat band label: 'bad blood' at 65+, else 'heated rivalry'."""
+    return "bad blood" if heat >= RIVALRY_HYPE_BAD_BLOOD else "heated rivalry"
+
+
+def _rivalry_sched_day_ok(sched_date, game_date):
+    """True when the schedule entry is today or tomorrow (pregame buildup).
+    Defensive about date vs datetime mixes; fail closed on anything
+    unreadable."""
+    try:
+        d = sched_date.date() if hasattr(sched_date, "date") else sched_date
+        if not isinstance(d, date):
+            return False
+        for delta in (0, 1):
+            target = game_date + timedelta(days=delta)
+            t = target.date() if hasattr(target, "date") else target
+            if d == t:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _rivalry_when(sched_date, game_date):
+    """'tonight' or 'tomorrow night' for the scheduled game day.
+    Fail closed: None unless the scheduled day is exactly today or
+    tomorrow (the caller already gates on _rivalry_sched_day_ok)."""
+    try:
+        d = sched_date.date() if hasattr(sched_date, "date") else sched_date
+        g = game_date.date() if hasattr(game_date, "date") else game_date
+        if not isinstance(d, date) or not isinstance(g, date):
+            return None
+        if d == g:
+            return "tonight"
+        if d == g + timedelta(days=1):
+            return "tomorrow night"
+        return None
+    except Exception:
+        return None
+
+
+def _rivalry_resolve_team(ref, teams):
+    """Resolve a schedule side to a team object. Objects pass through;
+    bare name strings are looked up by team_name; anything else is None
+    (fail closed)."""
+    if ref is None or isinstance(ref, str):
+        if not isinstance(ref, str) or not ref:
+            return None
+        for t in teams:
+            if _tname(t) == ref:
+                return t
+        return None
+    if _tname(ref) and _tname(ref) != "Unknown Team":
+        return ref
+    return None
+
+
+def _rivalry_hype_stories(app, game_date, rng):
+    """Pregame buildup for scheduled matchups between feuding teams.
+
+    Repeat keys are marked ONLY for stories actually returned: marking
+    a key for a story that gets truncated would suppress it forever
+    (the one-shot window is longer than a season).
+    """
+    try:
+        from narrative_ledger import get_ledger, matchup_narrative
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "rivalry-hype bucket: narrative_ledger unavailable")
+        return []
+    try:
+        if not _in_season(game_date):
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if not season_year:
+            return []
+        league = _pr_league(app)
+        if league is None:
+            return []
+        teams = _all_teams(app)
+        schedule = _safe(lambda: list(getattr(league, "schedule", None) or []),
+                         [])
+        ledger = _safe(lambda: get_ledger(app), None)
+        seen_pairs = set()
+        candidates = []
+        for entry in schedule:
+            try:
+                # Defensive: the schedule can also carry
+                # (date, event_type, event_data) entries.
+                if not isinstance(entry, (tuple, list)) or len(entry) != 3:
+                    continue
+                sched_date, home_ref, away_ref = entry
+                if not _rivalry_sched_day_ok(sched_date, game_date):
+                    continue
+                when = _rivalry_when(sched_date, game_date)
+                if when is None:
+                    continue
+                home = _rivalry_resolve_team(home_ref, teams)
+                away = _rivalry_resolve_team(away_ref, teams)
+                if home is None or away is None:
+                    continue
+                hname, aname = _tname(home), _tname(away)
+                if not hname or not aname or hname == aname:
+                    continue  # same-team or nameless matchups
+                pair = (hname, id(home), aname, id(away))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                narr = matchup_narrative(home, away, league=league,
+                                         ledger=ledger)
+                heat = _safe(lambda: float(narr.get("rivalry_heat", 0.0)), 0.0)
+                if not math.isfinite(heat) or heat < RIVALRY_HYPE_HEAT_MIN:
+                    continue
+                band = _rivalry_heat_band(heat)
+                tags = narr.get("hype_tags") or []
+                dtags = [str(t).strip() for t in tags
+                         if str(t).strip() and str(t).strip()
+                         not in _RIVALRY_BAND_TAGS][:3]
+                tagbit = f" Storylines: {', '.join(dtags)}." if dtags else ""
+                hw, hl, hotl = _team_record(home)
+                aw, al, aotl = _team_record(away)
+                tpls = (_RIVALRY_BADBLOOD_TEMPLATES
+                        if band == "bad blood"
+                        else _RIVALRY_HEATED_TEMPLATES)
+                story = rng.choice(tpls).format(
+                    home=hname, away=aname, band=band, when=when,
+                    hw=hw, hl=hl, hotl=hotl, aw=aw, al=al, aotl=aotl)
+                if tagbit:
+                    story = story + tagbit
+                # Orientation-free key: (t1,t2) and (t2,t1) are the same
+                # pair, matching the within-day dedupe below.
+                i1, i2 = id(home), id(away)
+                kn1, kn2 = (aname, hname) if i1 > i2 else (hname, aname)
+                i1, i2 = (i2, i1) if i1 > i2 else (i1, i2)
+                key = (f"rivalry_hype:{season_year}:{kn1}#{i1}:{kn2}#{i2}:"
+                       f"{band}")
+                if not _recent_ok(app, key, "rivalry_hype", game_date,
+                                  window=RIVALRY_HYPE_WINDOW_DAYS):
+                    continue
+                # Orientation-free ids: a (t1,t2) schedule entry and the
+                # (t2,t1) mirror are the same pair -- deduped below.
+                candidates.append(
+                    (heat, hname, aname, id(home), id(away), story, key))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "rivalry-hype matchup check failed")
+                continue
+    except Exception:
+        logging.getLogger(__name__).exception("rivalry-hype bucket failed")
+        return []
+    # Newsworthiness: hottest feud first; then dedupe duplicate pairs
+    # (same text would render twice) and cap.
+    candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+    deduped = []
+    seen = set()
+    for cand in candidates:
+        pair_ids = tuple(sorted((cand[3], cand[4])))
+        if pair_ids in seen:
+            continue
+        seen.add(pair_ids)
+        deduped.append(cand)
+    chosen = deduped[:RIVALRY_HYPE_MAX_PER_DAY]
+    for _heat, _h, _a, _ih, _ia, _story, key in chosen:
+        _mark_recent(app, key, "rivalry_hype", game_date)
+    return [s for _heat, _h, _a, _ih, _ia, s, _k in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -3419,6 +3656,7 @@ _GENERATORS = [
     ("award_races", _award_race_stories, 0.58),
     ("heroics", _heroics_stories, 0.60),
     ("streaks", _streaks_stories, 0.60),
+    ("rivalry_hype", _rivalry_hype_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
