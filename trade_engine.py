@@ -2011,18 +2011,49 @@ def _retention_adjustment(assets, retention) -> int:
     return total
 
 
+def _effective_cap_space(team) -> int:
+    """Effective cap room: (cap + LTIR relief pool) - total cap charge.
+
+    This is the SAME compliance rule the day gate enforces
+    (ir_system.is_compliant_with_ltir: charge must fit under cap + LTIR
+    relief). A club sitting on legitimate LTIR relief is cap-compliant
+    with less nominal space -- bid construction and AI offer evaluation
+    must see the room the club can actually spend. Never raises.
+    """
+    try:
+        import ir_system as _irs
+        eff_cap = int(_irs.effective_cap_ceiling(team))
+    except Exception:
+        try:
+            eff_cap = int(team.salary_cap)
+        except Exception:
+            return 0
+    try:
+        from salary_cap_system import total_cap_charge
+        current = int(total_cap_charge(team))
+    except Exception:
+        return 0
+    return eff_cap - current
+
+
 def _cap_ok_after(team, outgoing, incoming, retention=None) -> bool:
     """Cap legality of a trade -- identical rule for AI and user.
 
     Dead-cap penalties count in the pre/post totals but never move as part
     of a player trade.
 
-    - Club currently cap-compliant: the resulting total cap charge must
-      stay at or under the cap.
-    - Club currently OVER the cap: the trade is legal iff it STRICTLY
-      reduces the total cap burden (a genuine salary shed), even if the
-      club remains over afterward. Neutral or worsening deals are
-      rejected -- you can't tread water or dig deeper while over.
+    The ceiling is the EFFECTIVE cap (cap + LTIR relief pool, R7) -- the
+    same rule the day-advance gate enforces via
+    ir_system.is_compliant_with_ltir. Before R7 the dry-check used the
+    raw cap, so a contender carrying $0.5-3M of nominal space but sitting
+    on real LTIR relief bid as if it had no room at all.
+
+    - Club currently compliant (charge <= effective cap): the resulting
+      total cap charge must stay at or under the effective cap.
+    - Club currently OVER even the effective cap: the trade is legal iff
+      it STRICTLY reduces the total cap burden (a genuine salary shed),
+      even if the club remains over afterward. Neutral or worsening deals
+      are rejected -- you can't tread water or dig deeper while over.
 
     ``retention`` (optional, player id -> pct) models proposed
     retained-salary terms: the retaining side keeps that slice as dead
@@ -2030,8 +2061,8 @@ def _cap_ok_after(team, outgoing, incoming, retention=None) -> bool:
     """
     try:
         from salary_cap_system import total_cap_charge
-        cap = int(team.salary_cap)
         current = int(total_cap_charge(team))
+        cap = current + _effective_cap_space(team)
     except Exception:
         return True
     out_sal = sum(_effective_outgoing_hit(p) for p in outgoing
@@ -3102,6 +3133,148 @@ def clause_acceptance_bonus(player, kind):
     return 0.20 * clause_demand_score(player)
 
 
+# ---------------------------------------------------------------------------
+# R7 anti-flip ledger: same-player Seller<->Buyer reversals within a season
+# are blocked at the single authoritative gate (execute_trade), so the
+# guard covers market deals, direct AI-AI deals, draft-day deals, and user
+# deals uniformly.
+#
+# The ledger lives on the league's market dict and every entry is
+# stamped with the season id (via _league_season_id); _flip_blocked
+# only matches entries from the CURRENT season. Season-keying is the
+# real window mechanism -- last season's flips never block this
+# season's. trade_market.clear_for_new_season() also wipes the ledger
+# on rollover as a backstop. A save/load that does not persist the
+# market dict degrades the guard to the current session (documented,
+# fail-open: a missing ledger never blocks a real trade).
+# ---------------------------------------------------------------------------
+
+def _flip_ledger(league):
+    """The season-scoped anti-flip ledger (list of dicts), or None when the
+    league has no market dict to hang it on. Never raises."""
+    try:
+        m = getattr(league, "trade_market", None)
+        if not isinstance(m, dict):
+            return None
+        lg = m.get("trade_ledger")
+        if not isinstance(lg, list):
+            lg = []
+            m["trade_ledger"] = lg
+        return lg
+    except Exception:
+        return None
+
+
+def _flip_season(league, date_str):
+    """Season identity for a ledger entry. League season_year is canonical;
+    the trade date's year is the fallback. None when neither is readable."""
+    try:
+        sy = getattr(league, "season_year", None)
+        if sy is not None:
+            return int(sy)
+    except Exception:
+        pass
+    try:
+        return int(str(date_str or "")[:4])
+    except Exception:
+        return None
+
+
+def _flip_moves(user_team, partner_team, user_assets, partner_assets):
+    """Proposed player moves as (player_id, full_name, from, to). Picks
+    excluded. Never raises."""
+    try:
+        from game_classes import DraftPick as _DP
+    except Exception:
+        _DP = ()
+    moves = []
+    try:
+        for _src, _dst, _assets in (
+                (user_team, partner_team, user_assets),
+                (partner_team, user_team, partner_assets)):
+            try:
+                _from = str(getattr(_src, "team_name", "") or "")
+                _to = str(getattr(_dst, "team_name", "") or "")
+            except Exception:
+                continue
+            for a in _assets or []:
+                try:
+                    if isinstance(a, _DP):
+                        continue
+                    pid = getattr(a, "id", None)
+                    if pid is None or not _from or not _to:
+                        continue
+                    moves.append((str(pid), str(getattr(a, "full_name", "?")),
+                                  _from, _to))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return moves
+
+
+def _flip_blocked_reason(league, user_team, partner_team, user_assets,
+                         partner_assets, date_str):
+    """R7: block a same-player Seller<->Buyer reversal within the season.
+
+    If player P moved A->B earlier this season, a deal moving P B->A now is
+    rejected -- the back-and-forth flip the market used to produce. Returns
+    a human reason string, or None when clear. Never raises; a missing
+    ledger/season fails open (no guard) rather than blocking real trades.
+    """
+    try:
+        if league is None:
+            return None
+        lg = _flip_ledger(league)
+        if lg is None:
+            return None
+        season = _flip_season(league, date_str)
+        if season is None:
+            return None
+        prior = set()
+        for e in lg:
+            try:
+                if int(e.get("season", -1)) != int(season):
+                    continue
+                prior.add((str(e.get("player_id")), str(e.get("from", "")),
+                           str(e.get("to", ""))))
+            except Exception:
+                continue
+        for pid, pname, _from, _to in _flip_moves(
+                user_team, partner_team, user_assets, partner_assets):
+            if (pid, _to, _from) in prior:
+                return (f"{pname} was already traded from {_to} to {_from} "
+                        f"this season -- same-club flip trades are blocked.")
+        return None
+    except Exception:
+        return None
+
+
+def _record_flip_ledger(league, user_team, partner_team, user_assets,
+                        partner_assets, date_str):
+    """Append a completed trade's player moves to the anti-flip ledger.
+    Call only for deals that actually completed (blocked deals return
+    earlier and never arm the guard). Never raises."""
+    try:
+        if league is None:
+            return
+        lg = _flip_ledger(league)
+        if lg is None:
+            return
+        season = _flip_season(league, date_str)
+        if season is None:
+            return
+        for pid, pname, _from, _to in _flip_moves(
+                user_team, partner_team, user_assets, partner_assets):
+            try:
+                lg.append({"player_id": pid, "from": _from, "to": _to,
+                           "season": int(season)})
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def clause_offer_label(kind, list_size=10):
     if kind == "nmc":
         return "no-movement clause"
@@ -3382,6 +3555,17 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                                 f"than a year ago and can't reacquire him yet.")
                     except Exception:
                         continue
+    # R7 anti-flip guard: no same-player Seller<->Buyer reversals within a
+    # season. Runs before anything moves; the ledger records only completed
+    # deals (below), so blocked/failed deals never arm the guard.
+    try:
+        _flip_why = _flip_blocked_reason(
+            league, user_team, partner_team, user_assets, partner_assets,
+            date_str)
+        if _flip_why:
+            return _blocked(_flip_why)
+    except Exception:
+        pass
     # Clause preflight -- both directions, before anything moves.
     for _src, _dst, _assets in ((user_team, partner_team, user_assets),
                                (partner_team, user_team, partner_assets)):
@@ -3572,6 +3756,14 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     try:
         _post_trade_effects(user_team, partner_team, user_assets,
                             partner_assets, date_str, league)
+    except Exception:
+        pass
+    # R7 anti-flip ledger: record the completed deal's player moves for this
+    # season. Blocked deals return earlier and never reach here, so the
+    # guard can't arm on a deal that didn't happen.
+    try:
+        _record_flip_ledger(league, user_team, partner_team, user_assets,
+                            partner_assets, date_str)
     except Exception:
         pass
     return CompletedTrade(date_str, user_team.team_name, partner_team.team_name,
