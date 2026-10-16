@@ -3848,6 +3848,377 @@ def _extension_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# R8h -- Debuts bucket
+# ---------------------------------------------------------------------------
+# Story premises, all derived from real finished-game state plus the
+# engine's own career/service-time counters:
+#   - NHL DEBUT: the player's nhl_games_played is 1 after the day's
+#     credit. That counter is the engine's service-time truth
+#     (game_manager._credit_nhl_games_played): +1 per completed NHL
+#     game for every rostered player, NEVER for preseason exhibitions.
+#     The credit covers the whole roster -- including healthy
+#     scratches -- and per-game game_stats lines are ALSO initialized
+#     roster-wide on both sim paths (simulation.py:806,
+#     quick_sim.py:1076), so a line alone does NOT prove the player
+#     dressed (reviewer B killshot: a toi==0 scratch fired a false
+#     debut). The dressed proof is therefore:
+#       - skaters: result['player_toi'][pid] > 0. Stamped on every
+#         result-recording path (game_manager.py:8498/9546,
+#         main.py:13105/14496) from ledgers that only dressed
+#         players enter (quick_sim toi+=45 per shift for on-ice
+#         skaters; GameSim player_toi_seconds accumulates per shift);
+#         only truthy values are recorded, so missing/zero is
+#         fail-closed silent.
+#       - goalies: the game_stats line has saves >= 1 (the R8d
+#         shutout precedent -- a goalie who played faced rubber).
+#         player_toi can't be used: the snapshot fill-in stamps full-
+#         game TOI on every roster goalie (game_manager.py:14386).
+#     "Quick"-detail leagues record no per-game lines, so the bucket
+#     stays silent there (fail silent, never synthesize) -- the R8d
+#     precedent.
+#   - FIRST NHL GOAL: a skater's line has g >= 1 (cross-checked g <=
+#     his team's goals, the R8d self-disproving-line killshot) AND the
+#     first-goal gate proves he had zero NHL goals before the game:
+#       (1) p.stats.goals (post-game season total) == g -- all of this
+#           season's goals came from this game. The live sim writes
+#           season totals to p.stats.* (never the flat Player attrs;
+#           awards_race._stat documents the real write path) and the
+#           AHL sim never writes p.stats, so season totals are
+#           NHL-only by construction.
+#       (2) nhl_games_played == p.stats.games_played (post-game) --
+#           every career NHL game is this season's; a 6-seasons-ago
+#           veteran returning has a large nhl_games_played and fails
+#           here (fail closed).
+#       (3) sum(prior_nhl_gp) == 0 -- the live season rollover
+#           archives each season's NHL GP to the flat
+#           p.prior_nhl_gp (game_classes.py:7420-7435, Calder input;
+#           the last five seasons are kept). Belt and suspenders on
+#           (2); the stats-level copy is never populated in
+#           production (PlayerStats.reset_season_stats has no
+#           callers), so the helper reads the flat attribute first.
+#     A non-debut first goal (rookie, scoreless in his first games,
+#     scores in game 5) passes the same gate. A veteran with prior NHL
+#     seasons is UNPROVABLE (no engine field archives prior-season
+#     goals) and stays silent -- the R8c whole-field-maximality
+#     lesson: a "first" claim must prove career-level maximality.
+#   - CALL-UP: PRODUCTION-SILENT. There is no dated production
+#     call-up log: dressing_room arrivals record {"how": "callup"} but
+#     no date; player.nhl_audition is user-team-only and dateless;
+#     there is no transaction/move feed. Debuts are the engine-honest
+#     coverage of first NHL appearances -- nothing is fabricated.
+#
+# Fail-closed gates: the in-season gate tests the GAME day (Oct-Apr;
+# preseason exhibitions are September and never credit NHL GP, so
+# they can never fire -- even when the news runs on Oct 1); NHL
+# results only; every result a well-formed dict with real team
+# objects and non-negative strict-integer scores; a finished game
+# names a real winner; debut/first-goal subjects are real player
+# objects with real names on a real roster (identity by id(), never
+# name-keyed); one story per (game, player) with first_goal
+# outranking debut; one-shot keys per (season, player, kind), marked
+# ONLY for stories actually returned -- per-kind, the R8d precedent:
+# a scoreless debut and a later first NHL goal are two true premises
+# of two different story kinds, and suppressing the first-goal story
+# because the debut already fired would gut the item's "first NHL
+# goals" kind (most debutants don't score on debut night). When a
+# debutant scores, the story kind is first_goal and BOTH keys are
+# marked -- the story delivers the debut news ("in his NHL debut"),
+# so re-firing the bare debut on a regenerated news day would repeat
+# delivered news. At most 2 stories per day, first goals first.
+# ---------------------------------------------------------------------------
+
+# One-shot window longer than any season -- each (season, player,
+# kind) fires at most once.
+DEBUTS_WINDOW_DAYS = 400
+# At most this many debuts stories per news day.
+DEBUTS_MAX_PER_DAY = 2
+# Newsworthiness per kind.
+_DEBUT_KIND_WEIGHTS = {
+    "first_goal": 15,
+    "debut": 14,
+}
+
+_DEBUT_TEMPLATES = [
+    "DEBUT: {name} made his NHL debut in {team}'s {score} win over "
+    "{opp}.",
+    "DEBUT: {name} skated in his first NHL game as {team} beat {opp} "
+    "{score}.",
+    "DEBUT: A night to remember for {name}, who made his NHL debut "
+    "for {team} in a {score} win over {opp}.",
+]
+
+_DEBUT_LOSS_TEMPLATES = [
+    "DEBUT: {name} made his NHL debut as {team} fell {score} to {opp}.",
+    "DEBUT: {name}'s first NHL game came in {team}'s {score} loss to "
+    "{opp}.",
+]
+
+_FIRST_GOAL_TEMPLATES = [
+    "FIRST NHL GOAL: {name} scored his first NHL goal{debut_note} in "
+    "{team}'s {score} win over {opp}.",
+    "FIRST NHL GOAL: A milestone for {name} -- his first NHL "
+    "goal{debut_note} -- as {team} beat {opp} {score}.",
+    "FIRST NHL GOAL: {name} found the net for the first time in the "
+    "NHL{debut_note}, helping {team} past {opp} {score}.",
+]
+
+_FIRST_GOAL_LOSS_TEMPLATES = [
+    "FIRST NHL GOAL: {name} scored his first NHL goal{debut_note}, "
+    "but {team} fell {score} to {opp}.",
+    "FIRST NHL GOAL: A bright spot for {team} -- {name}'s first NHL "
+    "goal{debut_note} -- in a {score} loss to {opp}.",
+]
+
+
+def _debut_season_pair(p):
+    """(season_games, season_goals) as strict ints from the sim's real
+    write path (p.stats first, the never-called add_game_stats flat
+    attrs only as fallback -- the awards_race._stat precedent).
+    (None, None) on any junk: a "first" premise must not rest on
+    coerced numerics."""
+    try:
+        stats = getattr(p, "stats", None)
+        gp = getattr(stats, "games_played", None)
+        if not isinstance(gp, bool) and isinstance(gp, int):
+            pass
+        else:
+            gp = getattr(p, "games_played", None)
+            if isinstance(gp, bool) or not isinstance(gp, int):
+                return None, None
+        gl = getattr(stats, "goals", None)
+        if not isinstance(gl, bool) and isinstance(gl, int):
+            pass
+        else:
+            gl = getattr(p, "goals", None)
+            if isinstance(gl, bool) or not isinstance(gl, int):
+                return None, None
+        if gp < 0 or gl < 0:
+            return None, None
+        return gp, gl
+    except Exception:
+        return None, None
+
+
+def _debut_prior_gp(p):
+    """Sum of archived prior-season NHL GP. The live season rollover
+    archives to the FLAT p.prior_nhl_gp (game_classes.py:7420-7435,
+    Calder input -- the last five seasons are kept; non-NHL players
+    get a 0 for the season). PlayerStats.reset_season_stats has no
+    production callers, so the stats-level copy is never populated in
+    production -- read the flat attribute first and only fall back to
+    p.stats for fixtures/fakes. None on junk: fail closed, never
+    treat unreadable history as zero history."""
+    for src in (p, _safe(lambda: getattr(p, "stats", None))):
+        try:
+            if src is None:
+                continue
+            prior = getattr(src, "prior_nhl_gp", None)
+        except Exception:
+            continue
+        if prior is None:
+            continue  # absent on this source; try the other
+        if not isinstance(prior, (list, tuple)):
+            return None
+        total = 0
+        for v in prior:
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                return None
+            total += v
+        return total
+    return 0
+
+
+def _debut_dressed(res, p, line):
+    """Dressed proof for a debut candidate: did he actually take the
+    ice in this game? Skaters: result['player_toi'][pid] > 0 (only
+    dressed players enter the TOI ledgers; only truthy values are
+    recorded). Goalies: line saves >= 1 (player_toi is unusable --
+    the snapshot fill-in stamps full-game TOI on every roster
+    goalie). Strictly fail-closed: missing/junk TOI or saves never
+    proves a debut."""
+    try:
+        pid = getattr(p, "id", None)
+        if _td_pos_group(p) == "Goalie":
+            return _hero_line_num(line, "saves") >= 1
+        toi = res.get("player_toi")
+        if not isinstance(toi, dict):
+            return False
+        v = toi.get(pid)
+        if isinstance(v, bool):
+            return False
+        return isinstance(v, (int, float)) and v > 0
+    except Exception:
+        return False
+
+
+def _debut_stories(app, game_date, rng):
+    """NHL debuts and first NHL goals from the day just simmed.
+
+    One-shot keys are marked ONLY for stories actually returned: a
+    key marked for a story dropped by the day cap would suppress it
+    forever (the window outlasts a season).
+    """
+    try:
+        game_day = _safe(lambda: game_date - timedelta(days=1))
+        if game_day is None:
+            return []
+        # The in-season gate tests the GAME day, not the news day (the
+        # R8d/reviewer-B F4 lesson): preseason exhibitions are
+        # September and never credit NHL GP.
+        if not _in_season(game_day):
+            return []
+        season_year = _pr_season_year(app, game_date)
+        if (not season_year or not isinstance(season_year, int)
+                or season_year < 2000 or season_year > 2100):
+            return []
+        results = _hero_results(app, game_date)
+        if not results:
+            return []
+        candidates = []
+        for res in results:
+            if not isinstance(res, dict):
+                continue
+            home = res.get("home_team")
+            away = res.get("away_team")
+            if not _hero_teams_ok(home, away):
+                continue
+            hn = home.team_name
+            an = away.team_name
+            if hn == an:
+                # Same-team result is corrupt state, not a game.
+                continue
+            hs = _hero_int(res.get("home_score"))
+            aws = _hero_int(res.get("away_score"))
+            if hs is None or aws is None or hs < 0 or aws < 0:
+                continue
+            wname = _safe(lambda: res.get("winner").team_name, "") or ""
+            if wname not in (hn, an):
+                # A finished game has a winner; anything else is
+                # uninterpretable state, not a story.
+                continue
+            gstats = res.get("game_stats")
+            if not isinstance(gstats, dict):
+                gstats = {}
+            # One story per (game, player): first goal outranks debut.
+            best = {}
+            for _pid, line in gstats.items():
+                try:
+                    if not isinstance(line, dict):
+                        continue
+                    p = line.get("player")
+                    name = _pname(p)
+                    if not name or name == "Unknown Player":
+                        continue
+                    team = _hero_team_of(p, home, away)
+                    if not team or team == "Unknown Team":
+                        continue
+                    if team not in (hn, an):
+                        continue
+                    g = _hero_line_num(line, "g", "goals")
+                    if g < 0:
+                        continue
+                    # Cross-check the line against the team score
+                    # (R8d killshot: a "3-goal" night in a 2-0 game
+                    # disproves itself) -- fail silent.
+                    team_goals = hs if team == hn else aws
+                    if g > team_goals:
+                        continue
+                    nhl_gp = getattr(p, "nhl_games_played", None)
+                    if (isinstance(nhl_gp, bool)
+                            or not isinstance(nhl_gp, int)
+                            or nhl_gp < 0):
+                        continue
+                    is_debut = (nhl_gp == 1)
+                    if is_debut and not _debut_dressed(res, p, line):
+                        # Service-time credit covers healthy scratches
+                        # and lines are roster-wide: without dressed
+                        # proof this is a press-box credit, not a debut
+                        # (reviewer B killshot). Fail closed.
+                        is_debut = False
+                    first_goal = False
+                    pos_group = _td_pos_group(p)
+                    if (g >= 1
+                            and pos_group in ("Forward", "Defense")):
+                        sg, sgoals = _debut_season_pair(p)
+                        # The whole-field maximality gate: every goal
+                        # this season came from this game, every career
+                        # NHL game is this season's, no archived prior
+                        # NHL games. Anything less cannot prove "first".
+                        if (sg is not None and sgoals == g
+                                and nhl_gp == sg):
+                            prior = _debut_prior_gp(p)
+                            if prior == 0:
+                                first_goal = True
+                    if not is_debut and not first_goal:
+                        continue
+                    kind = ("first_goal" if first_goal else "debut")
+                    weight = _DEBUT_KIND_WEIGHTS[kind]
+                    cur = best.get(id(p))
+                    if cur is not None and cur[1] >= weight:
+                        continue
+                    best[id(p)] = (kind, weight, p, name, team, g,
+                                   is_debut)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "debuts line check failed")
+                    continue
+            for _pidn, (kind, weight, p, name, team, g,
+                        is_debut) in best.items():
+                try:
+                    if team == hn:
+                        mine, theirs, opp = hs, aws, an
+                    else:
+                        mine, theirs, opp = aws, hs, hn
+                    score = f"{mine}-{theirs}"
+                    won = (team == wname)
+                    if kind == "first_goal":
+                        debut_note = (" in his NHL debut"
+                                      if is_debut else "")
+                        tpls = (_FIRST_GOAL_TEMPLATES if won
+                                else _FIRST_GOAL_LOSS_TEMPLATES)
+                        story = rng.choice(tpls).format(
+                            name=name, team=team, opp=opp, score=score,
+                            debut_note=debut_note)
+                    else:
+                        tpls = (_DEBUT_TEMPLATES if won
+                                else _DEBUT_LOSS_TEMPLATES)
+                        story = rng.choice(tpls).format(
+                            name=name, team=team, opp=opp, score=score)
+                    # Guard against placeholder-y output.
+                    if "Unknown" in story:
+                        continue
+                    keys = [f"debuts:{season_year}:{kind}:"
+                            f"{name}#{id(p)}"]
+                    if kind == "first_goal" and is_debut:
+                        # The story delivers the debut news too -- mark
+                        # the debut key so a regenerated news day can't
+                        # repeat it as a bare debut.
+                        keys.append(f"debuts:{season_year}:debut:"
+                                    f"{name}#{id(p)}")
+                    if not all(_recent_ok(app, k, "debuts", game_date,
+                                          window=DEBUTS_WINDOW_DAYS)
+                               for k in keys):
+                        continue
+                    candidates.append((weight, name, story, keys))
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "debuts render failed")
+                    continue
+    except Exception:
+        logging.getLogger(__name__).exception("debuts bucket failed")
+        return []
+    # Newsworthiness: first goals before debuts, then name for
+    # determinism; cap the day.
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+    chosen = candidates[:DEBUTS_MAX_PER_DAY]
+    for _w, _n, _s, keys in chosen:
+        for k in keys:
+            _mark_recent(app, k, "debuts", game_date,
+                         DEBUTS_WINDOW_DAYS)
+    return [s for _w, _n, s, _k in chosen]
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -3867,6 +4238,7 @@ _GENERATORS = [
     ("streaks", _streaks_stories, 0.60),
     ("rivalry_hype", _rivalry_hype_stories, 0.60),
     ("extension", _extension_stories, 0.60),
+    ("debuts", _debut_stories, 0.60),
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
