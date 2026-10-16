@@ -110,22 +110,37 @@ def test_r11_same_premise_distinct_framings():
 
 
 def test_r11_distinct_across_results_and_outcomes():
+    # Deterministic: pin rng.choice to each template in turn, then vary
+    # outcome/heated. Theoretical max distinct renders:
+    #   stirrer: win 12 (t0/t3/t5 x3 textures; t1/t2/t4 x1)
+    #          + loss 12 (t0/t3 x2 heats; t1/t4 x3 textures; t2/t5 x1) = 24
+    #   loyalist: win 10 (t2/t5 x3; rest x1)
+    #           + loss 11 (t0/t5 x3; t2 x2 heats; t1/t3/t4 x1) = 21
+    #   neutral: 3 (no texture/heat slots) = 3
+    # Total 48. Anything less means templates are collapsing into each
+    # other.
+    class _FixedChoice(random.Random):
+        def __init__(self, pick):
+            super().__init__(0)
+            self._pick = pick
+
+        def choice(self, seq):  # noqa: ARG002
+            return self._pick
+
+    banks = {"stirrer": me._R11_STIRRER_FRAMES,
+             "loyalist": me._R11_LOYALIST_FRAMES,
+             "neutral": me._R11_NEUTRAL_FRAMES}
     seen = set()
-    n = 0
-    for arch in ("stirrer", "loyalist", "neutral"):
-        for result in ("win", "loss"):
-            for outcome in ("great", "bland", "awkward"):
-                for heated in (True, False):
-                    for draw in range(4):
-                        out = me._frame_quote_story(
+    for arch, bank in banks.items():
+        for result, templates in bank.items():
+            for t in templates:
+                rng = _FixedChoice(t)
+                for outcome in ("great", "bland", "awkward"):
+                    for heated in (True, False):
+                        seen.add(me._frame_quote_story(
                             _premise(arch, result, outcome, heated),
-                            rng=random.Random(hash(
-                                (arch, result, outcome, heated, draw))))
-                        seen.add(out)
-                        n += 1
-    # 144 renders; templates must not collapse them all into a handful
-    # of identical strings.
-    assert len(seen) >= 40, f"only {len(seen)} distinct renders of {n}"
+                            rng=rng))
+    assert len(seen) == 48, f"{len(seen)} distinct renders, expected 48"
 
 
 def test_r11_template_banks_disjoint():
@@ -229,3 +244,37 @@ def test_r11_framing_markers_persona_distinct():
     for m in loyalist_only:
         assert m in corpus["loyalist"]
         assert m not in corpus["stirrer"] and m not in corpus["neutral"], m
+
+
+def test_r11_never_raises_on_non_dict():
+    # Reviewer C finding 1: the "never raises" contract covers non-dict
+    # input too -- the except handler reads ev.get(), so ev is
+    # normalized up front. FAILED on the round-1 commit (AttributeError
+    # re-raised from the handler itself).
+    for bad in (None, "a string", 123, ["kind", "quote"], 4.5):
+        out = me._frame_quote_story(bad, rng=random.Random(1))
+        assert isinstance(out, str) and out
+
+
+def test_r11_free_text_braces_not_corrupted():
+    # Reviewer C finding 2: slot-shaped text inside free content must
+    # survive verbatim -- single-pass substitution over the template
+    # only. FAILED on the round-1 commit (sequential .replace() spliced
+    # the heat/texture phrases into the question and quote).
+    ev = _premise("stirrer", heated=True)
+    ev["question"] = "\u201cCoach, is {heat} a factor tonight?\u201d"
+    ev["quote"] = "\u201cWe will fix {texture} issues, {player}.\u201d"
+    out = me._frame_quote_story(ev, rng=random.Random(1))
+    assert "\u201cCoach, is {heat} a factor tonight?\u201d" in out
+    assert "\u201cWe will fix {texture} issues, {player}.\u201d" in out
+
+
+def test_r11_heat_lead_in_grammatical():
+    # Reviewer B wart: the heated lead-in must read as a standalone
+    # sentence, never ", The ..." mid-sentence. FAILED on round-1.
+    for arch in ("stirrer", "loyalist"):
+        for seed in range(40):
+            out = me._frame_quote_story(
+                _premise(arch, result="loss", heated=True),
+                rng=random.Random(seed))
+            assert ", The " not in out, out

@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import random
+import re
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -558,21 +559,27 @@ _R11_TEXTURE = {
 }
 
 # Heated-loss lead-in (heated_loss or a spiraling club). Only used by
-# templates carrying the {heat} slot; everyone else passes "".
+# templates carrying the {heat} slot; everyone else passes "". Kept as a
+# standalone sentence so it reads clean ahead of any template opener.
 _R11_HEAT = {
-    "stirrer": "With the skid impossible to ignore, ",
-    "loyalist": "In a tough stretch, ",
+    "stirrer": "The skid is impossible to ignore. ",
+    "loyalist": "In a tough stretch, every answer matters. ",
     "neutral": "",
 }
 
 
+_R11_SLOT_RE = re.compile(
+    r"\{(player|team|reporter|question|quote|texture|heat)\}")
+
+
 def _r11_fill(template: str, slots: Dict[str, str]) -> str:
-    """Slot substitution without str.format -- questions/quotes are free
-    text and may contain braces; a blind .format() would choke on them."""
-    out = template
-    for key, val in slots.items():
-        out = out.replace("{" + key + "}", val)
-    return out
+    """Slot substitution in a SINGLE pass over the template. Questions and
+    quotes are free text and may contain braces -- or even slot-shaped
+    text like "{heat}". A sequential .replace() would splice replacement
+    text into the content (and str.format() would choke on stray braces),
+    so one regex pass over the template only: content braces are never
+    touched."""
+    return _R11_SLOT_RE.sub(lambda m: slots[m.group(1)], template)
 
 
 def _frame_quote_story(ev: Dict[str, Any],
@@ -583,9 +590,13 @@ def _frame_quote_story(ev: Dict[str, Any],
     outcome, heated); the persona (ev["archetype"]) selects the template
     bank. Same premise through two personas yields structurally distinct
     stories -- distinct diction, emphasis, and framing -- not one shared
-    template with a different question stapled on. Never raises: on any
-    failure it degrades to the pre-R11 flat format.
+    template with a different question stapled on. Never raises -- not
+    even on non-dict input (normalized up front, so the except handler's
+    own ev.get() calls can't re-raise): on any failure it degrades to
+    the pre-R11 flat format.
     """
+    if not isinstance(ev, dict):
+        ev = {}
     try:
         arch = str(ev.get("archetype") or "neutral").strip().lower()
         bank = _R11_FRAMES.get(arch) or _R11_FRAMES["neutral"]
@@ -1954,7 +1965,8 @@ def _news_line(ev: Dict[str, Any]) -> str:
     kind = ev.get("kind")
     if kind == "quote":
         # R11: persona-driven premise framing. _frame_quote_story never
-        # raises -- on any failure it degrades to the flat format below.
+        # raises -- on any failure it degrades internally to the pre-R11
+        # flat format.
         return _frame_quote_story(ev)
     if kind == "outburst_room":
         return (f"{ev.get('player')} ({ev.get('team')}) unloads post-game: "
