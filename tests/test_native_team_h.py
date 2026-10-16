@@ -8,11 +8,19 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# qtstub's fake widgets let these screen-logic tests run with no QApplication
+# or display. The stub must stay process-global: the screens also import
+# PySide6 lazily inside methods (e.g. free_agents._make_pills), so every
+# `import PySide6` in this process must resolve to the same binding.
+# Consequence: test_season_flow_bypass.py (which needs the real Qt event
+# loop) cannot run in the same pytest process -- it skips itself with a
+# clear message when it detects the stub (run it directly as a script).
 sys.path.insert(0, os.path.join(REPO, "qtstub"))
 sys.path.insert(0, REPO)
 os.chdir(REPO)
 
 from PySide6.QtGui import QPainter as _StubPainter  # noqa: E402
+from PySide6.QtWidgets import QPushButton as _StubPushButton  # noqa: E402
 
 from native_ui.screens import free_agents  # noqa: E402
 from native_ui.screens.records import RecordsScreen  # noqa: E402
@@ -263,7 +271,6 @@ def test_fix3_xg_end_to_end_real_store():
     # Integration: stats xG tab with a REAL ShotChartStore -> click
     # "View shot chart" -> viewer navigates, loads real shots, renders.
     from shot_charts import ShotChartStore
-    from PySide6.QtWidgets import QPushButton
 
     store = ShotChartStore()
     store.add({"game_id": "G7", "date": "2026-10-01",
@@ -280,7 +287,7 @@ def test_fix3_xg_end_to_end_real_store():
     stats._render_xg()
 
     btns = [w for w in stats._xg_layout.widgets()
-            if isinstance(w, QPushButton)
+            if isinstance(w, _StubPushButton)
             and "shot chart" in w.text().lower()]
     assert len(btns) == 1, \
         f"expected one shot-chart button, found {len(btns)}"
@@ -297,7 +304,6 @@ def test_fix3_xg_end_to_end_real_store():
 def test_fix1_frenzy_screen_empty_state_no_crash():
     # Adversarial: no frenzy day -> screen shows empty state, no crash.
     screen = faf_mod.FaFrenzyScreen.__new__(faf_mod.FaFrenzyScreen)
-    from PySide6.QtWidgets import QWidget, QVBoxLayout
     game = type("G", (), {"current_date": None})()
     mw = FakeMainWindow()
     faf_mod.BaseScreen.__init__(screen, game, mw)

@@ -13,7 +13,8 @@ import os
 import types
 from datetime import date
 
-_REPO = os.environ.get("R13_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R13_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import media_engine as me
@@ -226,5 +227,16 @@ check("race: excluded during playoff games",
 check("race: same state in regular season eligible",
       me._g_playoff_race(race_ctx(0, 82, 96, 96, 82, playoffs=False)))
 
-print("failed:", check_failed)
-sys.exit(1 if check_failed else 0)
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check_failed == 0, f"{check_failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print("failed:", check_failed)
+    sys.exit(1 if check_failed else 0)

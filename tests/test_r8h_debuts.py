@@ -28,7 +28,8 @@ import types
 import random
 from datetime import date, timedelta
 
-_REPO = os.environ.get("R8H_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R8H_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn
@@ -542,8 +543,19 @@ check("bare app -> []", dn._debut_stories(app, DAY,
 names = [g[0] for g in dn._GENERATORS]
 check("bucket registered in _GENERATORS", "debuts" in names)
 
-print()
-if check.failed:
-    print(f"{check.failed} FAILURES")
-    sys.exit(1)
-print("ALL CHECKS PASSED")
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check.failed == 0, f"{check.failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print()
+    if check.failed:
+        print(f"{check.failed} FAILURES")
+        sys.exit(1)
+    print("ALL CHECKS PASSED")

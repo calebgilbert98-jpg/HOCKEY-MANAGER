@@ -13,7 +13,8 @@ import random
 import inspect
 from datetime import date, datetime, timedelta
 
-_REPO = os.environ.get("R12_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R12_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn
@@ -270,6 +271,8 @@ check("dispatch: controversy allowed in January",
 
 
 def test_controversy_split_window():
+    _failed_before = len(FAILED)
+
     def fresh_app():
         p = types.SimpleNamespace(
             first_name="Hold", last_name="Out",
@@ -295,12 +298,12 @@ def test_controversy_split_window():
                             random.Random(11))
     check("controversy: holdout fires in January",
           any("Hold Out" in s for s in jan))
-
-
-test_controversy_split_window()
+    assert len(FAILED) == _failed_before, \
+        f"failing checks: {FAILED[_failed_before:]}"
 
 
 def test_generate_dispatch_blocks():
+    _failed_before = len(FAILED)
     calls = []
 
     def fake_coach(app, game_date, rng):
@@ -318,12 +321,12 @@ def test_generate_dispatch_blocks():
         dn._GENERATORS = old
     check("generate: coach generator not called in July", calls == [])
     check("generate: no stories added in July", n == 0)
-
-
-test_generate_dispatch_blocks()
+    assert len(FAILED) == _failed_before, \
+        f"failing checks: {FAILED[_failed_before:]}"
 
 
 def test_generate_dispatch_allows():
+    _failed_before = len(FAILED)
     calls = []
 
     def fake_prospect(app, game_date, rng):
@@ -342,9 +345,26 @@ def test_generate_dispatch_allows():
         dn._GENERATORS = old
     check("generate: always-open generator called in July", calls != [])
     check("generate: its story added", n >= 1)
+    assert len(FAILED) == _failed_before, \
+        f"failing checks: {FAILED[_failed_before:]}"
 
 
-test_generate_dispatch_allows()
+def test_script_checks_all_pass():
+    """Aggregate for the check() calls that run at module import time.
 
-print(f"FAILED: {len(FAILED)}")
-sys.exit(1 if FAILED else 0)
+    Each test_* function above asserts the checks in its own body; this
+    test covers the remaining module-level checks, whose failures would
+    otherwise be visible only via the script's exit code.
+    """
+    assert not FAILED, f"{len(FAILED)} check(s) failed: {FAILED[:10]}"
+
+
+if __name__ == "__main__":
+    for _tname in sorted(globals()):
+        _tfn = globals()[_tname]
+        if (_tname.startswith("test_")
+                and _tname != "test_script_checks_all_pass"
+                and callable(_tfn)):
+            _tfn()
+    print(f"FAILED: {len(FAILED)}")
+    sys.exit(1 if FAILED else 0)

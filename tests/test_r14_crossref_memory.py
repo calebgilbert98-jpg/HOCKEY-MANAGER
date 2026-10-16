@@ -29,7 +29,8 @@ import os
 import types
 from datetime import date, timedelta
 
-_REPO = os.environ.get("R14_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R14_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn
@@ -381,8 +382,19 @@ check("_generate resets pending", "_r14_reset_pending(app)" in gsrc)
 check("_generate commits surfaced at the add choke point",
       "_r14_commit_surfaced(app, s, game_date)" in gsrc)
 
-print()
-if check_failed:
-    print(f"{check_failed} CHECK(S) FAILED")
-    sys.exit(1)
-print("ALL CHECKS PASSED")
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check_failed == 0, f"{check_failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print()
+    if check_failed:
+        print(f"{check_failed} CHECK(S) FAILED")
+        sys.exit(1)
+    print("ALL CHECKS PASSED")
