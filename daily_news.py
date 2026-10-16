@@ -3856,12 +3856,26 @@ def _extension_stories(app, game_date, rng):
 #     credit. That counter is the engine's service-time truth
 #     (game_manager._credit_nhl_games_played): +1 per completed NHL
 #     game for every rostered player, NEVER for preseason exhibitions.
-#     Because the credit covers the whole roster (not just dressed
-#     skaters), the story additionally requires a per-game game_stats
-#     line in the finished game -- a line is only written for players
-#     who actually took the ice. "Quick"-detail leagues record no
-#     lines, so the bucket stays silent there (fail silent, never
-#     synthesize) -- the R8d precedent.
+#     The credit covers the whole roster -- including healthy
+#     scratches -- and per-game game_stats lines are ALSO initialized
+#     roster-wide on both sim paths (simulation.py:806,
+#     quick_sim.py:1076), so a line alone does NOT prove the player
+#     dressed (reviewer B killshot: a toi==0 scratch fired a false
+#     debut). The dressed proof is therefore:
+#       - skaters: result['player_toi'][pid] > 0. Stamped on every
+#         result-recording path (game_manager.py:8498/9546,
+#         main.py:13105/14496) from ledgers that only dressed
+#         players enter (quick_sim toi+=45 per shift for on-ice
+#         skaters; GameSim player_toi_seconds accumulates per shift);
+#         only truthy values are recorded, so missing/zero is
+#         fail-closed silent.
+#       - goalies: the game_stats line has saves >= 1 (the R8d
+#         shutout precedent -- a goalie who played faced rubber).
+#         player_toi can't be used: the snapshot fill-in stamps full-
+#         game TOI on every roster goalie (game_manager.py:14386).
+#     "Quick"-detail leagues record no per-game lines, so the bucket
+#     stays silent there (fail silent, never synthesize) -- the R8d
+#     precedent.
 #   - FIRST NHL GOAL: a skater's line has g >= 1 (cross-checked g <=
 #     his team's goals, the R8d self-disproving-line killshot) AND the
 #     first-goal gate proves he had zero NHL goals before the game:
@@ -4014,6 +4028,29 @@ def _debut_prior_gp(p):
     return 0
 
 
+def _debut_dressed(res, p, line):
+    """Dressed proof for a debut candidate: did he actually take the
+    ice in this game? Skaters: result['player_toi'][pid] > 0 (only
+    dressed players enter the TOI ledgers; only truthy values are
+    recorded). Goalies: line saves >= 1 (player_toi is unusable --
+    the snapshot fill-in stamps full-game TOI on every roster
+    goalie). Strictly fail-closed: missing/junk TOI or saves never
+    proves a debut."""
+    try:
+        pid = getattr(p, "id", None)
+        if _td_pos_group(p) == "Goalie":
+            return _hero_line_num(line, "saves") >= 1
+        toi = res.get("player_toi")
+        if not isinstance(toi, dict):
+            return False
+        v = toi.get(pid)
+        if isinstance(v, bool):
+            return False
+        return isinstance(v, (int, float)) and v > 0
+    except Exception:
+        return False
+
+
 def _debut_stories(app, game_date, rng):
     """NHL debuts and first NHL goals from the day just simmed.
 
@@ -4092,6 +4129,12 @@ def _debut_stories(app, game_date, rng):
                             or nhl_gp < 0):
                         continue
                     is_debut = (nhl_gp == 1)
+                    if is_debut and not _debut_dressed(res, p, line):
+                        # Service-time credit covers healthy scratches
+                        # and lines are roster-wide: without dressed
+                        # proof this is a press-box credit, not a debut
+                        # (reviewer B killshot). Fail closed.
+                        is_debut = False
                     first_goal = False
                     pos_group = _td_pos_group(p)
                     if (g >= 1

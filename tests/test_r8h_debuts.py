@@ -57,14 +57,19 @@ def mkteam(name, players, nhl=True):
     return t
 
 
-def mkresult(home, away, hs, aws, winner, lines):
-    return {"home_team": home, "away_team": away,
-            "home_score": hs, "away_score": aws,
-            "winner": winner, "game_stats": lines}
+def mkresult(home, away, hs, aws, winner, lines, toi=None):
+    res = {"home_team": home, "away_team": away,
+           "home_score": hs, "away_score": aws,
+           "winner": winner, "game_stats": lines}
+    if toi is not None:
+        # Production stamps result['player_toi'] = {pid: seconds}
+        # (game_manager.py:8498/9546, main.py:13105/14496).
+        res["player_toi"] = toi
+    return res
 
 
-def mkline(p, g=0, a=0):
-    return {"player": p, "g": g, "a": a}
+def mkline(p, g=0, a=0, saves=0):
+    return {"player": p, "g": g, "a": a, "saves": saves}
 
 
 def mkapp(home, away, result, game_day, season_year=2026):
@@ -92,16 +97,18 @@ check.failed = 0
 
 def debut_app(name="Rookie Star", nhl_gp=1, pos="C", g=0, a=0,
               season_gp=1, season_goals=0, prior=None, hs=3, aws=2,
-              home_wins=True):
+              home_wins=True, saves=0, toi=900):
     """One-game app: Blades vs Wolves hs-aws on GAME_DAY, with `name`
-    on the Blades holding a line."""
+    on the Blades holding a line. Production shape: the debutant has
+    a TOI entry (skaters) or saves (goalies) proving he dressed."""
     p = mkplayer(name, nhl_gp, pos=pos, season_gp=season_gp,
                  season_goals=season_goals, prior=prior)
     home = mkteam("Blades", [p])
     away = mkteam("Wolves", [mkplayer("Veteran Foe", 300, season_gp=60,
                                      season_goals=20, prior=[70, 72])])
     res = mkresult(home, away, hs, aws, home if home_wins else away,
-                   {"l1": mkline(p, g=g, a=a)})
+                   {"l1": mkline(p, g=g, a=a, saves=saves)},
+                   toi={p.id: toi})
     return mkapp(home, away, res, GAME_DAY), p
 
 
@@ -167,11 +174,21 @@ check("debut in a loss -> fires", len(stories) == 1)
 if stories:
     check("debut loss renders 1-4", "1-4" in stories[0])
 
-# goalie debut fires as a debut (skating the ice is the premise)
-app, p = debut_app(name="Rookie Tender", pos="G")
+# goalie debut fires as a debut (skating the ice is the premise):
+# the dressed proof for goalies is saves >= 1 (player_toi can't be
+# used -- the snapshot fill-in stamps full-game TOI on every roster
+# goalie, game_manager.py:14386)
+app, p = debut_app(name="Rookie Tender", pos="G", saves=25,
+                   toi=3600)
 stories = run_bucket(app, DAY)
-check("goalie debut -> fires as DEBUT", len(stories) == 1
+check("goalie debut (25 saves) -> fires as DEBUT", len(stories) == 1
       and "DEBUT" in stories[0])
+
+# goalie credited but untested: saves=0 -> no dressed proof -> silent
+app, p = debut_app(name="Backup Kid", nhl_gp=1, pos="G", saves=0,
+                   toi=3600)
+check("goalie debut with 0 saves stays silent",
+      run_bucket(app, DAY) == [])
 
 # -- debut silence gates --------------------------------------------------------
 app, p = debut_app(nhl_gp=0)
@@ -180,13 +197,35 @@ check("nhl_gp==0 (pre-credit/corrupt) stays silent",
 app, p = debut_app(nhl_gp=2)
 check("nhl_gp==2 stays silent", run_bucket(app, DAY) == [])
 
-# credited but scratched: no game line -> no "debut in this game" claim
-p = mkplayer("Scratched Kid", 1)
+# credited scratch WITH a roster-wide line but no TOI: the reviewer B
+# killshot shape (lines are initialized for the whole roster on both
+# sim paths; TOI ledgers only admit dressed players). Must be silent.
+p = mkplayer("Pressbox Pete", 1, season_gp=1)
 home = mkteam("Blades", [p])
 away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
-res = mkresult(home, away, 3, 2, home, {})  # no lines at all
-check("credited but no line stays silent",
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)}, toi={})
+check("scratch: line present, no TOI entry stays silent",
       run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+               toi={p.id: 0})
+check("scratch: line present, TOI=0 stays silent",
+      run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)})  # no key
+check("missing player_toi stays silent (fail closed)",
+      run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+               toi="junk")
+check("junk player_toi stays silent",
+      run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+               toi={p.id: True})
+check("bool TOI stays silent",
+      run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+# and the positive: same scratch shape WITH TOI fires
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+               toi={p.id: 780})
+stories = run_bucket(mkapp(home, away, res, GAME_DAY), DAY)
+check("dressed (TOI>0) debut fires", len(stories) == 1)
 
 p = mkplayer("Junk Gp", "1")
 home = mkteam("Blades", [p])
@@ -394,7 +433,8 @@ lines = {f"l{i}": mkline(k, g=1) for i, k in enumerate(kids)}
 for k in kids:  # make them non-first-goal debutants: prior goals
     k.stats.goals = 3
     k.stats.games_played = 1
-res = mkresult(home, away, 4, 2, home, lines)
+res = mkresult(home, away, 4, 2, home, lines,
+               toi={k.id: 800 for k in kids})
 stories = run_bucket(mkapp(home, away, res, GAME_DAY), DAY)
 check("3 debutants -> capped at 2", len(stories) == 2)
 
@@ -404,7 +444,8 @@ a2 = mkplayer("Alex Smith", 1, season_gp=1, pid=22222)
 home = mkteam("Blades", [a1, a2])
 away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
 res = mkresult(home, away, 4, 2, home,
-               {"l1": mkline(a1), "l2": mkline(a2)})
+               {"l1": mkline(a1), "l2": mkline(a2)},
+               toi={a1.id: 800, a2.id: 850})
 stories = run_bucket(mkapp(home, away, res, GAME_DAY), DAY)
 check("duplicate names, distinct ids -> both fire",
       len(stories) == 2)
@@ -413,8 +454,10 @@ check("duplicate names, distinct ids -> both fire",
 p = mkplayer("Double Header", 1, season_gp=1)
 home = mkteam("Blades", [p])
 away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
-r1 = mkresult(home, away, 3, 2, home, {"l1": mkline(p)})
-r2 = mkresult(away, home, 2, 5, home, {"l1": mkline(p)})
+r1 = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+              toi={p.id: 800})
+r2 = mkresult(away, home, 2, 5, home, {"l1": mkline(p)},
+              toi={p.id: 820})
 league = types.SimpleNamespace(teams=[home, away], season_year=2026,
                                _results_by_date={GAME_DAY: [r1, r2]})
 app = types.SimpleNamespace(league=league, _daily_news_recent={})
@@ -426,7 +469,8 @@ check("same player two games one day -> one story per (game, player)",
 p = mkplayer("Time Traveler", 1, season_gp=1)
 home = mkteam("Blades", [p])
 away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
-res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)})
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(p)},
+               toi={p.id: 800})
 for bad_year in (0, 1999, 2101):
     league = types.SimpleNamespace(teams=[home, away],
                                    season_year=bad_year,
