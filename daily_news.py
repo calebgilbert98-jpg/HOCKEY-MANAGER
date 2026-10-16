@@ -25,6 +25,8 @@ import math
 import random
 from datetime import date, timedelta
 
+_log = logging.getLogger(__name__)
+
 # Variety window: don't repeat the same story type about the same entity
 # within this many game-days.
 REPEAT_WINDOW_DAYS = 10
@@ -55,6 +57,20 @@ def _pname(p):
 
 def _tname(t):
     return _safe(lambda: t.team_name, "") or "Unknown Team"
+
+
+# R9: post-render backstop. Individual buckets already fail closed on
+# unknown names at the gate level ("Unknown Player"/"Unknown Team" checks
+# per bucket), but this is the global safety net: any RENDERED story that
+# still carries a placeholder name/team is suppressed here -- fail closed,
+# logged, never surfaced. Checked at the single choke point in _generate
+# where finalized stories are handed to app.add_news().
+_UNKNOWN_ENTITY_MARKERS = ("Unknown Player", "Unknown Team")
+
+
+def _story_has_unknown_entity(story):
+    return (isinstance(story, str)
+            and any(m in story for m in _UNKNOWN_ENTITY_MARKERS))
 
 
 def _ovr(p):
@@ -594,6 +610,26 @@ def _coach_stories(app, game_date, rng):
     return stories
 
 
+def _rumor_pts_bar(p):
+    """Position-aware underperformance bar (pts/gp) for the trade-rumor gate.
+
+    R9: the old flat 0.5 bar framed shutdown defensemen as underperforming
+    trade bait -- a 0.40 pts/gp shutdown D-man is playing his role, not
+    slumping. League-wide, defensemen produce roughly 60% of forward point
+    rates, so a 0.30 bar for D is the positional equivalent of the 0.50
+    forward bar: genuinely slumping offensive D-men stay eligible, on-role
+    shutdown D-men (and goalies, who get no bar at all) can no longer
+    qualify. Returns None when the position can't be established -- fail
+    closed: no rumor without a position to judge production against.
+    """
+    pos = _pos(p).upper()
+    if pos in ("C", "LW", "RW"):
+        return 0.50
+    if pos in ("D", "LD", "RD"):
+        return 0.30
+    return None
+
+
 def _controversies(app, game_date, rng):
     """Plausible speculation grounded in real game state."""
     stories = []
@@ -677,14 +713,20 @@ def _controversies(app, game_date, rng):
             break
         except Exception:
             continue
-    # Trade rumors: underperforming stars (high OVR, low points per game)
+    # Trade rumors: underperforming stars (high OVR, low points per game).
+    # R9: the pts/gp bar is position-aware (_rumor_pts_bar) -- shutdown
+    # defensemen at 0.3-0.49 pts/gp are on-role, not underperforming, so
+    # they must not be framed as trade bait; goalies have no bar and are
+    # excluded entirely.
     if len(stories) < 2:
         cands = []
         for p, t in players:
             try:
                 ovr = _ovr(p)
                 gp = _gp(p)
-                if _ovr_ok(ovr) and ovr >= 80 and gp >= 15 and _pts(p) / gp < 0.5:
+                bar = _rumor_pts_bar(p)
+                if (bar is not None and _ovr_ok(ovr) and ovr >= 80
+                        and gp >= 15 and _pts(p) / gp < bar):
                     cands.append((p, t))
             except Exception:
                 continue
@@ -694,6 +736,15 @@ def _controversies(app, game_date, rng):
             if not _recent_ok(app, key, "rumor", game_date):
                 continue
             pts = _pts(p)
+            # R9: fail closed on placeholder names/teams at the bucket level
+            # too (the _generate guard is the global backstop) -- a rumor
+            # about "Unknown Player" must never render.
+            name = _pname(p)
+            team = _tname(t)
+            if not name or name == "Unknown Player":
+                continue
+            if not team or team == "Unknown Team":
+                continue
             story = rng.choice([
                 "RUMOR MILL: {name} is a natural speculation target -- the {team} star has just {pts} {points_word} in {gp} games.",
                 "Is {name}'s time in {team} running out? {pts} {points_word} in {gp} games isn't cutting it for an {ovr} OVR player.",
@@ -715,7 +766,7 @@ def _controversies(app, game_date, rng):
                 "Retool or reload? {team}'s answer may decide {name}'s future -- {pts} {points_word} in {gp} games.",
                 "{team} fans are split on {name} -- but {pts} {points_word} in {gp} games is below the {ovr} OVR bar.",
                 "RUMOR MILL: If {team} sells, {name} is the headline piece -- {pts} {points_word} in {gp} games.",
-            ]).format(name=_pname(p), team=_tname(t), pts=pts,
+            ]).format(name=_pname(p), team=team, pts=pts,
                       gp=_gp(p), ovr=int(_ovr(p)),
                       points_word="point" if pts == 1 else "points")
             stories.append(story)
@@ -956,6 +1007,31 @@ def _milestone_watch(app, game_date, rng):
     return stories
 
 
+def _team_goalie_svps(players, t):
+    """(goalie, save_percentage) for every goalie on team t carrying a sane,
+    finite save percentage in [0.0, 1.0]. Powers the R9 crease-controversy
+    gate in _depth_stories: the controversy premise needs the team's
+    netminders ranked so the named goalie can be shown to be out-saving
+    the rest. Junk numerics (inf/nan/None/out-of-range) are dropped, never
+    ranked."""
+    out = []
+    for q, qt in players:
+        try:
+            if qt is not t:
+                continue
+            if "G" not in _pos(q).upper():
+                continue
+            svp = _safe(lambda: float(_stats(q).save_percentage), None)
+            if svp is None or not math.isfinite(svp):
+                continue
+            if not 0.0 <= svp <= 1.0:
+                continue
+            out.append((q, svp))
+        except Exception:
+            continue
+    return out
+
+
 def _depth_stories(app, game_date, rng):
     """Fourth liners, backup goalies, AHL callups -- the rest of the roster."""
     stories = []
@@ -976,6 +1052,32 @@ def _depth_stories(app, game_date, rng):
                 continue
             svp = svp or 0.0
             if 3 <= gp <= 12 and 0.915 <= svp <= 1.0:
+                # R9: the crease-controversy premise requires the named
+                # goalie to actually be out-saving the team's other
+                # netminders -- a .918 backup behind a .925 starter is not
+                # a controversy. Mirror the presser's gate (media_engine
+                # _maybe_spawn_narrative): sort the team's goalies by
+                # save_percentage, require top - second > 0.010. The story
+                # names p, so p must be the top goalie; a team with fewer
+                # than two sane goalies cannot have a controversy.
+                mates = _team_goalie_svps(players, t)
+                if len(mates) < 2:
+                    continue
+                mates.sort(key=lambda gs: gs[1], reverse=True)
+                if mates[0][0] is not p:
+                    continue
+                if mates[0][1] - mates[1][1] <= 0.010:
+                    continue
+                # R9: fail closed on placeholder names/teams at the bucket
+                # level too (the _generate guard is the global backstop) --
+                # a crease-controversy story about "Unknown Player" must
+                # never render.
+                name = _pname(p)
+                team = _tname(t)
+                if not name or name == "Unknown Player":
+                    continue
+                if not team or team == "Unknown Team":
+                    continue
                 key = f"player:{_safe(lambda: p.id, id(p))}"
                 if not _recent_ok(app, key, "backup", game_date):
                     continue
@@ -1000,8 +1102,8 @@ def _depth_stories(app, game_date, rng):
                     "{name} has given {team} quality minutes -- {svp} in {gp} games.",
                     "GOALIE DEBATE: {name} keeps the net small -- {svp} through {gp} for {team}.",
                     "{team}'s goaltending depth is showing -- {name} is {svp} across {gp} games.",
-                ]).format(name=_pname(p), svp=f"{svp:.3f}", gp=gp,
-                          team=_tname(t))
+                ]).format(name=name, svp=f"{svp:.3f}", gp=gp,
+                          team=team)
                 stories.append(story)
                 _mark_recent(app, key, "backup", game_date)
                 break
@@ -4323,6 +4425,14 @@ def _generate(app, game_date) -> int:
         return 0
     for s in stories:
         try:
+            if _story_has_unknown_entity(s):
+                # R9 global backstop: a rendered placeholder name/team means
+                # a bucket gate missed something upstream -- suppress the
+                # story (fail closed, logged, never surfaced). It does not
+                # count toward `added`.
+                _log.warning("daily_news: suppressed story with unknown "
+                             "entity placeholder: %s", repr(s)[:160])
+                continue
             add(s)
             added += 1
         except Exception:
