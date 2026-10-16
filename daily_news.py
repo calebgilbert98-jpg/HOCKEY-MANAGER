@@ -349,6 +349,366 @@ def _note_arc(app, arc_kind, entity_key, facts, game_date):
         pass
 
 
+# ---------------------------------------------------------------------------
+# R14 -- Cross-reference memory ("as reported last week..." callbacks)
+#
+# When a story fires for an entity (player/team/coach), the engine scans for
+# a recent story about the SAME entity that was actually SURFACED and, when
+# one exists, appends a callback line ("As reported last week: ...") that
+# quotes the prior story's real premise -- never invented, never a
+# placeholder, never a story that was merely attempted.
+#
+# Truthfulness is structural, not best-effort:
+#   * Buckets finalize stories through _r14_finalize_story(), which records
+#     the premise in app._daily_news_pending keyed by the exact story string.
+#     The stored premise is the story WITHOUT its own callback, and the
+#     first registration wins -- so byte-identical collisions can never
+#     smuggle a callback-bearing text into the premise slot (no nested
+#     "as reported..." chains, structurally, not by template convention).
+#   * _generate moves a pending premise into app._daily_news_surfaced ONLY
+#     at the single choke point where the story is actually handed to
+#     app.add_news() (_r14_commit_surfaced). Stories dropped by the daily
+#     target cap or suppressed by the R9 Unknown-entity guard never reach
+#     _daily_news_surfaced, so a callback can never quote them. This also
+#     closes the standing "_generate target-cap drops a returned story
+#     while its one-shot key is marked" hole for everything R14 reads.
+#   * The callback scan only matches surfaced entries 1..7 game-days old
+#     (same-day matches are excluded -- "last week" must not describe a
+#     story from this morning), with non-empty premises free of Unknown
+#     markers (R9 fail-closed, defense in depth).
+#   * Entity identity comes from _r14_entity_tag() over the repeat key:
+#     player:/prospect: bare ids, awards:/heroics:/debuts:/extension:
+#     trailing #id(player), coach: display names, team:/playoff:/deadline:/
+#     losing_streak: team names WITH the key's #id(t) disambiguator when
+#     present (two same-named team objects never cross-quote; a missing id
+#     falls back to name-only, the best the key design allows). League-
+#     scoped keys (league:*, draft:*, deadline frame / trade keys naming
+#     two teams, rivalry_hype matchups) yield no tag and get no callback --
+#     fail closed. For bare player:<p.id> keys, which can collide across
+#     player objects when p.id restarts (R8g F2), the scan additionally
+#     requires the stored display name to agree when both sides know it.
+#   * Window consistency: both the current story and any quoted prior story
+#     individually passed their bucket's R12 window gate at fire time (the
+#     surfaced dict only ever holds stories that fired). The 7-day lookback
+#     keeps callbacks inside the same news cycle.
+#   * Memory safety: _daily_news_surfaced is pruned past 2000 entries to
+#     marks older than _R14_SURFACED_MAX_AGE_DAYS (callbacks only look back
+#     7 days); _daily_news_pending is reset at the start of every _generate
+#     pass so a crashed pass can't leak stale premises.
+# ---------------------------------------------------------------------------
+
+# Lookback for "as reported last week" callbacks, in game-days.
+_R14_LOOKBACK_DAYS = 7
+# Callback quotes are premise fragments, not full reprints.
+_R14_PREMISE_MAX_CHARS = 160
+# Surfaced premises older than this are pruned (callbacks look back 7d).
+_R14_SURFACED_MAX_AGE_DAYS = 30
+_R14_SURFACED_PRUNE_AT = 2000
+# Unconditional hard cap (reviewer C, round 1): oldest entries are dropped
+# past this size no matter their age.
+_R14_SURFACED_HARD_CAP = 4000
+
+
+def _r14_entity_tag(entity_key):
+    """Canonical (kind, token) for the entity a repeat key names, or None.
+
+    Never raises; unparseable keys yield None (no callback -- fail closed).
+    """
+    try:
+        k = entity_key if isinstance(entity_key, str) else ""
+        if ":" not in k:
+            return None
+        prefix, rest = k.split(":", 1)
+        if prefix in ("player", "prospect"):
+            # Bare ids: numeric p.id / id(p). The R8g F2 collision caveat
+            # (p.id restarts across draft classes) is handled by the
+            # display-name cross-check in _r14_find_callback.
+            return ("player", rest) if rest.isdigit() else None
+        if prefix in ("awards", "heroics", "debuts", "extension"):
+            # Trailing #id(player) -- session-unique per live object.
+            head, sep, tail = rest.rpartition("#")
+            if sep and tail.isdigit():
+                return ("player", tail)
+            return None
+        if prefix == "coach":
+            # NOTE: coach keys carry no #id disambiguator (the key itself
+            # is name-only, same as the repeat-suppression granularity) --
+            # two same-named coaches share a tag. Accepted: matches the
+            # existing key design; the name cross-check still applies.
+            name = rest.strip().lower()
+            return ("coach", name) if name else None
+        if prefix == "team":
+            # Bare team: keys carry no id (streak/slump bucket) -- the id
+            # slot is None and matching falls back to name-only.
+            name = rest.strip().lower()
+            return ("team", name, None) if name else None
+        if prefix == "losing_streak":
+            # losing_streak:{season}:{name}#{id(t)}:{n}
+            parts = rest.split(":")
+            if len(parts) >= 3:
+                return _r14_team_tag(parts[1])
+            return None
+        if prefix == "playoff":
+            # playoff:{season}:{name}#{id(t)}
+            parts = rest.split(":")
+            if len(parts) >= 2:
+                return _r14_team_tag(parts[1])
+            return None
+        if prefix == "deadline":
+            # deadline:{season}:{buyer|seller}:{name}#{id(t)} only -- the
+            # frame and trade keys name no single entity.
+            parts = rest.split(":")
+            if len(parts) >= 3 and parts[1] in ("buyer", "seller"):
+                return _r14_team_tag(parts[2])
+            return None
+        return None
+    except Exception:
+        return None
+
+
+def _r14_team_tag(name_id):
+    """("team", name, id-or-None) from a "name#id(t)" key segment.
+
+    The #id(t) disambiguator is what keeps two same-named team objects
+    from cross-quoting (reviewer B, R14 round 1): the repeat keys include
+    it deliberately, so the callback tag must carry it too.
+    """
+    try:
+        name, sep, ident = name_id.partition("#")
+        name = name.strip().lower()
+        if not name:
+            return None
+        ident = ident.strip() or None
+        return ("team", name, ident)
+    except Exception:
+        return None
+
+
+def _r14_key_display_name(entity_key):
+    """Display name embedded in a "{name}#{id}" repeat key, or None.
+
+    Covers awards:/heroics:/debuts:/extension: (player names), playoff:/
+    deadline:/losing_streak: (team names). Bare player:/prospect:/coach:/
+    team: keys carry no "#" segment and yield None.
+    """
+    try:
+        k = entity_key if isinstance(entity_key, str) else ""
+        if "#" not in k:
+            return None
+        head = k.rsplit("#", 1)[0]
+        name = head.rsplit(":", 1)[1].strip() if ":" in head else ""
+        return name or None
+    except Exception:
+        return None
+
+
+def _r14_tags_match(a, b):
+    """True if two entity tags name the same entity.
+
+    Team tags carry the key's #id(t) disambiguator when present: two
+    same-named teams with different ids do NOT match. When either side
+    lacks the id (e.g. the streak bucket's bare team: keys), matching
+    falls back to name-only -- the best the key design allows.
+    """
+    try:
+        if a is None or b is None or a[0] != b[0]:
+            return False
+        if a[0] == "team":
+            if a[1] != b[1]:
+                return False
+            return a[2] is None or b[2] is None or a[2] == b[2]
+        return a == b
+    except Exception:
+        return False
+
+
+def _r14_shorten(premise):
+    """Collapse whitespace and truncate a premise to a quotable fragment."""
+    try:
+        text = " ".join(str(premise).split())
+        if len(text) <= _R14_PREMISE_MAX_CHARS:
+            return text
+        cut = text[:_R14_PREMISE_MAX_CHARS].rsplit(" ", 1)[0]
+        return (cut or text[:_R14_PREMISE_MAX_CHARS]) + "\u2026"
+    except Exception:
+        return ""
+
+
+def _r14_reset_pending(app):
+    """Drop any pending premises left by a previous (crashed) pass."""
+    try:
+        app._daily_news_pending = {}
+    except Exception:
+        pass
+
+
+def _r14_find_callback(app, tag, game_date, entity_name=None):
+    """Most recent truthful callback line for this entity, or None.
+
+    tag is the _r14_entity_tag() of the story being finalized. Scans
+    _daily_news_surfaced (stories PROVEN to have fired -- see the R14
+    header) for the same entity 1.._R14_LOOKBACK_DAYS game-days back.
+    """
+    try:
+        if tag is None:
+            return None
+        surfaced = getattr(app, "_daily_news_surfaced", None)
+        if not isinstance(surfaced, dict):
+            return None
+        today = _w_as_date(game_date)
+        if today is None:
+            return None
+        want_name = (str(entity_name).strip().lower()
+                     if entity_name else "")
+        best = None  # (date, premise)
+        for (skey, _stype), v in surfaced.items():
+            try:
+                if not (isinstance(v, tuple) and len(v) == 3):
+                    continue
+                vdate, premise, vname = v
+                vdate = _w_as_date(vdate)
+                if vdate is None:
+                    continue
+                delta = (today - vdate).days
+                # Same-day is excluded: "last week" must not describe a
+                # story from this morning's pass.
+                if delta < 1 or delta > _R14_LOOKBACK_DAYS:
+                    continue
+                vtag = _r14_entity_tag(skey)
+                # B1 (reviewer B, round 1): match on the full tag -- team
+                # tags carry the #id(t) disambiguator, so same-named
+                # different team objects never cross-quote.
+                if not _r14_tags_match(tag, vtag):
+                    continue
+                # Bare player:<p.id> keys can collide across objects
+                # (R8g F2); when both sides know the display name it must
+                # agree, or the callback could quote another player's story.
+                got_name = (str(vname).strip().lower() if vname else "")
+                if want_name and got_name and want_name != got_name:
+                    continue
+                if not isinstance(premise, str) or not premise.strip():
+                    continue
+                # R9 defense in depth: never quote a placeholder premise.
+                if _story_has_unknown_entity(premise):
+                    continue
+                if best is None or vdate > best[0]:
+                    best = (vdate, premise)
+            except Exception:
+                continue
+        if best is None:
+            return None
+        vdate, premise = best
+        short = _r14_shorten(premise)
+        if not short or _story_has_unknown_entity(short):
+            return None
+        delta = (today - vdate).days
+        lead = "As reported yesterday" if delta == 1 else "As reported last week"
+        return f'{lead}: "{short}"'
+    except Exception:
+        return None
+
+
+def _r14_finalize_story(app, entity_key, story_type, story, game_date,
+                        entity_name=None, window=None):
+    """R14: mark + callback + pending-premise registration, one call.
+
+    Replaces the bare _mark_recent() at bucket return sites for
+    entity-scoped stories. Returns the story with a truthful callback
+    appended when a recent surfaced story about the same entity exists.
+    The premise registered for the surfaced dict is the story WITHOUT its
+    own callback (no nested "as reported..." chains). Existing
+    _mark_recent() suppression semantics are unchanged.
+    """
+    try:
+        tag = _r14_entity_tag(entity_key)
+        if not isinstance(story, str) or not story or tag is None:
+            _mark_recent(app, entity_key, story_type, game_date, window)
+            return story
+        # C1 (reviewer C, round 1): some call sites (awards, heroics) don't
+        # pass entity_name -- derive it from the key's {name}#{id} segment
+        # so the display-name cross-check in _r14_find_callback is never
+        # silently skipped. Without this, an id() address reused by a new
+        # object (GC freelist, save/load) could cross-quote another
+        # player's story with no name to disagree.
+        if entity_name is None:
+            entity_name = _r14_key_display_name(entity_key)
+        callback = _r14_find_callback(app, tag, game_date, entity_name)
+        final = story + (" " + callback if callback else "")
+        _mark_recent(app, entity_key, story_type, game_date, window)
+        try:
+            pending = getattr(app, "_daily_news_pending", None)
+            if not isinstance(pending, dict):
+                pending = {}
+                app._daily_news_pending = pending
+            # First registration wins: two finalize calls producing the
+            # same final string keep the first premise, so a byte-identical
+            # collision can never smuggle a callback-bearing text into the
+            # premise slot (no nested "as reported..." chains, structurally).
+            if final not in pending:
+                pending[final] = (entity_key, story_type, story, game_date,
+                                  entity_name)
+        except Exception:
+            pass
+        return final
+    except Exception:
+        try:
+            _mark_recent(app, entity_key, story_type, game_date, window)
+        except Exception:
+            pass
+        return story
+
+
+def _r14_surfaced_age_days(v, today_ord):
+    try:
+        d = v[0] if isinstance(v, tuple) else v
+        return today_ord - d.toordinal()
+    except Exception:
+        return 10 ** 9
+
+
+def _r14_commit_surfaced(app, story, game_date):
+    """Promote a pending premise to _daily_news_surfaced.
+
+    Called from the _generate add loop ONLY for stories actually handed to
+    app.add_news() -- this is the mechanism that guarantees callbacks
+    reference stories that truly fired (target-cap drops and R9
+    suppressions never reach here).
+    """
+    try:
+        pending = getattr(app, "_daily_news_pending", None)
+        if not isinstance(pending, dict):
+            return
+        item = pending.pop(story, None)
+        if item is None:
+            return
+        entity_key, story_type, premise, pdate, entity_name = item
+        surfaced = getattr(app, "_daily_news_surfaced", None)
+        if not isinstance(surfaced, dict):
+            surfaced = {}
+            app._daily_news_surfaced = surfaced
+        surfaced[(entity_key, story_type)] = (pdate, premise, entity_name)
+        # C3 (reviewer C, round 1): the bound must be unconditional, not
+        # just "when over 2000 AND entries are old". Prune stale entries
+        # past the cap, then enforce a hard cap by dropping oldest first --
+        # no caller can grow this dict without bound.
+        if len(surfaced) > _R14_SURFACED_PRUNE_AT:
+            today_ord = _safe(lambda: game_date.toordinal(), None)
+            if today_ord is not None:
+                for k in [k for k, v in surfaced.items()
+                          if _r14_surfaced_age_days(v, today_ord)
+                          > _R14_SURFACED_MAX_AGE_DAYS]:
+                    del surfaced[k]
+            if len(surfaced) > _R14_SURFACED_HARD_CAP:
+                ordered = sorted(surfaced.items(),
+                                 key=lambda kv: _r14_surfaced_age_days(
+                                     kv[1], today_ord)
+                                 if today_ord is not None else 0)
+                for k, _v in ordered[:len(surfaced) - _R14_SURFACED_HARD_CAP]:
+                    del surfaced[k]
+    except Exception:
+        pass
+
+
 # Scratch-gate GP-delta window (REV-B2 follow-up, FIX-BACK): cumulative GP
 # alone cannot tell "currently scratched" from "recently returned" -- an 86
 # OVR star back from a 20-game suspension plays every night, yet
@@ -551,8 +911,9 @@ def _prospect_watch(app, game_date, rng):
         story = rng.choice(templates).format(
             name=_pname(p), pos=_pos(p) or "prospect",
             age=_safe(lambda: p.age, "?"), team=_tname(t), extra=extra)
-        stories.append(story)
-        _mark_recent(app, key, "prospect_watch", game_date)
+        stories.append(_r14_finalize_story(app, key, "prospect_watch",
+                                           story, game_date,
+                                           entity_name=_pname(p)))
         if len(stories) >= 2:
             break
     return stories
@@ -600,8 +961,9 @@ def _coach_stories(app, game_date, rng):
                     "The heat is on {coach}: {team} sits {w}-{l}-{otl}, and the board's patience is wearing thin.",
                 ]).format(coach=cname, team=_tname(t), w=w, l=l, otl=otl,
                           conf=int(conf))
-                stories.append(story)
-                _mark_recent(app, key, "hot_seat", game_date)
+                stories.append(_r14_finalize_story(app, key, "hot_seat",
+                                                   story, game_date,
+                                                   entity_name=cname))
                 # R10: every hot-seat story opens an arc -- fired/retained
                 # is decided later from real engine state, never here.
                 _note_arc(app, "hot_seat", key,
@@ -634,8 +996,9 @@ def _coach_stories(app, game_date, rng):
                     "{w}-{l}-{otl} doesn't happen by accident -- {coach} has {team} dialed in.",
                     "Credit where it's due: {coach} has {team} at {w}-{l}-{otl}.",
                 ]).format(coach=cname, team=_tname(t), w=w, l=l, otl=otl)
-                stories.append(story)
-                _mark_recent(app, key, "cotm", game_date)
+                stories.append(_r14_finalize_story(app, key, "cotm",
+                                                   story, game_date,
+                                                   entity_name=cname))
         except Exception:
             continue
         if len(stories) >= 2:
@@ -753,8 +1116,9 @@ def _controversies(app, game_date, rng):
                       games_word="game" if gp == 1 else "games",
                       team=_tname(t),
                       coach=_coach_name(_head_coach(t)) or "the coach")
-            stories.append(story)
-            _mark_recent(app, key, "scratch", game_date)
+            stories.append(_r14_finalize_story(app, key, "scratch",
+                                           story, game_date,
+                                           entity_name=_pname(p)))
             break
         except Exception:
             continue
@@ -815,8 +1179,9 @@ def _controversies(app, game_date, rng):
             ]).format(name=_pname(p), team=team, pts=pts,
                       gp=_gp(p), ovr=int(_ovr(p)),
                       points_word="point" if pts == 1 else "points")
-            stories.append(story)
-            _mark_recent(app, key, "rumor", game_date)
+            stories.append(_r14_finalize_story(app, key, "rumor",
+                                           story, game_date,
+                                           entity_name=_pname(p)))
             # R10: rumor stories about a specific player open arcs --
             # traded/stayed is decided later from the real trade log.
             _note_arc(app, "trade_rumor", key,
@@ -857,8 +1222,9 @@ def _controversies(app, game_date, rng):
                         "The {team} faithful are getting nervous: no extension yet for {name}, the {ovr} OVR engine.",
                         "CONTRACT WATCH: {name} to the open market is {team}'s nightmare scenario -- {ovr} OVR talent doesn't grow on trees.",
                     ]).format(name=_pname(p), team=_tname(t), ovr=int(ovr))
-                    stories.append(story)
-                    _mark_recent(app, key, "holdout", game_date)
+                    stories.append(_r14_finalize_story(app, key, "holdout",
+                                                       story, game_date,
+                                                       entity_name=_pname(p)))
                     break
             except Exception:
                 continue
@@ -982,8 +1348,9 @@ def _team_stories(app, game_date, rng):
                     "Pin this one to the board: {team} is {w}-{l}-{otl}.",
                     "One more look at the ledger: {team}, {w}-{l}-{otl}.",
                 ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp)
-                stories.append(story)
-                _mark_recent(app, key, "streak", game_date)
+                stories.append(_r14_finalize_story(app, key, "streak",
+                                                   story, game_date,
+                                                   entity_name=_tname(t)))
             elif pct <= 0.25 and _recent_ok(app, key, "slump", game_date):
                 story = rng.choice([
                     "SLUMP WATCH: {team} has managed just {w} {wins_word} in {gp} games.",
@@ -1008,8 +1375,9 @@ def _team_stories(app, game_date, rng):
                     "File this under rough: {team} is {w}-{l}-{otl} through {gp} games.",
                 ]).format(team=_tname(t), w=w, l=l, otl=otl, gp=gp,
                           wins_word="win" if w == 1 else "wins")
-                stories.append(story)
-                _mark_recent(app, key, "slump", game_date)
+                stories.append(_r14_finalize_story(app, key, "slump",
+                                                   story, game_date,
+                                                   entity_name=_tname(t)))
         except Exception:
             continue
         if len(stories) >= 2:
@@ -1056,8 +1424,9 @@ def _milestone_watch(app, game_date, rng):
                         "MILESTONE WATCH: {name} ({team}): {cg} career goals and counting -- {mark} is {away} away.",
                     ]).format(name=_pname(p), team=_tname(t), cg=cg,
                               away=mark - cg, mark=mark)
-                    stories.append(story)
-                    _mark_recent(app, key, "milestone", game_date)
+                    stories.append(_r14_finalize_story(app, key, "milestone",
+                                                       story, game_date,
+                                                       entity_name=_pname(p)))
                     # R10: countdown stories open arcs -- the achievement
                     # follow-up fires when the career total reaches the mark.
                     _note_arc(app, "milestone_countdown", key,
@@ -1174,8 +1543,9 @@ def _depth_stories(app, game_date, rng):
                     "{team}'s goaltending depth is showing -- {name} is {svp} across {gp} games.",
                 ]).format(name=name, svp=f"{svp:.3f}", gp=gp,
                           team=team)
-                stories.append(story)
-                _mark_recent(app, key, "backup", game_date)
+                stories.append(_r14_finalize_story(app, key, "backup",
+                                                   story, game_date,
+                                                   entity_name=name))
                 break
         except Exception:
             continue
@@ -1211,8 +1581,9 @@ def _depth_stories(app, game_date, rng):
                         "UNDERDOG: {name}'s compete never wavers -- {pts} points in {gp} games for {team}.",
                     ]).format(name=_pname(p), ovr=int(ovr), pts=_pts(p),
                               gp=gp, team=_tname(t))
-                    stories.append(story)
-                    _mark_recent(app, key, "grinder", game_date)
+                    stories.append(_r14_finalize_story(app, key, "grinder",
+                                                       story, game_date,
+                                                       entity_name=_pname(p)))
                     break
             except Exception:
                 continue
@@ -1278,8 +1649,9 @@ def _injury_stories(app, game_date, rng):
             ]).format(name=name, team=team, games=games_out,
                       games_word="game" if games_out == 1 else "games",
                       itype=itype)
-            stories.append(story)
-            _mark_recent(app, key, "injury", game_date)
+            stories.append(_r14_finalize_story(app, key, "injury",
+                                           story, game_date,
+                                           entity_name=name))
             # R10: injury stories open arcs -- the return follow-up fires
             # when the engine's healed state holds again.
             _note_arc(app, "injury", key,
@@ -1375,8 +1747,9 @@ def _offseason_beat(app, game_date, rng):
             "OFFSEASON: {name} is betting a summer of {focus} turns into a breakout fall with {team}.",
             "{team} fans should watch {name} at camp -- a summer of {focus} could unlock another level.",
         ]).format(name=_pname(p), team=_tname(t), focus=focus)
-        stories.append(story)
-        _mark_recent(app, key, "offseason", game_date)
+        stories.append(_r14_finalize_story(app, key, "offseason",
+                                           story, game_date,
+                                           entity_name=_pname(p)))
         if len(stories) >= 2:
             break
     # Prospect development camp standouts
@@ -1401,8 +1774,9 @@ def _offseason_beat(app, game_date, rng):
                         "DEVELOPMENT CAMP: {pname} looked like he belonged at {tname} camp.",
                         "DEVELOPMENT CAMP: {tname} prospect {pname} finished the week strong.",
                     ]).format(tname=(t and _tname(t)), pname=_pname(p))
-                    stories.append(story)
-                    _mark_recent(app, key, "devcamp", game_date)
+                    stories.append(_r14_finalize_story(app, key, "devcamp",
+                                                       story, game_date,
+                                                       entity_name=_pname(p)))
                     break
             except Exception:
                 continue
@@ -1632,8 +2006,9 @@ def _performance_stories(app, game_date, rng):
             "The league has no answer for {name} -- {pts} points in {gp} games at {ppg} a night.",
         ]).format(name=_pname(p), pts=_pts(p), gp=_gp(p),
                   ppg=f"{ppg:.2f}", team=_tname(t))
-        stories.append(story)
-        _mark_recent(app, key, "hot", game_date)
+        stories.append(_r14_finalize_story(app, key, "hot",
+                                           story, game_date,
+                                           entity_name=_pname(p)))
     return stories
 
 
@@ -2190,9 +2565,12 @@ def _playoff_race_stories(app, game_date, rng):
         logging.getLogger(__name__).exception("playoff race bucket failed")
         return []
     chosen = pending[:2]
+    out = []
     for story, key, stype in chosen:
-        _mark_recent(app, key, stype, game_date)
-    return [s for s, _k, _t in chosen]
+        # R14: entity tag derived from the key (team keys); league-scoped
+        # keys get no callback and degrade to a plain mark.
+        out.append(_r14_finalize_story(app, key, stype, story, game_date))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2689,9 +3067,12 @@ def _trade_deadline_stories(app, game_date, rng):
         logging.getLogger(__name__).exception("trade deadline bucket failed")
         return []
     chosen = pending[:2]
+    out = []
     for story, key, stype in chosen:
-        _mark_recent(app, key, stype, game_date)
-    return [s for s, _k, _t in chosen]
+        # R14: entity tag derived from the key (buyer/seller team keys);
+        # frame/trade keys name no single entity and degrade to a mark.
+        out.append(_r14_finalize_story(app, key, stype, story, game_date))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3114,9 +3495,11 @@ def _award_race_stories(app, game_date, rng):
     # enough that every race still gets its one shot per season.
     pending.sort(key=lambda item: item[3])
     chosen = pending[:2]
+    out = []
     for story, key, stype, _tight in chosen:
-        _mark_recent(app, key, stype, game_date)
-    return [s for s, _k, _t, _x in chosen]
+        # R14: awards keys carry #id(player) -- tag derived from the key.
+        out.append(_r14_finalize_story(app, key, stype, story, game_date))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3573,9 +3956,12 @@ def _heroics_stories(app, game_date, rng):
     # still gets its one shot on a later heroics day.
     candidates.sort(key=lambda c: c[0], reverse=True)
     chosen = candidates[:HEROICS_MAX_PER_DAY]
+    out = []
     for _w, story, key in chosen:
-        _mark_recent(app, key, "heroics", game_date)
-    return [s for _w, s, _k in chosen]
+        # R14: heroics keys carry #id(player) -- tag derived from the key.
+        out.append(_r14_finalize_story(app, key, "heroics", story,
+                                       game_date))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -3739,9 +4125,13 @@ def _streaks_stories(app, game_date, rng):
         seen.add(cand[2])
         deduped.append(cand)
     chosen = deduped[:STREAKS_MAX_PER_DAY]
+    out = []
     for _n, _lt, _nm, _story, key in chosen:
-        _mark_recent(app, key, "losing_streak", game_date, STREAKS_WINDOW_DAYS)
-    return [s for _n, _lt, _nm, s, _k in chosen]
+        # R14: losing_streak keys carry the team name -- tag from the key.
+        out.append(_r14_finalize_story(app, key, "losing_streak", _story,
+                                       game_date, entity_name=_nm,
+                                       window=STREAKS_WINDOW_DAYS))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -4158,9 +4548,12 @@ def _extension_stories(app, game_date, rng):
         seen.add(pair)
         deduped.append(cand)
     chosen = deduped[:_EXT_MAX_PER_DAY]
+    out = []
     for _ovr_, _yrs, _nm, _story, key in chosen:
-        _mark_recent(app, key, "extension", game_date, _EXT_ONE_SHOT_WINDOW)
-    return [s for _ovr_, _yrs, _nm, s, _k in chosen]
+        out.append(_r14_finalize_story(app, key, "extension", _story,
+                                       game_date, entity_name=_nm,
+                                       window=_EXT_ONE_SHOT_WINDOW))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -4525,11 +4918,18 @@ def _debut_stories(app, game_date, rng):
     # determinism; cap the day.
     candidates.sort(key=lambda c: (-c[0], c[1]))
     chosen = candidates[:DEBUTS_MAX_PER_DAY]
+    out = []
     for _w, _n, _s, keys in chosen:
-        for k in keys:
+        # R14: debut keys carry #id(player). The primary key gets the
+        # callback treatment; secondary keys (the debut key also marked
+        # for first_goal stories) keep the plain one-shot mark.
+        out.append(_r14_finalize_story(app, keys[0], "debuts", _s,
+                                       game_date, entity_name=_n,
+                                       window=DEBUTS_WINDOW_DAYS))
+        for k in keys[1:]:
             _mark_recent(app, k, "debuts", game_date,
                          DEBUTS_WINDOW_DAYS)
-    return [s for _w, _n, s, _k in chosen]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -4944,6 +5344,10 @@ def _generate(app, game_date) -> int:
         pass
     game_date = game_date or _safe(lambda: app.current_date) or date.today()
 
+    # R14: drop any pending premises left by a previous (crashed) pass --
+    # pending entries are only valid inside the pass that created them.
+    _r14_reset_pending(app)
+
     # R10: resolve open story arcs against real engine state before today's
     # stories are generated (a resolution detected today gets its follow-up
     # at the end of this same pass).
@@ -5031,6 +5435,9 @@ def _generate(app, game_date) -> int:
                 continue
             add(s)
             added += 1
+            # R14: this story truly fired -- promote its pending premise
+            # so future callbacks may truthfully quote it.
+            _r14_commit_surfaced(app, s, game_date)
         except Exception:
             continue
     # R10: follow-ups for arcs that resolved (same Unknown-entity
