@@ -439,6 +439,182 @@ def _pick_reporter(market: str, league: Any, rng: random.Random,
     return rng.choices(reps, weights=weights, k=1)[0]
 
 
+# ---------------------------------------------------------------------------
+# R11: premise-driven persona framing.
+#
+# The old quote path rendered every persona through one flat template --
+# only the question bank differed per archetype, so a stirrer and a
+# loyalist told the "same story" with the same body text. R11 moves the
+# persona distinction to the template level: the premise (who, which
+# team, win/loss, answer texture) is rendered through per-persona
+# template banks with distinct diction, emphasis, and framing.
+#
+#   stirrer  -> interrogation framing: conflict diction, fan pressure,
+#               consequences. The scrum is an inquest.
+#   loyalist -> clubhouse framing: compete diction, togetherness,
+#               silver linings. The scrum is a defense of the room.
+#   neutral  -> wire framing: plain record of who said what.
+#
+# Banks are keyed by result ("win"/"loss"); neutral is result-agnostic
+# ("game"). No template string is shared between persona banks -- that
+# is what makes a blind read unable to match two personas' outputs to
+# the same template. If a quote event lacks a usable result, rendering
+# falls back to the neutral wire format (no false win/loss claim).
+# ---------------------------------------------------------------------------
+
+_R11_STIRRER_FRAMES = {
+    "win": [
+        "Two points for {team}, and still no easy night at the podium: "
+        "{reporter} pressed {player} -- {question} {texture} {quote}",
+        "The win didn't buy {team} any peace in the scrum. {reporter} went "
+        "straight at {player}: {question} {quote}",
+        "Even with the result secured, the questions in the {team} room had "
+        "teeth. {reporter} to {player}: {question} {quote}",
+        "{reporter} wasn't in a congratulatory mood after the {team} win, "
+        "grilling {player}: {question} {texture} {quote}",
+        "The scoreboard says {team} won; the press row wasn't so sure the "
+        "questions were done. {reporter} put it to {player}: {question} "
+        "{quote}",
+        "{player} took the podium for {team} expecting softballs and got "
+        "{reporter} instead: {question} {texture} {quote}",
+    ],
+    "loss": [
+        "{heat}The loss was only the start of the {team} post-mortem. "
+        "{reporter} turned the screws on {player}: {question} {quote}",
+        "Nobody in the {team} room was getting off easy tonight -- "
+        "{reporter} made sure of that, grilling {player}: {question} "
+        "{texture} {quote}",
+        "Another one slips away from {team}, and the questions are getting "
+        "louder. {reporter} to {player}: {question} {quote}",
+        "{heat}{reporter} didn't wait for the wound to close, pressing "
+        "{player}: {question} {quote}",
+        "The fans are restless and the press row smells blood: {reporter} "
+        "put {player} on the spot -- {question} {texture} {quote}",
+        "Post-game in the {team} room felt like an inquest, and {reporter} "
+        "led it, asking {player}: {question} {quote}",
+    ],
+}
+
+_R11_LOYALIST_FRAMES = {
+    "win": [
+        "The {team} room was still buzzing when {player} faced the cameras. "
+        "Asked {question} he didn't hesitate: {quote}",
+        "You could feel this one in the building -- {team} earned it, and "
+        "{player} summed it up for {reporter}: {question} {quote}",
+        "That's the {team} hockey the fans came to see. {player}, to "
+        "{reporter}: {question} {texture} {quote}",
+        "Big nights build belief, and {player} wasn't shy about it after "
+        "the {team} win. {reporter} asked: {question} {quote}",
+        "The compete was there from puck drop, and {player} knew it. On the "
+        "{team} win, to {reporter}: {question} {quote}",
+        "{reporter} got the whole mood of the {team} room in one answer "
+        "from {player}: {question} {texture} {quote}",
+    ],
+    "loss": [
+        "It wasn't the night {team} wanted, but nobody hid from it. "
+        "{player} stood in for {reporter}: {question} {texture} {quote}",
+        "Tough one for {team}, and {player} took the bullet at the podium. "
+        "Asked {question} he said: {quote}",
+        "{heat}The result stings, but the room's together -- {player} made "
+        "that clear to {reporter}: {question} {quote}",
+        "{reporter} asked the hard one after the {team} loss -- {question} "
+        "{player} didn't duck it: {quote}",
+        "Nobody's quitting on this {team} group, and {player} said as much "
+        "post-game: {question} {quote}",
+        "The compete didn't match the result for {team} tonight; {player} "
+        "owned that with {reporter}: {question} {texture} {quote}",
+    ],
+}
+
+_R11_NEUTRAL_FRAMES = {
+    "game": [
+        "Post-game ({team}): {player} to {reporter}: {question} {quote}",
+        "Final ({team}): {reporter} asked {player}: {question} He answered: "
+        "{quote}",
+        "{team} post-game -- {player} with {reporter}: {question} {quote}",
+    ],
+}
+
+_R11_FRAMES = {
+    "stirrer": _R11_STIRRER_FRAMES,
+    "loyalist": _R11_LOYALIST_FRAMES,
+    "neutral": _R11_NEUTRAL_FRAMES,
+}
+
+# Answer texture: how the player's delivery reads, per persona voice.
+# {player} is substituted at render time.
+_R11_TEXTURE = {
+    "stirrer": {
+        "great": "{player} didn't flinch.",
+        "bland": "The answer came clipped and short.",
+        "awkward": "He clearly wanted out of there.",
+    },
+    "loyalist": {
+        "great": "{player} was all smiles.",
+        "bland": "Pure room-speak, and he meant it.",
+        "awkward": "He kept it short and honest.",
+    },
+    "neutral": {"great": "", "bland": "", "awkward": ""},
+}
+
+# Heated-loss lead-in (heated_loss or a spiraling club). Only used by
+# templates carrying the {heat} slot; everyone else passes "".
+_R11_HEAT = {
+    "stirrer": "With the skid impossible to ignore, ",
+    "loyalist": "In a tough stretch, ",
+    "neutral": "",
+}
+
+
+def _r11_fill(template: str, slots: Dict[str, str]) -> str:
+    """Slot substitution without str.format -- questions/quotes are free
+    text and may contain braces; a blind .format() would choke on them."""
+    out = template
+    for key, val in slots.items():
+        out = out.replace("{" + key + "}", val)
+    return out
+
+
+def _frame_quote_story(ev: Dict[str, Any],
+                       rng: Optional[random.Random] = None) -> str:
+    """R11: render a post-game quote event through persona-driven framing.
+
+    The premise is (team, player, reporter, question, quote, result,
+    outcome, heated); the persona (ev["archetype"]) selects the template
+    bank. Same premise through two personas yields structurally distinct
+    stories -- distinct diction, emphasis, and framing -- not one shared
+    template with a different question stapled on. Never raises: on any
+    failure it degrades to the pre-R11 flat format.
+    """
+    try:
+        arch = str(ev.get("archetype") or "neutral").strip().lower()
+        bank = _R11_FRAMES.get(arch) or _R11_FRAMES["neutral"]
+        result = str(ev.get("result") or "").strip().lower()
+        templates = bank.get(result) or _R11_FRAMES["neutral"]["game"]
+        r = random if rng is None else rng
+        template = r.choice(templates)
+        outcome = str(ev.get("outcome") or "bland").strip().lower()
+        tex_bank = _R11_TEXTURE.get(arch) or _R11_TEXTURE["neutral"]
+        texture = tex_bank.get(outcome, tex_bank.get("bland", ""))
+        player = str(ev.get("player") or "")
+        texture = _r11_fill(texture, {"player": player})
+        heat = _R11_HEAT.get(arch, "") if ev.get("heated") else ""
+        slots = {
+            "player": player,
+            "team": str(ev.get("team") or ""),
+            "reporter": str(ev.get("reporter") or "the beat reporter"),
+            "question": str(ev.get("question") or ""),
+            "quote": str(ev.get("quote") or ""),
+            "texture": texture,
+            "heat": heat,
+        }
+        return _r11_fill(template, slots)
+    except Exception:
+        return (f"Post-game ({ev.get('team')}): {ev.get('player')} to "
+                f"{ev.get('reporter')}: {ev.get('question')} "
+                f"{ev.get('quote')}")
+
+
 def _pick_interviewee(team: Any, league: Any, rng: random.Random,
                       loser_side: bool = False) -> Optional[Any]:
     """Hockey Night in Canada rule: a different player every night."""
@@ -831,7 +1007,7 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
     # ---- 2. Coach availability ----
     _run_coach_availability(league, home_team, home_name, reporter,
                             heated_loss, loser_spiraling, game_date,
-                            rng, events, ctx)
+                            rng, events, ctx, won=home_won)
 
     # ---- 3. Narrative watch: regular season only. Playoffs freeze the
     # silly stuff -- nobody starts a goalie controversy in May.
@@ -881,6 +1057,8 @@ def _run_interview(league, team, player, reporter, won: bool,
             "reporter": reporter.name,
             "archetype": "neutral",
             "outcome": "bland",
+            "result": "win" if won else "loss",
+            "heated": False,  # R11: big-game rooms are muted by design
             "question": "“How do you sum this one up?”",
             "quote": rng.choice(_PLAYOFF_QUOTES),
         })
@@ -916,7 +1094,8 @@ def _run_interview(league, team, player, reporter, won: bool,
             and reporter.archetype == "stirrer"
             and rng.random() < 0.15 + narr.heat / 400.0):
         _run_narrative_poke(league, team, player, pname, savvy,
-                            reporter, narr, game_date, rng, events, ctx)
+                            reporter, narr, game_date, rng, events, ctx,
+                            won=won)
         return
 
     # A normal night: the quote, shaped by who's holding the mic.
@@ -938,6 +1117,9 @@ def _run_interview(league, team, player, reporter, won: bool,
         "reporter": reporter.name,
         "archetype": reporter.archetype,
         "outcome": outcome,
+        # R11: the premise the persona framing renders from.
+        "result": "win" if won else "loss",
+        "heated": bool(heated_loss or spiraling),
         "question": rng.choice(q_pool),
         "quote": quote,
     })
@@ -1026,7 +1208,8 @@ def _narrative_for(team_name: str, league: Any) -> Optional[Narrative]:
 
 def _run_narrative_poke(league, team, player, pname, savvy, reporter,
                         narr, game_date, rng, events,
-                        ctx: Optional[Dict[str, Any]] = None) -> None:
+                        ctx: Optional[Dict[str, Any]] = None,
+                        won: bool = False) -> None:
     """The Draisaitl moment: a ridiculous narrative meets a composed player
     and dies on camera -- or meets a rattled one and grows legs.
 
@@ -1093,6 +1276,9 @@ def _run_narrative_poke(league, team, player, pname, savvy, reporter,
             "reporter": reporter.name,
             "archetype": reporter.archetype,
             "outcome": "bland",
+            # R11: the premise the persona framing renders from.
+            "result": "win" if won else "loss",
+            "heated": False,
             "question": f"“Is there anything to the {narr.title.lower()} talk?”",
             "quote": "“We're focused on our game. That's all I can tell you.”",
         })
@@ -1101,7 +1287,8 @@ def _run_narrative_poke(league, team, player, pname, savvy, reporter,
 def _run_coach_availability(league, team, team_name, reporter,
                             heated_loss, spiraling, game_date,
                             rng, events,
-                            ctx: Optional[Dict[str, Any]] = None) -> None:
+                            ctx: Optional[Dict[str, Any]] = None,
+                            won: bool = False) -> None:
     ctx = ctx or {}
     coach = _head_coach_of(team)
     if coach is None:
@@ -1149,6 +1336,9 @@ def _run_coach_availability(league, team, team_name, reporter,
                 "reporter": reporter.name if reporter else "beat",
                 "archetype": "neutral",
                 "outcome": "bland",
+                # R11: the premise the persona framing renders from.
+                "result": "win" if won else "loss",
+                "heated": False,
                 "question": "“Coach, what happened out there tonight?”",
                 "quote": "“I'm not getting into it. We're done here.”",
             })
@@ -1763,8 +1953,9 @@ def route_events(app: Any, events: List[Dict[str, Any]],
 def _news_line(ev: Dict[str, Any]) -> str:
     kind = ev.get("kind")
     if kind == "quote":
-        return (f"Post-game ({ev.get('team')}): {ev.get('player')} to "
-                f"{ev.get('reporter')}: {ev.get('question')} {ev.get('quote')}")
+        # R11: persona-driven premise framing. _frame_quote_story never
+        # raises -- on any failure it degrades to the flat format below.
+        return _frame_quote_story(ev)
     if kind == "outburst_room":
         return (f"{ev.get('player')} ({ev.get('team')}) unloads post-game: "
                 f"{ev.get('quote')}")
