@@ -3875,9 +3875,13 @@ def _extension_stories(app, game_date, rng):
 #           every career NHL game is this season's; a 6-seasons-ago
 #           veteran returning has a large nhl_games_played and fails
 #           here (fail closed).
-#       (3) sum(prior_nhl_gp) == 0 -- reset_season_stats archives each
-#           season's NHL GP before zeroing (Calder input); belt and
-#           suspenders on (2).
+#       (3) sum(prior_nhl_gp) == 0 -- the live season rollover
+#           archives each season's NHL GP to the flat
+#           p.prior_nhl_gp (game_classes.py:7420-7435, Calder input;
+#           the last five seasons are kept). Belt and suspenders on
+#           (2); the stats-level copy is never populated in
+#           production (PlayerStats.reset_season_stats has no
+#           callers), so the helper reads the flat attribute first.
 #     A non-debut first goal (rookie, scoreless in his first games,
 #     scores in game 5) passes the same gate. A veteran with prior NHL
 #     seasons is UNPROVABLE (no engine field archives prior-season
@@ -3898,11 +3902,15 @@ def _extension_stories(app, game_date, rng):
 # objects with real names on a real roster (identity by id(), never
 # name-keyed); one story per (game, player) with first_goal
 # outranking debut; one-shot keys per (season, player, kind), marked
-# ONLY for stories actually returned. When a debutant scores, the
-# story kind is first_goal and BOTH keys are marked -- the story
-# delivers the debut news ("in his NHL debut"), so re-firing the
-# bare debut on a regenerated news day would repeat delivered news.
-# At most 2 stories per day, first goals first.
+# ONLY for stories actually returned -- per-kind, the R8d precedent:
+# a scoreless debut and a later first NHL goal are two true premises
+# of two different story kinds, and suppressing the first-goal story
+# because the debut already fired would gut the item's "first NHL
+# goals" kind (most debutants don't score on debut night). When a
+# debutant scores, the story kind is first_goal and BOTH keys are
+# marked -- the story delivers the debut news ("in his NHL debut"),
+# so re-firing the bare debut on a regenerated news day would repeat
+# delivered news. At most 2 stories per day, first goals first.
 # ---------------------------------------------------------------------------
 
 # One-shot window longer than any season -- each (season, player,
@@ -3978,16 +3986,23 @@ def _debut_season_pair(p):
 
 
 def _debut_prior_gp(p):
-    """Sum of archived prior-season NHL GP (reset_season_stats keeps
-    the last five). None on junk -- fail closed, never treat missing
-    history as zero history... except an absent archive on a real
-    player object is production-normal for fresh DBs, in which case
-    the nhl_games_played == season-games check still guards."""
-    try:
-        stats = getattr(p, "stats", None)
-        prior = getattr(stats, "prior_nhl_gp", None)
+    """Sum of archived prior-season NHL GP. The live season rollover
+    archives to the FLAT p.prior_nhl_gp (game_classes.py:7420-7435,
+    Calder input -- the last five seasons are kept; non-NHL players
+    get a 0 for the season). PlayerStats.reset_season_stats has no
+    production callers, so the stats-level copy is never populated in
+    production -- read the flat attribute first and only fall back to
+    p.stats for fixtures/fakes. None on junk: fail closed, never
+    treat unreadable history as zero history."""
+    for src in (p, _safe(lambda: getattr(p, "stats", None))):
+        try:
+            if src is None:
+                continue
+            prior = getattr(src, "prior_nhl_gp", None)
+        except Exception:
+            continue
         if prior is None:
-            return 0
+            continue  # absent on this source; try the other
         if not isinstance(prior, (list, tuple)):
             return None
         total = 0
@@ -3996,8 +4011,7 @@ def _debut_prior_gp(p):
                 return None
             total += v
         return total
-    except Exception:
-        return None
+    return 0
 
 
 def _debut_stories(app, game_date, rng):

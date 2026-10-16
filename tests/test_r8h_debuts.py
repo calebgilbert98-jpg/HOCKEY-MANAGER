@@ -441,6 +441,48 @@ for bad_year in (0, 1999, 2101):
         check(f"season_year={bad_year} stays silent",
               run_bucket(app, DAY) == [])
 
+# -- _debut_prior_gp: flat-attribute read order (production truth) -------------------
+# The live rollover archives to flat p.prior_nhl_gp; the stats-level
+# copy is never populated in production. The helper must read flat
+# first (regression: it used to read only p.stats, making the check
+# vacuous in production).
+p3 = mkplayer("Flat Prior", 5, prior=[])   # stats copy: []
+p3.prior_nhl_gp = [40, 38]                  # flat: the live archive
+check("_debut_prior_gp: flat [40, 38] wins over stats [] -> 78",
+      dn._debut_prior_gp(p3) == 78)
+p3.prior_nhl_gp = "junk"
+check("_debut_prior_gp: junk flat fails closed -> None",
+      dn._debut_prior_gp(p3) is None)
+p3.prior_nhl_gp = None
+p3.stats.prior_nhl_gp = [25]
+check("_debut_prior_gp: flat None falls back to stats [25] -> 25",
+      dn._debut_prior_gp(p3) == 25)
+p3.stats.prior_nhl_gp = [10, -2]
+check("_debut_prior_gp: junk stats entry fails closed -> None",
+      dn._debut_prior_gp(p3) is None)
+
+# bucket-level: production-shaped player (flat archive populated,
+# stats copy empty) with prior NHL games must NOT get a first-goal
+# story -- the old stats-only read fired here (false "first").
+# (nhl_gp == season_gp so gate (2) passes; only the flat archive
+# distinguishes him from a true rookie.)
+prod = mkplayer("Prod Vet", 40, season_gp=40, season_goals=1, prior=[])
+prod.prior_nhl_gp = [70, 72]   # the live rollover archive
+home = mkteam("Blades", [prod])
+away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(prod, g=1)})
+check("flat prior archive [70, 72] -> first-goal stays silent",
+      run_bucket(mkapp(home, away, res, GAME_DAY), DAY) == [])
+# and the mirror: clean flat archive lets a true first goal fire
+prod2 = mkplayer("Prod Rook", 5, season_gp=5, season_goals=1, prior=[])
+prod2.prior_nhl_gp = []
+home = mkteam("Blades", [prod2])
+away = mkteam("Wolves", [mkplayer("Veteran Foe", 300)])
+res = mkresult(home, away, 3, 2, home, {"l1": mkline(prod2, g=1)})
+stories = run_bucket(mkapp(home, away, res, GAME_DAY), DAY)
+check("flat prior [] + provable gate -> first-goal fires",
+      len(stories) == 1 and "FIRST NHL GOAL" in stories[0])
+
 # -- crash battery: never raises ------------------------------------------------------
 check("app=None -> []", dn._debut_stories(None, DAY,
                                           random.Random(1)) == [])
