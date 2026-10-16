@@ -333,6 +333,22 @@ def _mark_recent(app, entity_key, story_type, game_date, window=None):
         pass
 
 
+def _note_arc(app, arc_kind, entity_key, facts, game_date):
+    """R10: open a story arc for a fired Press Box story.
+
+    Called by the buckets at the moment they fire. Initiation is a pure
+    function of the firing -- resolvability is never consulted. Never
+    raises and never affects story selection; story_arcs is imported
+    lazily (it in turn imports this module lazily, so no cycle).
+    """
+    try:
+        import story_arcs
+        story_arcs.note_story_fired(app, arc_kind, entity_key, facts,
+                                    game_date)
+    except Exception:
+        pass
+
+
 # Scratch-gate GP-delta window (REV-B2 follow-up, FIX-BACK): cumulative GP
 # alone cannot tell "currently scratched" from "recently returned" -- an 86
 # OVR star back from a 20-game suspension plays every night, yet
@@ -580,6 +596,13 @@ def _coach_stories(app, game_date, rng):
                           conf=int(conf))
                 stories.append(story)
                 _mark_recent(app, key, "hot_seat", game_date)
+                # R10: every hot-seat story opens an arc -- fired/retained
+                # is decided later from real engine state, never here.
+                _note_arc(app, "hot_seat", key,
+                          {"coach_name": cname, "team_name": _tname(t),
+                           "wins": w, "losses": l, "otl": otl,
+                           "board_confidence": int(conf)},
+                          game_date)
             # Coach of the month buzz: great record
             elif (gp >= 10 and w / max(gp, 1) > 0.70
                     and _recent_ok(app, key, "cotm", game_date)):
@@ -775,6 +798,14 @@ def _controversies(app, game_date, rng):
                       points_word="point" if pts == 1 else "points")
             stories.append(story)
             _mark_recent(app, key, "rumor", game_date)
+            # R10: rumor stories about a specific player open arcs --
+            # traded/stayed is decided later from the real trade log.
+            _note_arc(app, "trade_rumor", key,
+                      {"player_name": name,
+                       "player_id": _safe(lambda: p.id, None),
+                       "team_name": team, "points": pts,
+                       "games": _gp(p)},
+                      game_date)
     # Holdout speculation: stars in final contract year (low years left)
     if len(stories) < 2:
         for p, t in players:
@@ -1003,6 +1034,14 @@ def _milestone_watch(app, game_date, rng):
                               away=mark - cg, mark=mark)
                     stories.append(story)
                     _mark_recent(app, key, "milestone", game_date)
+                    # R10: countdown stories open arcs -- the achievement
+                    # follow-up fires when the career total reaches the mark.
+                    _note_arc(app, "milestone_countdown", key,
+                              {"player_name": _pname(p),
+                               "player_id": _safe(lambda: p.id, None),
+                               "team_name": _tname(t), "mark": mark,
+                               "career_goals": cg},
+                              game_date)
                     break
         except Exception:
             continue
@@ -1151,6 +1190,77 @@ def _depth_stories(app, game_date, rng):
             except Exception:
                 continue
     return stories[:2]
+
+
+def _injury_stories(app, game_date, rng):
+    """Injury report: notable players sidelined with a real return estimate.
+
+    R10: every injury story opens a story arc (injury -> return). Gates,
+    all read off real engine state:
+      * the player is actually flagged injured (is_injured),
+      * games_remaining_injured >= 1 -- a real return estimate, not a
+        day-to-day guess,
+      * OVR sane and >= 78 -- a notable absence, not a depth scratch,
+      * not a career-ending injury (the estimate would be fiction),
+      * no placeholder names/teams (R9 bucket-level fail-closed).
+    One story per day at most; the arc tracks the return.
+    """
+    stories = []
+    for p, t in _all_players(app):
+        try:
+            ovr = _ovr(p)
+            # B6: garbage OVR must not qualify or render
+            if not (_ovr_ok(ovr) and ovr >= 78):
+                continue
+            if not _safe(lambda: bool(p.is_injured), False):
+                continue
+            if _safe(lambda: bool(p.career_ending_injury), False):
+                continue
+            games_out = _safe(lambda: int(p.games_remaining_injured), 0) or 0
+            if games_out < 1:
+                continue
+            name = _pname(p)
+            team = _tname(t)
+            if not name or name == "Unknown Player":
+                continue
+            if not team or team == "Unknown Team":
+                continue
+            key = f"player:{_safe(lambda: p.id, id(p))}"
+            if not _recent_ok(app, key, "injury", game_date):
+                continue
+            itype = str(_safe(lambda: p.injury_type, "") or "").strip()
+            if not itype or itype.lower() == "none":
+                itype = "injury"
+            story = rng.choice([
+                "INJURY: {name} ({team}) is out {games} {games_word} with {itype}.",
+                "{team} loses {name} for {games} {games_word} -- {itype}.",
+                "INJURY: {name} sidelined {games} {games_word} ({itype}) -- a blow for {team}.",
+                "{name} is out {games} {games_word} for {team} with {itype}.",
+                "INJURY: {team} will be without {name} ({itype}) for {games} {games_word}.",
+                "Tough break for {team}: {name} out {games} {games_word} ({itype}).",
+                "INJURY: {name}'s {itype} will cost him {games} {games_word} in {team}.",
+                "{team} places {name} on the shelf -- {games} {games_word} with {itype}.",
+                "INJURY: {name} ({team}) misses {games} {games_word} -- {itype}.",
+                "{name} is week-to-week for {team}: {games} {games_word} out with {itype}.",
+                "INJURY: The {team} lineup takes a hit -- {name} out {games} {games_word} ({itype}).",
+                "{team} must cope without {name} for {games} {games_word} ({itype}).",
+            ]).format(name=name, team=team, games=games_out,
+                      games_word="game" if games_out == 1 else "games",
+                      itype=itype)
+            stories.append(story)
+            _mark_recent(app, key, "injury", game_date)
+            # R10: injury stories open arcs -- the return follow-up fires
+            # when the engine's healed state holds again.
+            _note_arc(app, "injury", key,
+                      {"player_name": name,
+                       "player_id": _safe(lambda: p.id, None),
+                       "team_name": team, "games_out": games_out,
+                       "injury_type": itype},
+                      game_date)
+            break
+        except Exception:
+            continue
+    return stories[:1]
 
 
 def _offseason_beat(app, game_date, rng):
@@ -4336,6 +4446,7 @@ _GENERATORS = [
     ("team", _team_stories, 0.60),
     ("milestone", _milestone_watch, 0.35),
     ("depth", _depth_stories, 0.50),
+    ("injury", _injury_stories, 0.45),
     ("performance", _performance_stories, 0.55),
     ("playoff_race", _playoff_race_stories, 0.65),
     ("trade_deadline", _trade_deadline_stories, 0.60),
@@ -4370,6 +4481,15 @@ def _generate(app, game_date) -> int:
     except Exception:
         pass
     game_date = game_date or _safe(lambda: app.current_date) or date.today()
+
+    # R10: resolve open story arcs against real engine state before today's
+    # stories are generated (a resolution detected today gets its follow-up
+    # at the end of this same pass).
+    try:
+        import story_arcs
+        story_arcs.process_day(app, game_date)
+    except Exception:
+        pass
 
     in_season = _in_season(game_date)
     lo, hi = (SEASON_MIN, SEASON_MAX) if in_season else (OFFSEASON_MIN, OFFSEASON_MAX)
@@ -4442,4 +4562,12 @@ def _generate(app, game_date) -> int:
             added += 1
         except Exception:
             continue
+    # R10: follow-ups for arcs that resolved (same Unknown-entity
+    # post-render guard as routine stories; one-shot marks are set only on
+    # actual delivery, so the target-cap drop issue can't burn a follow-up).
+    try:
+        import story_arcs
+        added += story_arcs.deliver_followups(app, game_date)
+    except Exception:
+        pass
     return added

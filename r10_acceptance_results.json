@@ -1,0 +1,112 @@
+{
+  "probe": "r10_acceptance_probe.py",
+  "verdict": "ACCEPT",
+  "generated": "2026-10-16T04:57:36.977728+00:00",
+  "checks": [
+    {
+      "name": "F1 oracle: plain label matches fixed semantics",
+      "pass": true
+    },
+    {
+      "name": "F1a plain asset_label resolves 'traded'",
+      "pass": true
+    },
+    {
+      "name": "F1 oracle: retained-suffix label matches fixed semantics",
+      "pass": true
+    },
+    {
+      "name": "F1b retained-suffix label resolves 'traded'",
+      "pass": true
+    },
+    {
+      "name": "F1 oracle multi-deal: only the subject's own label matches",
+      "pass": true
+    },
+    {
+      "name": "F1c multi-asset deal resolves 'traded' with the right club",
+      "pass": true
+    },
+    {
+      "name": "F1 oracle: 'Rory Rumor Jr (C, ...)' does not match 'Rory Rumor'",
+      "pass": true
+    },
+    {
+      "name": "F1d similarly-named player does not resolve the arc (no false positive)",
+      "pass": true
+    },
+    {
+      "name": "F1 oracle: entry containing the name mid-string does not match",
+      "pass": true
+    },
+    {
+      "name": "F1e mid-string containment does not resolve the arc",
+      "pass": true
+    },
+    {
+      "name": "F1 oracle: exact bare name still matches",
+      "pass": true
+    },
+    {
+      "name": "F1f exact bare-name entry still resolves (legacy tolerance)",
+      "pass": true
+    },
+    {
+      "name": "F2a fired-then-rehired resolves 'fired' at day 21",
+      "pass": true
+    },
+    {
+      "name": "F2b fired follow-up delivered, names coach and club",
+      "pass": true
+    },
+    {
+      "name": "F2c never 'retained': arc is closed as fired",
+      "pass": true
+    },
+    {
+      "name": "F2d control: no verdict one day before the window",
+      "pass": true
+    },
+    {
+      "name": "F2e control: 'retained' at the window with no firing record",
+      "pass": true
+    },
+    {
+      "name": "C1a route_events delivers the narrative_spawn story",
+      "pass": true
+    },
+    {
+      "name": "C1b media_engine hot-seat narrative opened an arc",
+      "pass": true
+    },
+    {
+      "name": "C2 media_engine + daily_news hot-seat -> exactly one arc",
+      "pass": true
+    },
+    {
+      "name": "C3 media_engine trade-rumor narrative opened an arc",
+      "pass": true
+    },
+    {
+      "name": "C4 non-arc narrative kind opens no arc",
+      "pass": true
+    },
+    {
+      "name": "C5 orphan/malformed narrative_spawn: no arc, no raise",
+      "pass": true
+    },
+    {
+      "name": "D1 follow-up delivered 13 days after resolution",
+      "pass": true
+    },
+    {
+      "name": "D2 no follow-up 15 days after resolution (past the window)",
+      "pass": true
+    },
+    {
+      "name": "D2b arc handled gracefully: still resolved, not closed, no crash",
+      "pass": true
+    }
+  ],
+  "failed": []
+}

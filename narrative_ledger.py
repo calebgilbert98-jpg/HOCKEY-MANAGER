@@ -40,6 +40,29 @@ KIND_PLAYOFF_SERIES = "playoff_series"
 KIND_MILESTONE_WATCH = "milestone_watch"
 KIND_MILESTONE = "milestone"
 KIND_CEREMONY = "ceremony"
+# R10: multi-day story arcs. One KIND_ARC event per arc; the arc's own kind
+# (hot_seat / trade_rumor / milestone_countdown / injury) lives in
+# facts["arc_kind"], and its lifecycle in facts["status"].
+KIND_ARC = "story_arc"
+
+# Arc kinds (R10). The set of story types that initiate arcs.
+ARC_KIND_HOT_SEAT = "hot_seat"
+ARC_KIND_TRADE_RUMOR = "trade_rumor"
+ARC_KIND_MILESTONE = "milestone_countdown"
+ARC_KIND_INJURY = "injury"
+ARC_KINDS = (ARC_KIND_HOT_SEAT, ARC_KIND_TRADE_RUMOR,
+             ARC_KIND_MILESTONE, ARC_KIND_INJURY)
+
+# Arc lifecycle states.
+ARC_STATUS_OPEN = "open"          # initiated, resolution not yet detected
+ARC_STATUS_RESOLVED = "resolved"  # resolution detected, follow-up pending
+ARC_STATUS_CLOSED = "closed"      # follow-up delivered
+ARC_STATUS_EXPIRED = "expired"    # aged out with no usable resolution
+
+# Arc events carry enough weight to survive season-rollover archiving
+# (advance_season only rolls up weight < ARCHIVE_MIN_WEIGHT). Arcs store
+# no team pair (teams=[]) so they never contaminate rivalry memory_weight.
+ARC_EVENT_WEIGHT = 50
 
 AUDIENCES = ("room", "fans", "media", "league")
 
@@ -586,6 +609,141 @@ class NarrativeLedger:
             "archived_older": archived,
             "latest": evs[0] if evs else None,
         }
+
+    # -- story arcs (R10) ---------------------------------------------------
+    # Multi-day arcs live as KIND_ARC events in the same store: same
+    # append-only log, same cap/archive behavior, same save/load. The arc's
+    # kind and lifecycle live in facts["arc_kind"] / facts["status"].
+    # interpret() has no branch for KIND_ARC, so arcs never render through
+    # the four-audience path -- they are tracked, not told, until a
+    # resolution earns a follow-up.
+    def open_arc(self, arc_kind: str, entity_key: str,
+                 facts: Optional[Dict[str, Any]] = None,
+                 weight: int = ARC_EVENT_WEIGHT) -> Optional[Dict[str, Any]]:
+        """Open a story arc. Idempotent per (arc_kind, entity_key): a second
+        firing of the initiating story while its arc is still open returns
+        the existing arc instead of opening a duplicate -- the follow-up
+        belongs to the first telling (one story per (game, player)).
+
+        Never raises; returns None when the identity is unusable.
+        """
+        try:
+            arc_kind = str(arc_kind or "")
+            entity_key = str(entity_key or "")
+            if not arc_kind or not entity_key:
+                return None
+            existing = self.arc_by_identity(arc_kind, entity_key)
+            if existing is not None:
+                return existing
+            facts = dict(facts or {})
+            facts["arc_kind"] = arc_kind
+            facts["entity_key"] = entity_key
+            facts["status"] = ARC_STATUS_OPEN
+            name = (facts.get("display_name") or facts.get("player_name")
+                    or facts.get("coach_name") or "")
+            players = [str(name)] if str(name or "").strip() else []
+            text = str(facts.get("arc_title") or "") or \
+                f"story arc: {arc_kind} ({entity_key})"
+            return self.record(KIND_ARC, teams=[], players=players,
+                               facts=facts, weight=weight, text=text)
+        except Exception:
+            return None
+
+    def arc_by_identity(self, arc_kind: str,
+                        entity_key: str) -> Optional[Dict[str, Any]]:
+        """The currently OPEN arc for (arc_kind, entity_key), or None."""
+        try:
+            for eid in self._by_kind.get(KIND_ARC, []):
+                ev = self._by_id.get(eid)
+                if ev is None:
+                    continue
+                f = ev.get("facts") or {}
+                if (f.get("status") == ARC_STATUS_OPEN
+                        and f.get("arc_kind") == arc_kind
+                        and f.get("entity_key") == entity_key):
+                    return ev
+        except Exception:
+            pass
+        return None
+
+    def open_arcs(self, arc_kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        """All OPEN arcs (oldest first). Index scan, never the full log."""
+        out: List[Dict[str, Any]] = []
+        try:
+            for eid in self._by_kind.get(KIND_ARC, []):
+                ev = self._by_id.get(eid)
+                if ev is None:
+                    continue
+                f = ev.get("facts") or {}
+                if f.get("status") != ARC_STATUS_OPEN:
+                    continue
+                if arc_kind is not None and f.get("arc_kind") != arc_kind:
+                    continue
+                out.append(ev)
+        except Exception:
+            return []
+        out.sort(key=lambda e: (str((e.get("facts") or {}).get("opened_date")
+                                   or ""),
+                                e.get("id") or 0))
+        return out
+
+    def resolved_arcs(self) -> List[Dict[str, Any]]:
+        """Arcs with a detected resolution whose follow-up is still pending."""
+        out: List[Dict[str, Any]] = []
+        try:
+            for eid in self._by_kind.get(KIND_ARC, []):
+                ev = self._by_id.get(eid)
+                if ev is None:
+                    continue
+                if (ev.get("facts") or {}).get("status") == ARC_STATUS_RESOLVED:
+                    out.append(ev)
+        except Exception:
+            return []
+        out.sort(key=lambda e: (str((e.get("facts") or {}).get("resolved_date")
+                                   or ""),
+                                e.get("id") or 0))
+        return out
+
+    def _arc_transition(self, arc_id: int, to_status: str,
+                        extra_facts: Optional[Dict[str, Any]] = None
+                        ) -> Optional[Dict[str, Any]]:
+        try:
+            ev = self._by_id.get(arc_id)
+            if ev is None:
+                return None
+            f = ev.get("facts") or {}
+            # Only an open arc can gain a resolution; closing/expiring may
+            # apply to open or resolved arcs.
+            if to_status == ARC_STATUS_RESOLVED \
+                    and f.get("status") != ARC_STATUS_OPEN:
+                return None
+            if f.get("status") not in (ARC_STATUS_OPEN, ARC_STATUS_RESOLVED):
+                return None
+            f["status"] = to_status
+            if extra_facts:
+                f.update(dict(extra_facts))
+            return ev
+        except Exception:
+            return None
+
+    def resolve_arc(self, arc_id: int, resolution: str,
+                    resolved_date_iso: str,
+                    res_facts: Optional[Dict[str, Any]] = None
+                    ) -> Optional[Dict[str, Any]]:
+        """Record a detected resolution. The follow-up is still pending."""
+        facts = {"resolution": str(resolution or ""),
+                 "resolved_date": str(resolved_date_iso or "")}
+        if res_facts:
+            facts.update(dict(res_facts))
+        return self._arc_transition(arc_id, ARC_STATUS_RESOLVED, facts)
+
+    def close_arc(self, arc_id: int) -> Optional[Dict[str, Any]]:
+        """The follow-up was delivered; the arc is done."""
+        return self._arc_transition(arc_id, ARC_STATUS_CLOSED)
+
+    def expire_arc(self, arc_id: int) -> Optional[Dict[str, Any]]:
+        """Aged out with no usable resolution -- silent, no follow-up."""
+        return self._arc_transition(arc_id, ARC_STATUS_EXPIRED)
 
     # -- pruning ------------------------------------------------------------
     def _archive_event(self, ev: Dict[str, Any]) -> None:

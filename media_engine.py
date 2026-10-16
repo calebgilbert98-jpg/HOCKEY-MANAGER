@@ -1646,6 +1646,74 @@ def resolve_fine_appeal(app: Any, action_data: Dict[str, Any],
         return "The league office lost your paperwork. The fine stands."
 
 
+def _open_arc_for_narrative(app: Any, ev: Dict[str, Any],
+                            game_date: Optional[date]) -> None:
+    """R10: open a story arc for a narrative_spawn event that carries a
+    hot-seat or trade-rumor storyline. The event itself only holds the
+    team + title, so the Narrative object (kind, subjects) is re-found
+    on league.media_narratives; other narrative kinds are ignored.
+
+    Entity keys match the daily_news buckets ("coach:<name>" /
+    "player:<id>"), so open_arc's per-(kind, entity) idempotency means a
+    same-day daily_news story for the same coach/player cannot
+    double-open. Initiation stays a pure function of the story firing --
+    resolvability is never consulted here. Never raises."""
+    try:
+        team_name = str(ev.get("team") or "").strip()
+        title = str(ev.get("narrative") or "").strip()
+        if not team_name or not title:
+            return
+        league = getattr(app, "league", None)
+        narrs = getattr(league, "media_narratives", None) or []
+        kind = ""
+        subjects: List[str] = []
+        for _n in narrs:
+            try:
+                if (str(getattr(_n, "team_name", "") or "") == team_name
+                        and str(getattr(_n, "title", "") or "") == title):
+                    kind = str(getattr(_n, "kind", "") or "")
+                    subjects = list(getattr(_n, "subjects", None) or [])
+                    break
+            except Exception:
+                continue
+        import story_arcs as _sa
+        from narrative_ledger import (ARC_KIND_HOT_SEAT,
+                                      ARC_KIND_TRADE_RUMOR)
+        if kind == "hot_seat":
+            # The narrative was spawned for whoever holds the chair; name
+            # him via the same chair read the detector resolves against
+            # so initiation and resolution can never disagree.
+            coach_name = _sa._current_coach_name(app, team_name)
+            if not coach_name:
+                return
+            _sa.note_story_fired(
+                app, ARC_KIND_HOT_SEAT, f"coach:{coach_name}",
+                {"coach_name": coach_name, "team_name": team_name},
+                game_date)
+        elif kind == "trade_rumor":
+            pid = subjects[0] if subjects else None
+            pl, tm = _sa._find_player(app, pid)
+            if pl is None or pid is None:
+                return
+            try:
+                fn = str(getattr(pl, "first_name", "") or "").strip()
+                ln = str(getattr(pl, "last_name", "") or "").strip()
+                full = (getattr(pl, "full_name", None)
+                        or f"{fn} {ln}".strip())
+                full = str(full or "").strip()
+            except Exception:
+                full = ""
+            if not full or "Unknown" in full:
+                return
+            _sa.note_story_fired(
+                app, ARC_KIND_TRADE_RUMOR, f"player:{pid}",
+                {"player_name": full, "player_id": pid,
+                 "team_name": (_sa._team_name_of(tm) or team_name)},
+                game_date)
+    except Exception:
+        pass
+
+
 def route_events(app: Any, events: List[Dict[str, Any]],
                  game_date: Optional[date] = None) -> int:
     """Deliver cover_game events. Headlines for the spicy stuff, news feed
@@ -1679,6 +1747,14 @@ def route_events(app: Any, events: List[Dict[str, Any]],
                 if add is not None:
                     add(_news_line(ev))
                     n += 1
+                    # R10: a hot-seat or trade-rumor storyline reaching the
+                    # player opens a story arc -- the same contract as the
+                    # daily_news buckets. Initiation is a pure function of
+                    # the story firing; open_arc is idempotent per
+                    # (kind, entity), so a same-day daily_news story for
+                    # the same coach/player cannot double-open.
+                    if kind == "narrative_spawn":
+                        _open_arc_for_narrative(app, ev, game_date)
         except Exception:
             continue
     return n
