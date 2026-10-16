@@ -23,7 +23,7 @@ Design notes:
 import logging
 import math
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 _log = logging.getLogger(__name__)
 
@@ -480,6 +480,9 @@ def _in_season(game_date):
 
 def _prospect_watch(app, game_date, rng):
     """Promising prospects developing well."""
+    # R12: always-open window, declared explicitly (no calendar premise).
+    if not _w_prospect(app, game_date):
+        return []
     stories = []
     prospects = _all_prospects(app)
     candidates = []
@@ -557,6 +560,9 @@ def _prospect_watch(app, game_date, rng):
 
 def _coach_stories(app, game_date, rng):
     """Hot seat, milestone wins, coach of the month chatter."""
+    # R12: in-season window -- hot-seat/COTM premises read live records.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     for t in _all_teams(app):
         try:
@@ -659,6 +665,16 @@ def _rumor_pts_bar(p):
 
 def _controversies(app, game_date, rng):
     """Plausible speculation grounded in real game state."""
+    # R12: split window (declared predicate _w_controversy = Oct-Jun).
+    # Scratch/rumor read LIVE season state -- in-season only (a May
+    # "scratch" would read last season's final numbers as current).
+    # Holdout reads the contract clock, which runs through the July-1
+    # UFA deadline.
+    _in_w = _w_in_season(app, game_date)
+    # Declared window (_w_controversy = Oct-Jun); the scratch/rumor
+    # blocks below are additionally in-season-only.
+    if not _w_controversy(app, game_date):
+        return []
     stories = []
     players = _all_players(app)
     # Healthy scratches: high-OVR players with very few games played --
@@ -677,7 +693,9 @@ def _controversies(app, game_date, rng):
     #   * the player's GP is essentially STATIC over the trailing ~7 days
     #     (_gp_static: evidence he is sitting NOW, not a star who just
     #     returned from suspension/IR and dresses every night).
-    for p, t in players:
+    # R12: scratch block is in-season-only (a May "scratch" would read
+    # last season's final numbers as current).
+    for p, t in (players if _in_w else []):
         try:
             ovr = _ovr(p)
             gp = _gp(p)
@@ -745,7 +763,8 @@ def _controversies(app, game_date, rng):
     # defensemen at 0.3-0.49 pts/gp are on-role, not underperforming, so
     # they must not be framed as trade bait; goalies have no bar and are
     # excluded entirely.
-    if len(stories) < 2:
+    # R12: rumor block is in-season-only (reads live pts/gp pace).
+    if _in_w and len(stories) < 2:
         cands = []
         for p, t in players:
             try:
@@ -853,10 +872,8 @@ def _draft_stories(app, game_date, rng):
     framed as organizational riser coverage -- never as draft-eligible
     hype, which these players are not."""
     stories = []
-    try:
-        if game_date.month not in (1, 2, 3, 4, 5, 6):
-            return stories
-    except Exception:
+    # R12: draft-season window (Jan-Jun), via the declared predicate.
+    if not _w_draft(app, game_date):
         return stories
     prospects = _all_prospects(app)
     # Sort by overall for a rough "rankings" feel. Key-based sort only:
@@ -925,6 +942,10 @@ def _draft_stories(app, game_date, rng):
 
 def _team_stories(app, game_date, rng):
     """Streaks, slumps, rivalry watch, fan morale."""
+    # R12: in-season window -- record-celebration premises need live
+    # standings.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     teams = _all_teams(app)
     # High-win% team coverage. No recent-game data is available here, so
@@ -998,6 +1019,9 @@ def _team_stories(app, game_date, rng):
 
 def _milestone_watch(app, game_date, rng):
     """Players approaching round-number career milestones."""
+    # R12: in-season window -- countdowns only move when games are played.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     players = _all_players(app)
     for p, t in players:
@@ -1077,6 +1101,9 @@ def _team_goalie_svps(players, t):
 
 def _depth_stories(app, game_date, rng):
     """Fourth liners, backup goalies, AHL callups -- the rest of the roster."""
+    # R12: in-season window -- goalie-rotation/callup premises need games.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     players = _all_players(app)
     # Backup goalie performing: goalie with good stats but few games
@@ -1205,6 +1232,10 @@ def _injury_stories(app, game_date, rng):
       * no placeholder names/teams (R9 bucket-level fail-closed).
     One story per day at most; the arc tracks the return.
     """
+    # R12: in-season window -- injury reports and return estimates are
+    # season-bound.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     for p, t in _all_players(app):
         try:
@@ -1267,10 +1298,8 @@ def _offseason_beat(app, game_date, rng):
     """Summer coverage: training, prospect development, roster battles
     ahead of camp. Only runs May-Sep."""
     stories = []
-    try:
-        if game_date.month not in (5, 6, 7, 8, 9):
-            return stories
-    except Exception:
+    # R12: offseason window (May-Sep), via the declared predicate.
+    if not _w_offseason(app, game_date):
         return stories
     players = _all_players(app)
     # Training focus: position-gated summer work. Goalies never take
@@ -1380,9 +1409,51 @@ def _offseason_beat(app, game_date, rng):
     return stories
 
 
+# R12 tied-vs-leading split (the B7 pattern extended): when two or more
+# teams share the top win-pct, the sole-leader templates below must not
+# render -- the tie gets its own bank.
+_BEST_TEAM_TIED_TEMPLATES = [
+    "POWER RANKINGS: Dead even at the top -- {teams} share the league's best record.",
+    "POWER RANKINGS: Nobody has separated from the pack -- {teams} are tied for the league's best record.",
+    "POWER RANKINGS: It's a dead heat at the top -- {teams}.",
+    "POWER RANKINGS: The league's best record is shared -- {teams}.",
+    "POWER RANKINGS: Co-owners of first place -- {teams}.",
+    "POWER RANKINGS: {teams} -- tied for the best record in the league.",
+    "POWER RANKINGS: No sole owner of the top spot -- {teams} share it.",
+    "POWER RANKINGS: {teams} sit tied atop the league.",
+]
+
+
+def _best_team_tied_str(tied):
+    """'A (10-5-0) and B (8-4-0)' for teams tied for the best record.
+
+    Names up to three tied teams; further ties collapse to 'N more'.
+    None when a tied team can't be named cleanly (fail closed -- the
+    caller stays silent rather than render a false sole-leader claim)."""
+    parts = []
+    for _pct, t, w, l, otl in tied[:3]:
+        name = _tname(t)
+        if not name or name == "Unknown Team":
+            return None
+        parts.append("%s (%d-%d-%d)" % (name, w, l, otl))
+    rest = len(tied) - 3
+    if rest > 0:
+        parts.append("%d more" % rest)
+    if len(parts) < 2:
+        return None
+    if len(parts) == 2:
+        return "%s and %s" % (parts[0], parts[1])
+    return "%s and %s" % (", ".join(parts[:-1]), parts[-1])
+
+
 def _league_notes(app, game_date, rng):
     """Entity-free league-wide notes -- the absolute floor. Uses real
     league leaders so it's always grounded, never filler."""
+    # R12: in-season window -- scoring-race/best-team premises need live
+    # standings (previously this bucket could fire in the offseason about
+    # last season's final numbers).
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     players = _all_players(app)
     if not players:
@@ -1475,22 +1546,39 @@ def _league_notes(app, game_date, rng):
                 pct, t, w, l, otl = ranked[0]
                 key = "league:best_team"
                 if _recent_ok(app, key, "notes", game_date):
-                    story = rng.choice([
-                        "POWER RANKINGS: {team} holds the league's best record at {w}-{l}-{otl}.",
-                        "POWER RANKINGS: Nobody has been better than {team} -- {w}-{l}-{otl} leads the league.",
-                        "POWER RANKINGS: {team} sits at the top at {w}-{l}-{otl}.",
-                        "POWER RANKINGS: The team to beat is {team} -- {w}-{l}-{otl}.",
-                        "POWER RANKINGS: {team}'s {w}-{l}-{otl} mark is the league's gold standard.",
-                        "POWER RANKINGS: The numbers say {team} is the league's best -- {w}-{l}-{otl}.",
-                        "POWER RANKINGS: {team} keeps banking points -- {w}-{l}-{otl}, best in the league.",
-                        "POWER RANKINGS: The view from the top belongs to {team} at {w}-{l}-{otl}.",
-                        "POWER RANKINGS: {w}-{l}-{otl} -- that's {team}, the league's measuring stick.",
-                        "POWER RANKINGS: {team} is setting the pace at {w}-{l}-{otl}.",
-                        "POWER RANKINGS: Contenders are chasing {team} and its league-best {w}-{l}-{otl}.",
-                        "POWER RANKINGS: {team} owns the league's best record at {w}-{l}-{otl}.",
-                    ]).format(team=_tname(t), w=w, l=l, otl=otl)
-                    stories.append(story)
-                    _mark_recent(app, key, "notes", game_date)
+                    # R12 tied-vs-leading split (the B7 pattern extended):
+                    # teams tied on the ranking key (win pct -- exact
+                    # rational equality via cross-multiplication, since
+                    # float equality on w/gp is unreliable) share the top
+                    # spot, so the sole-leader templates must not render.
+                    top_w, top_gp = w, w + l + otl
+                    tied = [r for r in ranked
+                            if r[2] * top_gp == top_w * (r[2] + r[3] + r[4])]
+                    story = None
+                    if len(tied) > 1:
+                        teams_str = _best_team_tied_str(tied)
+                        if teams_str is not None:
+                            story = rng.choice(
+                                _BEST_TEAM_TIED_TEMPLATES).format(
+                                teams=teams_str)
+                    else:
+                        story = rng.choice([
+                            "POWER RANKINGS: {team} holds the league's best record at {w}-{l}-{otl}.",
+                            "POWER RANKINGS: Nobody has been better than {team} -- {w}-{l}-{otl} leads the league.",
+                            "POWER RANKINGS: {team} sits at the top at {w}-{l}-{otl}.",
+                            "POWER RANKINGS: The team to beat is {team} -- {w}-{l}-{otl}.",
+                            "POWER RANKINGS: {team}'s {w}-{l}-{otl} mark is the league's gold standard.",
+                            "POWER RANKINGS: The numbers say {team} is the league's best -- {w}-{l}-{otl}.",
+                            "POWER RANKINGS: {team} keeps banking points -- {w}-{l}-{otl}, best in the league.",
+                            "POWER RANKINGS: The view from the top belongs to {team} at {w}-{l}-{otl}.",
+                            "POWER RANKINGS: {w}-{l}-{otl} -- that's {team}, the league's measuring stick.",
+                            "POWER RANKINGS: {team} is setting the pace at {w}-{l}-{otl}.",
+                            "POWER RANKINGS: Contenders are chasing {team} and its league-best {w}-{l}-{otl}.",
+                            "POWER RANKINGS: The top line of the standings reads {team} -- {w}-{l}-{otl}, best in the league.",
+                        ]).format(team=_tname(t), w=w, l=l, otl=otl)
+                    if story is not None:
+                        stories.append(story)
+                        _mark_recent(app, key, "notes", game_date)
         except Exception:
             pass
     return stories
@@ -1498,6 +1586,9 @@ def _league_notes(app, game_date, rng):
 
 def _performance_stories(app, game_date, rng):
     """Hot/cold runs based on season stats."""
+    # R12: in-season window -- hot/cold pace premises need GP >= 20.
+    if not _w_in_season(app, game_date):
+        return []
     stories = []
     players = _all_players(app)
     # Point-per-game+ pace among qualified players
@@ -2051,7 +2142,8 @@ def _playoff_race_stories(app, game_date, rng):
     """
     pending = []
     try:
-        if not _in_season(game_date):
+        # R12: stretch-run window (declared predicate).
+        if not _w_playoff_race(app, game_date):
             return []
         season_len = _pr_season_len(app)
         if season_len is None:
@@ -2561,7 +2653,8 @@ def _trade_deadline_stories(app, game_date, rng):
     """
     pending = []
     try:
-        if not _in_season(game_date):
+        # R12: deadline-week window (declared predicate).
+        if not _w_trade_deadline(app, game_date):
             return []
         season_len = _pr_season_len(app)
         if season_len is None:
@@ -2961,7 +3054,8 @@ def _award_race_stories(app, game_date, rng):
     """
     pending = []
     try:
-        if not _in_season(game_date):
+        # R12: second-half window (declared predicate).
+        if not _w_award_races(app, game_date):
             return []
         season_len = _pr_season_len(app)
         if season_len is None:
@@ -3276,13 +3370,11 @@ def _heroics_stories(app, game_date, rng):
     (the one-shot window is longer than a season).
     """
     try:
-        game_day = _safe(lambda: game_date - timedelta(days=1))
-        if game_day is None:
-            return []
-        # The in-season gate tests the GAME day, not the news day: the
-        # results belong to game_day, so a Sept 30 preseason game stays
-        # unread even when the news runs on Oct 1 (reviewer B F4).
-        if not _in_season(game_day):
+        # R12: the window tests the GAME day, not the news day (the R8d/
+        # reviewer-B F4 rule, now via the declared predicate): preseason
+        # exhibitions are September and stay unread, and post-season game
+        # days stay silent too.
+        if not _w_regular_season_game_day(app, game_date):
             return []
         season_year = _pr_season_year(app, game_date)
         if not season_year:
@@ -3290,6 +3382,7 @@ def _heroics_stories(app, game_date, rng):
         results = _hero_results(app, game_date)
         if not results:
             return []
+        game_day = _w_as_date(game_date - timedelta(days=1))
         day_iso = _safe(lambda: game_day.isoformat(), "") or ""
         if not day_iso:
             return []
@@ -3590,7 +3683,8 @@ def _streaks_stories(app, game_date, rng):
     (the one-shot window is longer than a season).
     """
     try:
-        if not _in_season(game_date):
+        # R12: in-season window (declared predicate).
+        if not _w_in_season(app, game_date):
             return []
         season_year = _pr_season_year(app, game_date)
         if not season_year:
@@ -3791,7 +3885,9 @@ def _rivalry_hype_stories(app, game_date, rng):
             "rivalry-hype bucket: narrative_ledger unavailable")
         return []
     try:
-        if not _in_season(game_date):
+        # R12: in-season window (declared predicate); the game-today/
+        # tomorrow schedule check stays premise-level below.
+        if not _w_in_season(app, game_date):
             return []
         season_year = _pr_season_year(app, game_date)
         if not season_year:
@@ -4004,6 +4100,10 @@ def _ext_season_year(app, game_date):
 def _extension_stories(app, game_date, rng):
     """Long-term lockup stories for star players (positive holdout mirror)."""
     try:
+        # R12: always-open window, declared explicitly (the R8g year-round
+        # design stands -- see _w_extension).
+        if not _w_extension(app, game_date):
+            return []
         season_year = _ext_season_year(app, game_date)
         if not season_year:
             return []
@@ -4275,13 +4375,11 @@ def _debut_stories(app, game_date, rng):
     forever (the window outlasts a season).
     """
     try:
-        game_day = _safe(lambda: game_date - timedelta(days=1))
-        if game_day is None:
-            return []
-        # The in-season gate tests the GAME day, not the news day (the
-        # R8d/reviewer-B F4 lesson): preseason exhibitions are
-        # September and never credit NHL GP.
-        if not _in_season(game_day):
+        # R12: the window tests the GAME day, not the news day (the R8d/
+        # reviewer-B F4 lesson, now via the declared predicate): preseason
+        # exhibitions are September and never credit NHL GP, and
+        # post-season game days stay silent too.
+        if not _w_regular_season_game_day(app, game_date):
             return []
         season_year = _pr_season_year(app, game_date)
         if (not season_year or not isinstance(season_year, int)
@@ -4435,6 +4533,366 @@ def _debut_stories(app, game_date, rng):
 
 
 # ---------------------------------------------------------------------------
+# R12 -- Date-aware gates (Phase 2)
+#
+# Every Press Box bucket gets an EXPLICIT, declared calendar window. Each
+# window is a named predicate `(app, game_date) -> bool`, fail-closed on
+# unreadable state, derived from engine state or documented league-calendar
+# facts -- never hardcoded trivia. The trade deadline comes from
+# trade_deadline_manager.trade_deadline_date, the same canonical function
+# the R8b bucket and the Trade Deadline Center read; the July-1 league-year
+# rollover is a documented CBA calendar fact (same class of citation as the
+# R8b "CBA 13.12(j)" note).
+#
+# Enforcement is two-layer (defense in depth):
+#   1. each generator's first line calls its declared window predicate;
+#   2. _generate consults BUCKET_WINDOWS before dispatching each generator.
+# The predicate lives in exactly one place -- the registry -- so the two
+# layers cannot drift.
+#
+# BUCKET_WINDOWS maps every _GENERATORS bucket name to its window predicate
+# plus a derivation note documenting WHY that window is what it is. The
+# import-time invariant below guarantees every generator has a declared
+# window: a bucket without one is a code bug, caught at import.
+#
+# Out of scope by explicit design (event-driven, not calendar-driven):
+# R10 story-arc follow-ups (their "window" is the 14-day post-resolution
+# delivery window, already date-gated by R10) and media_engine / fan+board
+# narratives (their premises are event/sentiment-driven with no calendar
+# component).
+# ---------------------------------------------------------------------------
+
+
+def _w_in_season(app, game_date):
+    """Shared window: the Oct-Apr playing season.
+
+    Used by every bucket whose premise reads live season state (records,
+    stats, streaks, injuries, contract clocks). _in_season itself is
+    fail-open on an unreadable date; by the time a window runs, _generate
+    has normalized game_date to a real date."""
+    try:
+        return bool(_in_season(game_date))
+    except Exception:
+        return False
+
+
+def _w_as_date(value):
+    """A datetime.date for date/datetime-likes, else None (fail closed)."""
+    try:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if hasattr(value, "date"):
+            d = value.date()
+            if isinstance(d, datetime):
+                return d.date()
+            if isinstance(d, date):
+                return d
+        return None
+    except Exception:
+        return None
+
+
+def _w_draft(app, game_date):
+    """Draft season: Jan-Jun (the existing _draft_stories month gate,
+    promoted to the declared predicate; fail closed)."""
+    try:
+        return game_date.month in (1, 2, 3, 4, 5, 6)
+    except Exception:
+        return False
+
+
+def _w_offseason(app, game_date):
+    """Summer beat: May-Sep (the existing _offseason_beat month gate,
+    promoted to the declared predicate; fail closed)."""
+    try:
+        return game_date.month in (5, 6, 7, 8, 9)
+    except Exception:
+        return False
+
+
+def _w_may_jun(app, game_date):
+    """May-Jun: the UFA run-up before the July-1 market opens."""
+    try:
+        return game_date.month in (5, 6)
+    except Exception:
+        return False
+
+
+def _w_controversy(app, game_date):
+    """Oct-Jun. Scratch/rumor read live season state (in-season only --
+    enforced inside the generator); holdout reads the contract clock,
+    which runs through the July-1 UFA deadline (May-Jun is peak holdout
+    season: "July 1 gets closer every day")."""
+    try:
+        return bool(_w_in_season(app, game_date)
+                    or _w_may_jun(app, game_date))
+    except Exception:
+        return False
+
+
+def _w_prospect(app, game_date):
+    """Always-open, by explicit declaration (not omission): prospect
+    development notes carry no calendar premise -- evergreen by design."""
+    return True
+
+
+def _w_nhl_teams(app):
+    """NHL team objects, or None when the league shape is unreadable."""
+    try:
+        teams = [t for t in _all_teams(app)
+                 if (_safe(lambda: t.league_name, "") or "")
+                 == "National Hockey League"]
+        return teams if len(teams) >= 4 else None
+    except Exception:
+        return None
+
+
+def _w_nhl_rows(app, season_len):
+    """Pool records for the NHL via _pr_pool_records (the R8a record
+    reader): None when the pool is unreadable or distrusted."""
+    try:
+        teams = _w_nhl_teams(app)
+        if not teams:
+            return None
+        return _pr_pool_records(teams, season_len)
+    except Exception:
+        return None
+
+
+def _w_playoff_race(app, game_date):
+    """Stretch-run window: in-season, sane season length, and at least one
+    conference pool inside _pr_window_ok (median GP >= 60, spread <= 10,
+    every team still has >= 1 game left). The playoff-cutoff math is only
+    meaningful late -- never in October, never after the schedule ends."""
+    try:
+        if not _in_season(game_date):
+            return False
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return False
+        teams = _w_nhl_teams(app)
+        if not teams:
+            return False
+        pools = {}
+        for t in teams:
+            pools.setdefault(_pr_conference(t), []).append(t)
+        for pool in pools.values():
+            if len(pool) < 4:
+                continue
+            rows = _pr_pool_records(pool, season_len)
+            if rows and _pr_window_ok(rows, season_len):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _w_trade_deadline(app, game_date):
+    """Deadline-week window: _td_gate's verdict -- in-season, derivable
+    deadline, game_date within deadline-7..deadline inclusive, sane GP
+    (median >= 40, spread <= 15, every team has >= 1 game left)."""
+    try:
+        if not _in_season(game_date):
+            return False
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return False
+        rows = _w_nhl_rows(app, season_len)
+        if not rows:
+            return False
+        deadline, _days_left = _td_gate(app, game_date, rows, season_len)
+        return deadline is not None
+    except Exception:
+        return False
+
+
+def _w_award_races(app, game_date):
+    """Second-half window: in-season, median team GP >= 50% of the season
+    (_ar_window_ok), sane spread, nobody's schedule finished. Award races
+    are not real in October and must never fire in the offseason or after
+    the schedule ends."""
+    try:
+        if not _in_season(game_date):
+            return False
+        season_len = _pr_season_len(app)
+        if season_len is None:
+            return False
+        rows = _w_nhl_rows(app, season_len)
+        if not rows:
+            return False
+        return bool(_ar_window_ok(rows, season_len))
+    except Exception:
+        return False
+
+
+def _w_last_regular_season_game(league):
+    """Last NHL regular-season game date from the league schedule, or None.
+
+    Mirrors trade_deadline_manager.trade_deadline_date's schedule scan --
+    same dict entry shapes, same preseason/playoff exclusions -- minus the
+    40-day CBA offset. None when the schedule can't answer (the window
+    level then fails OPEN: an underivable season end can't prove a date is
+    post-season, so the month check remains the bound)."""
+    try:
+        sched = getattr(league, "schedule", None) or []
+        last = None
+        for e in sched:
+            if not isinstance(e, dict):
+                continue
+            if e.get("league") != "NHL":
+                continue
+            if e.get("preseason") or e.get("playoff"):
+                continue
+            dd = _w_as_date(e.get("date"))
+            if dd is None:
+                continue
+            if last is None or dd > last:
+                last = dd
+        return last
+    except Exception:
+        return None
+
+
+def _w_regular_season_game_day(app, game_date):
+    """The day just simmed (game_date - 1) is a regular-season game day.
+
+    Daily news runs after the date increment, so results belong to
+    game_date - 1 (the R8d/reviewer-B F4 rule): the in-season gate tests
+    the GAME day, not the news day, so a Sep 30 preseason game stays
+    unread even when the news runs on Oct 1. R12 adds the second bound:
+    game days past the last regular-season game stay silent when the
+    schedule can prove the season is over (postseason heroics/debuts
+    would need playoff framing the templates don't have)."""
+    try:
+        game_day = _w_as_date(game_date - timedelta(days=1))
+        if game_day is None or not _in_season(game_day):
+            return False
+        last = _w_last_regular_season_game(_pr_league(app))
+        if last is not None and game_day > last:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _w_extension(app, game_date):
+    """Always-open, by explicit declaration (not omission).
+
+    R8g deliberately chose a year-round gate, and R12 keeps it: the
+    premise is STATE-based ("a star is secured long-term" -- a true,
+    independently verifiable fact in-season and offseason alike),
+    mirroring holdout's "star with <=1 year" clock. The story never
+    claims "just signed", only the deal that exists, so no calendar
+    bound is needed for truthfulness. A Jul-1 -> trade-deadline
+    signing-season window was considered and rejected: it would overturn
+    R8g's released, tested design decision on no spec mandate (the R12
+    "deadline windows" are the trade-deadline week's). Declared here so
+    the registry is complete and honest."""
+    return True
+
+
+BUCKET_WINDOWS = {
+    # bucket name -> {"window": predicate, "derivation": why this window}
+    "prospect": {"window": _w_prospect,
+                 "derivation": "Always-open by explicit declaration: "
+                 "development notes carry no calendar premise."},
+    "coach": {"window": _w_in_season,
+              "derivation": "Hot-seat / COTM premises read the live season "
+              "record and board confidence."},
+    "controversy": {"window": _w_controversy,
+                    "derivation": "Oct-Jun: scratch/rumor read live season "
+                    "state (in-season only, enforced inside the generator); "
+                    "holdout reads the contract clock through the July-1 "
+                    "UFA deadline."},
+    "draft": {"window": _w_draft,
+              "derivation": "Draft-season riser coverage, Jan-Jun."},
+    "team": {"window": _w_in_season,
+             "derivation": "Record-celebration premises need live standings."},
+    "milestone": {"window": _w_in_season,
+                  "derivation": "Career countdowns only move when games are "
+                  "played; an offseason firing would restate a static number."},
+    "depth": {"window": _w_in_season,
+              "derivation": "Goalie-rotation / callup premises need games."},
+    "injury": {"window": _w_in_season,
+               "derivation": "Injury reports and return estimates are "
+               "season-bound (R10 arcs track the returns)."},
+    "performance": {"window": _w_in_season,
+                    "derivation": "Hot/cold pace premises need GP >= 20."},
+    "playoff_race": {"window": _w_playoff_race,
+                     "derivation": "Stretch run only: median GP >= 60, "
+                     "spread <= 10, every team still has >= 1 game left."},
+    "trade_deadline": {"window": _w_trade_deadline,
+                       "derivation": "Deadline week: deadline-7..deadline "
+                       "inclusive, off the canonical engine deadline date."},
+    "award_races": {"window": _w_award_races,
+                    "derivation": "Second half only: median GP >= 50% of "
+                    "the season."},
+    "heroics": {"window": _w_regular_season_game_day,
+                "derivation": "The recap belongs to a real regular-season "
+                "game day (game_date - 1), never preseason or post-season."},
+    "streaks": {"window": _w_in_season,
+                "derivation": "Skid premises need live records; "
+                "cross-season guards already bound the streak to this "
+                "season's GP."},
+    "rivalry_hype": {"window": _w_in_season,
+                     "derivation": "Pregame buildup; the game-today/tomorrow "
+                     "schedule check stays premise-level in the generator."},
+    "extension": {"window": _w_extension,
+                  "derivation": "Always-open by explicit declaration: the "
+                  "state-based lockup premise (R8g's deliberate year-round "
+                  "design) is true in-season and offseason alike."},
+    "debuts": {"window": _w_regular_season_game_day,
+               "derivation": "Debuts credit NHL GP only in the regular "
+               "season; same game-day rule as heroics."},
+    "league_notes": {"window": _w_in_season,
+                     "derivation": "Scoring-race / best-team premises need "
+                     "live standings."},
+    "offseason": {"window": _w_offseason,
+                  "derivation": "Summer beat: May-Sep."},
+}
+
+
+def _r12_check_registry():
+    """Import-time invariant: every _GENERATORS bucket has a declared
+    window. A bucket without one is a code bug -- fail fast, not silent."""
+    names = {name for name, _fn, _weight in _GENERATORS}
+    missing = names - set(BUCKET_WINDOWS)
+    extra = set(BUCKET_WINDOWS) - names
+    if missing or extra:
+        raise RuntimeError(
+            "daily_news R12: BUCKET_WINDOWS mismatch: missing=%s extra=%s"
+            % (sorted(missing), sorted(extra)))
+
+
+# NOTE: _r12_check_registry() is called after _GENERATORS is defined below.
+
+
+def _window_allows(bucket_name, app, game_date):
+    """R12 dispatch gate: True when the bucket may fire on game_date.
+
+    Unknown bucket names (test harnesses that monkeypatch _GENERATORS)
+    fail OPEN with a logged warning -- the import-time registry invariant
+    guards production, and each generator's own entry gate remains the
+    primary enforcement. A raising window predicate fails CLOSED."""
+    try:
+        entry = BUCKET_WINDOWS.get(bucket_name)
+    except Exception:
+        return True
+    if entry is None:
+        _log.warning("daily_news R12: no window declared for bucket %r",
+                     bucket_name)
+        return True
+    try:
+        return bool(entry["window"](app, game_date))
+    except Exception:
+        _log.warning("daily_news R12: window predicate raised for bucket %r",
+                     bucket_name)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -4459,6 +4917,10 @@ _GENERATORS = [
     ("league_notes", _league_notes, 0.70),
     ("offseason", _offseason_beat, 0.65),
 ]
+
+
+# R12 import-time invariant: every generator has a declared window.
+_r12_check_registry()
 
 
 def generate_daily_news(app, game_date=None) -> int:
@@ -4506,6 +4968,11 @@ def _generate(app, game_date) -> int:
     for _name, fn, _weight in gens:
         if len(stories) >= target:
             break
+        # R12 dispatch gate (defense in depth): no bucket fires outside
+        # its declared calendar window, even if a generator's entry gate
+        # is ever bypassed.
+        if not _window_allows(_name, app, game_date):
+            continue
         try:
             got = fn(app, game_date, rng) or []
         except Exception:
@@ -4522,6 +4989,10 @@ def _generate(app, game_date) -> int:
         try:
             for _name, fn, _weight in gens:
                 if len(stories) < lo:
+                    # R12: the relaxed pass re-runs generators but must not
+                    # re-open closed calendar windows.
+                    if not _window_allows(_name, app, game_date):
+                        continue
                     try:
                         got = fn(app, game_date, rng) or []
                     except Exception:
