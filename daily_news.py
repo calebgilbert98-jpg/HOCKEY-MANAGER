@@ -56,7 +56,11 @@ def _pname(p):
 
 
 def _tname(t):
-    return _safe(lambda: t.team_name, "") or "Unknown Team"
+    # R9: strip whitespace-only names -- a team named "   " is an unknown
+    # team, not a blank one (mirrors _pname's .strip()).
+    raw = _safe(lambda: t.team_name, "")
+    name = raw.strip() if isinstance(raw, str) else ""
+    return name or "Unknown Team"
 
 
 # R9: post-render backstop. Individual buckets already fail closed on
@@ -4425,13 +4429,14 @@ def _generate(app, game_date) -> int:
         return 0
     for s in stories:
         try:
-            if _story_has_unknown_entity(s):
-                # R9 global backstop: a rendered placeholder name/team means
-                # a bucket gate missed something upstream -- suppress the
-                # story (fail closed, logged, never surfaced). It does not
-                # count toward `added`.
-                _log.warning("daily_news: suppressed story with unknown "
-                             "entity placeholder: %s", repr(s)[:160])
+            # R9 global backstop: a rendered placeholder name/team means a
+            # bucket gate missed something upstream; a non-string story
+            # means a generator broke its string contract (the feed would
+            # render its repr, placeholders and all). Either way: suppress
+            # (fail closed, logged, never surfaced, uncounted in `added`).
+            if not isinstance(s, str) or _story_has_unknown_entity(s):
+                _log.warning("daily_news: suppressed story failing "
+                             "post-render guard: %s", repr(s)[:160])
                 continue
             add(s)
             added += 1

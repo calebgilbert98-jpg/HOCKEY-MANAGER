@@ -169,6 +169,47 @@ check("guard: clean stories all surface",
       sorted(added3) == sorted(["The Blades beat the Wolves 3-2.",
                                 "Goalie duel in Halifax ends 1-0."]) and n3 == 2)
 
+# Reviewer C (adversarial) finding: non-string story objects carrying the
+# markers sailed through the guard to add_news, counted and unlogged.
+# Fail-closed now: suppressed, logged, uncounted, never surfaced.
+n4, added4, logged4 = _generate_with(
+    [[["RUMOR MILL: Unknown Player is done."]],
+     ["The Blades practiced hard today."]])
+check("guard: non-string (list) story never reaches add_news",
+      added4 == ["The Blades practiced hard today."])
+check("guard: non-string story not counted in `added`", n4 == 1)
+check("guard: non-string suppression is logged",
+      any("suppressed" in m for m in logged4))
+
+n5, added5, logged5 = _generate_with(
+    [[("x", "Unknown Team wins")],
+     ["Quiet day around the league."]])
+check("guard: non-string (tuple) story suppressed too",
+      added5 == ["Quiet day around the league."] and n5 == 1)
+
+n6, added6, _ = _generate_with(
+    [[{"t": "Unknown Player"}],
+     ["Mild day around the league."]])
+check("guard: non-string (dict) story suppressed too",
+      added6 == ["Mild day around the league."] and n6 == 1)
+
+# _tname strips whitespace-only names -> "Unknown Team" (mirrors _pname).
+check("tname: whitespace-only team_name -> Unknown Team",
+      dn._tname(types.SimpleNamespace(team_name="   ")) == "Unknown Team")
+check("tname: real team name untouched",
+      dn._tname(types.SimpleNamespace(team_name="Blades")) == "Blades")
+check("tname: padded real name stripped",
+      dn._tname(types.SimpleNamespace(team_name="  Blades  ")) == "Blades")
+check("tname: None -> Unknown Team",
+      dn._tname(types.SimpleNamespace(team_name=None)) == "Unknown Team")
+
+# Whitespace-named team: backup story fails closed at the bucket.
+w_g1 = mkplayer("Starter Real", pos="G", ovr=84, gp=25, svp=0.905)
+w_g2 = mkplayer("Backup Real", pos="G", ovr=80, gp=8, svp=0.931)
+app = mkapp(mkteam("   ", [w_g1, w_g2]))
+stories = run_depth(app)
+check("bucket: whitespace team_name -> no backup story", stories == [])
+
 # ---------------------------------------------------------------------------
 # Nit 2: _rumor_pts_bar unit checks
 # ---------------------------------------------------------------------------
