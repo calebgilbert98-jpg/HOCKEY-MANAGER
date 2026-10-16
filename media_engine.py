@@ -345,81 +345,314 @@ _QUOTES = {
     ],
 }
 
+# ---------------------------------------------------------------------------
+# R13: when-gates on the postmatch question banks.
+#
+# Every bank entry is {"q": <text>, "when": <gate or None>}. A gate is a
+# predicate over the gate context built by _presser_gate_ctx() for the team
+# being interviewed on this night. Gates are premise-restrictive: each one
+# must exclude REAL cases (the acceptance probe counts exclusions across a
+# season sim -- no trivially-true gates).
+#
+# Failure mode is closed: a gate that raises, or a premise that can't be
+# read (no date, unreadable standings), EXCLUDES the question. Ungated
+# questions are always eligible, so the pool can never drain to empty.
+# ---------------------------------------------------------------------------
+
+def _q(text, when=None):
+    """One bank entry: question text plus an optional premise gate."""
+    return {"q": text, "when": when}
+
+
+def _presser_playoff_facts(league, team):
+    """(gap, pts, cutoff): this team's points above (+) / below (-) the
+    conference playoff cutoff, plus the raw numbers. (None, None, None)
+    when the standings can't be read (fail closed).
+
+    Cutoff = points of the 8th-place team in the team's conference pool
+    (the NHL takes 8 per conference); pools smaller than 8 use the last
+    team in the pool.
+    """
+    try:
+        teams = [t for t in (getattr(league, "teams", None) or [])
+                 if (getattr(t, "league_name", "") or "")
+                 == "National Hockey League"]
+        if len(teams) < 4:
+            return None, None, None
+
+        def _conf(t):
+            c = getattr(t, "conference", "") or ""
+            if c in ("Eastern", "Western"):
+                return c
+            div = getattr(t, "division", "") or ""
+            if div in ("Atlantic", "Metropolitan"):
+                return "Eastern"
+            if div in ("Central", "Pacific"):
+                return "Western"
+            return "Eastern"
+
+        mine = _conf(team)
+        rows = []
+        for t in teams:
+            if _conf(t) != mine:
+                continue
+            w = int(getattr(t, "wins", 0) or 0)
+            l = int(getattr(t, "losses", 0) or 0)
+            otl = int(getattr(t, "ot_losses", 0) or 0)
+            rows.append((2 * w + otl, _team_name(t)))
+        if len(rows) < 4:
+            return None, None, None
+        rows.sort(key=lambda r: r[0], reverse=True)
+        cutoff = rows[min(8, len(rows)) - 1][0]
+        me = _team_name(team)
+        mine_pts = next((p for p, n in rows if n == me), None)
+        if mine_pts is None:
+            return None, None, None
+        return mine_pts - cutoff, mine_pts, cutoff
+    except Exception:
+        return None, None, None
+
+
+def _presser_gate_ctx(league, team, won, game_date, tonight_recorded=True,
+                      playoffs=False):
+    """Snapshot the premises the R13 gates read. Never raises.
+
+    Timing (two call paths -- the gates must be right on both):
+    * User-game path: _process_single_game_result (which appends tonight to
+      team.recent_results) runs BEFORE cover_game -> tonight_recorded=True.
+    * Batch path (all AI-vs-AI games): cover_game runs BEFORE
+      _record_game_result -> tonight_recorded=False. The W/L/OTL record IS
+      fresh on both paths (standings update first); only the trail lags.
+    """
+    g = {"won": bool(won), "streak": 0, "days_to_deadline": None,
+         "pts_off_cutoff": None, "pts": None, "cutoff_pts": None,
+         "season_len": None, "gp": 0, "in_season": False,
+         "playoffs": bool(playoffs)}
+    w = l = otl = 0
+    try:
+        w = int(getattr(team, "wins", 0) or 0)
+        l = int(getattr(team, "losses", 0) or 0)
+        otl = int(getattr(team, "ot_losses", 0) or 0)
+        g["gp"] = w + l + otl
+        g["pts"] = 2 * w + otl
+    except Exception:
+        pass
+    try:
+        from daily_news import _streak_current_losing
+        base = int(_streak_current_losing(team) or 0)
+    except Exception:
+        base = 0
+    # A win tonight snaps any skid on either path. A loss tonight extends
+    # the trail -- but on the batch path tonight isn't in the trail yet.
+    streak = 0 if won else (base if tonight_recorded else base + 1)
+    # Cross-season / corrupt-trail guards (mirror the R8e bucket):
+    # reset_season_record never clears recent_results, so the trail can
+    # hold last season's games -- the streak can never exceed this
+    # season's games played, and the ledger must hold the skid.
+    streak = min(streak, g["gp"])
+    if streak > 0 and (l + otl) < streak:
+        streak = 0
+    g["streak"] = streak
+    try:
+        month = getattr(game_date, "month", 0) or 0
+        if month in (10, 11, 12, 1, 2, 3, 4):
+            g["in_season"] = True
+            from trade_deadline_manager import trade_deadline_date
+            dd = trade_deadline_date(league)
+            if type(dd) is date:
+                g["days_to_deadline"] = (dd - game_date).days
+    except Exception:
+        pass
+    try:
+        gap, pts, cutoff = _presser_playoff_facts(league, team)
+        g["pts_off_cutoff"] = gap
+        g["cutoff_pts"] = cutoff
+        if pts is not None:
+            g["pts"] = pts
+    except Exception:
+        pass
+    try:
+        n = getattr(league, "season_games_count", None)
+        g["season_len"] = int(n) if n else None
+    except Exception:
+        pass
+    return g
+
+
+# --- R13 gate predicates (each takes the gate ctx; never raises) ---
+
+def _g_home_loss_pattern(g):
+    "Another loss at home becoming a pattern -- a home loss extending a skid."
+    try:
+        return (not g["won"]) and int(g["streak"] or 0) >= 2
+    except Exception:
+        return False
+
+
+def _g_home_skid(g):
+    "Fans booing at home -- only when the crowd has watched a real skid."
+    try:
+        return (not g["won"]) and int(g["streak"] or 0) >= 3
+    except Exception:
+        return False
+
+
+def _g_fracture(g):
+    "Is the room fracturing -- only on a genuine 3+ game slide."
+    try:
+        return int(g["streak"] or 0) >= 3
+    except Exception:
+        return False
+
+
+def _g_losing_stretch(g):
+    "A losing stretch -- only when the streak is really a stretch (4+)."
+    try:
+        return int(g["streak"] or 0) >= 4
+    except Exception:
+        return False
+
+
+def _g_deep_skid(g):
+    "Five straight losses -- the premise says five; require five."
+    try:
+        return int(g["streak"] or 0) >= 5
+    except Exception:
+        return False
+
+
+def _g_deadline_window(g):
+    "Trade-deadline premises -- only inside the two weeks before it."
+    try:
+        d = g["days_to_deadline"]
+        return d is not None and 0 <= int(d) <= 14
+    except Exception:
+        return False
+
+
+def _g_playoff_race(g):
+    """Playoff-race premises -- late regular season (60+ GP), within 6 pts
+    of the cut, and not mathematically eliminated. Never in the playoffs
+    themselves: once you're in, there is no more "race"."""
+    try:
+        if g.get("playoffs"):
+            return False
+        p = g["pts_off_cutoff"]
+        if not (bool(g["in_season"]) and int(g["gp"] or 0) >= 60
+                and p is not None and abs(int(p)) <= 6):
+            return False
+        # Mathematically eliminated teams aren't "in a playoff race":
+        # even winning out can't reach the cutoff.
+        season_len = g.get("season_len")
+        cutoff = g.get("cutoff_pts")
+        pts = g.get("pts")
+        if season_len and cutoff is not None and pts is not None:
+            remaining = max(0, int(season_len) - int(g["gp"] or 0))
+            if int(pts) + 2 * remaining < int(cutoff):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _presser_question_eligible(entry, gctx):
+    """True when the entry's premise holds tonight. Never raises; a gate
+    that blows up excludes the question (fail closed)."""
+    try:
+        gate = entry.get("when")
+        if gate is None:
+            return True
+        return bool(gate(gctx))
+    except Exception:
+        return False
+
+
 _STIRRER_QUESTIONS = [
-    "“There's a sense the room is frustrated — fair or unfair?”",
-    "“Fans are calling this a wasted season. Your response?”",
-    "“Is the coach's message still getting through in here?”",
-    "“Another loss at home — at what point does this become a pattern?”",
-    "“The power play has gone quiet. Is it personnel or is it the system?”",
-    "“There's talk the core of this team might not be the answer. Fair?”",
-    "“Your goaltender has been left out to dry a lot lately. What's going on in front of him?”",
-    "“Do you feel the pressure building in this room?”",
-    "“The effort was questioned after that one. What's your take?”",
-    "“Is this team tough enough to play against when it matters?”",
-    "“Fans are booing at home. Do they have a point?”",
-    "“The trade rumors are getting louder. Is it a distraction in here?”",
-    "“You've dropped a lot of points to teams below you in the standings. Why?”",
-    "“Is the leadership group doing enough right now?”",
-    "“The penalty kill is bleeding goals. Who's accountable for that?”",
-    "“Some are saying this team plays soft. Your response?”",
-    "“How much longer can this losing stretch go before something has to change?”",
-    "“The coach keeps shuffling the lines. Is he searching for answers?”",
-    "“Do you think this group still believes it can turn this around?”",
-    "“Your five-on-five play has dried up. What's missing?”",
-    "“There were some empty seats tonight. What do you say to the fans staying home?”",
-    "“Is the room still together, or is it fracturing?”",
-    "“You've been outworked in back-to-back games. Is that effort or execution?”",
-    "“The captain has been quiet on the scoresheet. Is that a concern?”",
-    "“At what point do moral victories stop being enough?”",
+
+    _q("“There's a sense the room is frustrated — fair or unfair?”"),
+    _q("“Fans are calling this a wasted season. Your response?”"),
+    _q("“Is the coach's message still getting through in here?”"),
+    _q("“Another loss at home — at what point does this become a pattern?”", when=_g_home_loss_pattern),
+    _q("“The power play has gone quiet. Is it personnel or is it the system?”"),
+    _q("“There's talk the core of this team might not be the answer. Fair?”"),
+    _q("“Your goaltender has been left out to dry a lot lately. What's going on in front of him?”"),
+    _q("“Do you feel the pressure building in this room?”"),
+    _q("“The effort was questioned after that one. What's your take?”"),
+    _q("“Is this team tough enough to play against when it matters?”"),
+    _q("“Fans are booing at home. Do they have a point?”", when=_g_home_skid),
+    _q("“The trade rumors are getting louder. Is it a distraction in here?”", when=_g_deadline_window),
+    _q("“You've dropped a lot of points to teams below you in the standings. Why?”"),
+    _q("“Is the leadership group doing enough right now?”"),
+    _q("“The penalty kill is bleeding goals. Who's accountable for that?”"),
+    _q("“Some are saying this team plays soft. Your response?”"),
+    _q("“How much longer can this losing stretch go before something has to change?”", when=_g_losing_stretch),
+    _q("“The coach keeps shuffling the lines. Is he searching for answers?”"),
+    _q("“Do you think this group still believes it can turn this around?”"),
+    _q("“Your five-on-five play has dried up. What's missing?”"),
+    _q("“There were some empty seats tonight. What do you say to the fans staying home?”"),
+    _q("“Is the room still together, or is it fracturing?”", when=_g_fracture),
+    _q("“You've been outworked in back-to-back games. Is that effort or execution?”"),
+    _q("“The captain has been quiet on the scoresheet. Is that a concern?”"),
+    _q("“At what point do moral victories stop being enough?”"),
+    _q("“The losses keep piling up — is this a slump, or is this just who this team is now?”", when=_g_deep_skid),
+
 ]
 _LOYALIST_QUESTIONS = [
-    "“What did you like about the group's compete level tonight?”",
-    "“How close is this team to putting it all together?”",
-    "“How rewarding is it to see the young guys contributing like this?”",
-    "“What does a win like this do for the confidence in the room?”",
-    "“Your penalty kill was outstanding tonight. What was working?”",
-    "“How much fun is this group having right now?”",
-    "“The forecheck was relentless. Is that the identity you want?”",
-    "“What can you say about the play of your goaltender tonight?”",
-    "“How important was the start you got in the first period?”",
-    "“This team seems to be finding its game. What changed?”",
-    "“How special is it to win in front of this crowd?”",
-    "“Your depth scoring has come alive. How big is that for this team?”",
-    "“What does it say about the room that you closed this one out?”",
-    "“How much pride does this group take in its defensive game?”",
-    "“The power play is clicking. What's the key to it right now?”",
-    "“How good does it feel to reward the fans with this kind of effort?”",
-    "“What impressed you most about the team's compete tonight?”",
-    "“How valuable is the leadership in this room during a stretch like this?”",
-    "“Your team seems to thrive in close games. Why is that?”",
-    "“What does a performance like this say about where this team is headed?”",
+
+    _q("“What did you like about the group's compete level tonight?”"),
+    _q("“How close is this team to putting it all together?”"),
+    _q("“How rewarding is it to see the young guys contributing like this?”"),
+    _q("“What does a win like this do for the confidence in the room?”"),
+    _q("“Your penalty kill was outstanding tonight. What was working?”"),
+    _q("“How much fun is this group having right now?”"),
+    _q("“The forecheck was relentless. Is that the identity you want?”"),
+    _q("“What can you say about the play of your goaltender tonight?”"),
+    _q("“How important was the start you got in the first period?”"),
+    _q("“This team seems to be finding its game. What changed?”"),
+    _q("“How special is it to win in front of this crowd?”"),
+    _q("“Your depth scoring has come alive. How big is that for this team?”"),
+    _q("“What does it say about the room that you closed this one out?”"),
+    _q("“How much pride does this group take in its defensive game?”"),
+    _q("“The power play is clicking. What's the key to it right now?”"),
+    _q("“How good does it feel to reward the fans with this kind of effort?”"),
+    _q("“What impressed you most about the team's compete tonight?”"),
+    _q("“How valuable is the leadership in this room during a stretch like this?”"),
+    _q("“Your team seems to thrive in close games. Why is that?”"),
+    _q("“What does a performance like this say about where this team is headed?”", when=_g_playoff_race),
+    _q("“You're right in the thick of a playoff race. How is this group handling the pressure of meaningful games?”", when=_g_playoff_race),
+
 ]
 _NEUTRAL_QUESTIONS = [
-    "“Walk us through the game from your perspective.”",
-    "“What was the difference tonight?”",
-    "“What did you see on the ice tonight?”",
-    "“How would you describe the pace of that game?”",
-    "“What adjustments did you make as the game went on?”",
-    "“How did special teams factor into the result?”",
-    "“What was the key stretch of the game for you?”",
-    "“How did you feel about your five-on-five play?”",
-    "“What did the coaching staff emphasize between periods?”",
-    "“How did the goaltending hold up at both ends?”",
-    "“What worked for you in the offensive zone?”",
-    "“How did you handle their forecheck tonight?”",
-    "“What was the mood on the bench in the third period?”",
-    "“How did the game change after the first goal?”",
-    "“What did you make of the physicality out there?”",
-    "“How important were the faceoffs tonight?”",
-    "“What did you think of the team's discipline?”",
-    "“How did you generate your scoring chances?”",
-    "“What was different about your defensive-zone coverage?”",
-    "“How did the ice conditions affect the play?”",
-    "“What did you see from the back end tonight?”",
-    "“How did you manage the puck in the neutral zone?”",
-    "“What stood out to you about the opponent's game?”",
-    "“How did you feel about the team's energy from puck drop?”",
-    "“What will you take from this game going forward?”",
+
+    _q("“Walk us through the game from your perspective.”"),
+    _q("“What was the difference tonight?”"),
+    _q("“What did you see on the ice tonight?”"),
+    _q("“How would you describe the pace of that game?”"),
+    _q("“What adjustments did you make as the game went on?”"),
+    _q("“How did special teams factor into the result?”"),
+    _q("“What was the key stretch of the game for you?”"),
+    _q("“How did you feel about your five-on-five play?”"),
+    _q("“What did the coaching staff emphasize between periods?”"),
+    _q("“How did the goaltending hold up at both ends?”"),
+    _q("“What worked for you in the offensive zone?”"),
+    _q("“How did you handle their forecheck tonight?”"),
+    _q("“What was the mood on the bench in the third period?”"),
+    _q("“How did the game change after the first goal?”"),
+    _q("“What did you make of the physicality out there?”"),
+    _q("“How important were the faceoffs tonight?”"),
+    _q("“What did you think of the team's discipline?”"),
+    _q("“How did you generate your scoring chances?”"),
+    _q("“What was different about your defensive-zone coverage?”"),
+    _q("“How did the ice conditions affect the play?”"),
+    _q("“What did you see from the back end tonight?”"),
+    _q("“How did you manage the puck in the neutral zone?”"),
+    _q("“What stood out to you about the opponent's game?”"),
+    _q("“How did you feel about the team's energy from puck drop?”"),
+    _q("“What will you take from this game going forward?”"),
+    _q("“With the trade deadline closing in, how does the room block out the noise?”", when=_g_deadline_window),
+    _q("“What's the message in the room when the losses start stacking up like this?”", when=_g_losing_stretch),
+    _q("“Every point matters at this stage of the season. How do you approach a game like this?”", when=_g_playoff_race),
+
 ]
 
 
@@ -951,23 +1184,33 @@ def cover_game(league: Any, home_team: Any, away_team: Any,
                winner: Any, loser: Any,
                scores: Tuple[int, int], went_ot: bool,
                game_date: Optional[date] = None,
-               rng: Optional[random.Random] = None) -> List[Dict[str, Any]]:
+               rng: Optional[random.Random] = None,
+               tonight_recorded: bool = True) -> List[Dict[str, Any]]:
     """Cover one finished game. Returns event dicts for the caller to route.
 
     Event kinds: quote, fine, beef, shutdown, narrative_spawn, narrative_poke.
     Cheap by design: two roster scans, a handful of rolls. Never raises.
+
+    tonight_recorded: True when tonight's result is already in
+    team.recent_results (user-game path: _process_single_game_result runs
+    first). False on the batch path, where _record_game_result runs after
+    the presser. Defaults True -- the violation-safe direction (a wrong
+    True only suppresses gated questions; a wrong False overcounts the
+    streak and could surface a premise-violating question).
     """
     rng = rng or random
     events: List[Dict[str, Any]] = []
     try:
         return _cover_game_inner(league, home_team, away_team, winner, loser,
-                                 scores, went_ot, game_date, rng, events)
+                                 scores, went_ot, game_date, rng, events,
+                                 tonight_recorded=tonight_recorded)
     except Exception:
         return events
 
 
 def _cover_game_inner(league, home_team, away_team, winner, loser,
-                      scores, went_ot, game_date, rng, events):
+                      scores, went_ot, game_date, rng, events,
+                      tonight_recorded=True):
     ensure_media_state(league)
     home_name = _team_name(home_team)
     prof = market_of(home_name)
@@ -1013,7 +1256,9 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
         if reporter is not None:
             _run_interview(league, home_team, interviewee, reporter,
                            home_won, heated_loss, loser_spiraling,
-                           game_date, rng, events, ctx)
+                           game_date, rng, events, ctx,
+                           tonight_recorded=tonight_recorded,
+                           playoffs=playoffs)
 
     # ---- 2. Coach availability ----
     _run_coach_availability(league, home_team, home_name, reporter,
@@ -1051,7 +1296,9 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
 def _run_interview(league, team, player, reporter, won: bool,
                    heated_loss: bool, spiraling: bool,
                    game_date, rng, events,
-                   ctx: Optional[Dict[str, Any]] = None) -> None:
+                   ctx: Optional[Dict[str, Any]] = None,
+                   tonight_recorded: bool = True,
+                   playoffs: bool = False) -> None:
     ctx = ctx or {}
     pname = getattr(player, "full_name",
                     getattr(player, "last_name", "A player"))
@@ -1121,6 +1368,18 @@ def _run_interview(league, team, player, reporter, won: bool,
     q_pool = (_STIRRER_QUESTIONS if reporter.archetype == "stirrer"
               else _LOYALIST_QUESTIONS if reporter.archetype == "loyalist"
               else _NEUTRAL_QUESTIONS)
+    # R13: premise-gated selection. The gate context is the interviewed
+    # team's post-game state (the presser runs after results are recorded).
+    # Ungated questions are always eligible, so the pool can't drain dry;
+    # the fallback below is pure belt-and-suspenders.
+    gctx = _presser_gate_ctx(league, team, won, game_date,
+                              tonight_recorded=tonight_recorded,
+                              playoffs=playoffs)
+    eligible = [e for e in q_pool
+                if _presser_question_eligible(e, gctx)]
+    if not eligible:
+        eligible = [e for e in q_pool if e.get("when") is None]
+    q_pool = eligible or q_pool
     events.append({
         "kind": "quote",
         "team": _team_name(team),
@@ -1131,7 +1390,7 @@ def _run_interview(league, team, player, reporter, won: bool,
         # R11: the premise the persona framing renders from.
         "result": "win" if won else "loss",
         "heated": bool(heated_loss or spiraling),
-        "question": rng.choice(q_pool),
+        "question": rng.choice(q_pool)["q"],
         "quote": quote,
     })
     if outcome == "great":
