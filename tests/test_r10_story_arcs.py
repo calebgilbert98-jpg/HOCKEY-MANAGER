@@ -163,8 +163,9 @@ check("2c fired follow-up delivered via add_news",
       d == 1 and len(app._surfaced) == 1
       and "Chip Chill" in app._surfaced[0]
       and "Frostbite" in app._surfaced[0])
-check("2d follow-up burned a one-shot mark",
-      ("coach:Chip Chill", "arc_hot_seat") in app._daily_news_recent)
+check("2d follow-up burned a per-arc one-shot mark",
+      any(k[0] == "coach:Chip Chill" and k[1].startswith("arc_hot_seat#")
+          for k in app._daily_news_recent))
 d2 = sa.deliver_followups(app, DAY + timedelta(days=13))
 check("2e one-shot: no second delivery", d2 == 0
       and len(app._surfaced) == 1)

@@ -709,7 +709,9 @@ def deliver_followups(app: Any, game_date: date) -> int:
     Each follow-up passes the Unknown-entity post-render guard, goes out
     via app.add_news, burns a one-shot mark, and closes its arc -- in that
     order, so a story is never marked delivered without being delivered.
-    Only arcs resolved within ARC_FOLLOWUP_WINDOW_DAYS are eligible.
+    The one-shot mark is per-ARC (entity key + arc id): successive arcs
+    for the same entity each earn their own follow-up. Only arcs resolved
+    within ARC_FOLLOWUP_WINDOW_DAYS are eligible.
     Returns the number delivered. Never raises.
     """
     delivered = 0
@@ -732,10 +734,13 @@ def deliver_followups(app: Any, game_date: date) -> int:
             try:
                 f = arc.get("facts") or {}
                 kind = f.get("arc_kind") or ""
-                mtype = _FOLLOWUP_MARK_TYPE.get(kind)
+                base = _FOLLOWUP_MARK_TYPE.get(kind)
                 key = f.get("entity_key") or ""
-                if not mtype or not key:
+                arc_id = arc.get("id")
+                if not base or not key or arc_id is None:
                     continue
+                # Per-arc one-shot key: one follow-up per arc, ever.
+                mtype = f"{base}#{arc_id}"
                 resolved = _parse_iso_date(f.get("resolved_date"))
                 if resolved is None:
                     continue
