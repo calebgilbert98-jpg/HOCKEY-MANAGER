@@ -111,6 +111,23 @@ def _clean_name(v) -> str:
     return s
 
 
+def _gave_names_player(entry: str, player: str) -> bool:
+    """Match a CompletedTrade a_gave/b_gave entry against a bare player name.
+
+    The real engine never writes bare names into the trade log: it writes
+    trade_engine.asset_label() strings -- "Name (POS, Tier)" -- with an
+    optional " [$X.XXM retained]" suffix (the str(asset) fallback can also
+    emit a bare name, which exact equality still catches). A player name
+    matches an entry on exact equality or on the name followed by " (".
+    Never a bare substring: "Rory Rumor" must not match "Rory Rumor Jr"
+    or a draft-pick description that merely contains the name.
+    """
+    g = (entry or "").strip()
+    if not g or not player:
+        return False
+    return g == player or g.startswith(player + " (")
+
+
 def _iter_teams(app) -> List[Any]:
     try:
         gm = getattr(app, "game_manager", None)
@@ -366,10 +383,16 @@ def _detect_hot_seat(app, arc, game_date):
     """hot-seat -> fired / retained (past the heat window).
 
     Fired is proved by the engine's own firing record (COACH_CAROUSEL,
-    dated on/after the arc opened) while the chair no longer holds him.
-    Retained is proved by the same coach still holding the chair past the
-    heat window. A turned-over chair with no provable firing expires the
-    arc silently -- asserting either outcome would be a guess.
+    dated on/after the arc opened). A valid dated firing record settles
+    it REGARDLESS of who currently holds the chair: fire_coach empties
+    the chair and returns the coach to the hireable pool, so a
+    fired-then-rehired-same-day coach can hold the chair while the
+    record exists -- resolving "retained" there would claim "the board
+    is standing by its coach" when the board did no such thing.
+    Retained is proved by the same coach still holding the chair past
+    the heat window with no firing record. A turned-over chair with no
+    provable firing expires the arc silently -- asserting either outcome
+    would be a guess.
     Returns ("resolve", resolution, facts) | ("expire",) | None.
     """
     f = arc.get("facts") or {}
@@ -383,13 +406,13 @@ def _detect_hot_seat(app, arc, game_date):
         # proved to postdate the story. Fail closed.
         return None
     fired_on = _carousel_fired_date(coach, opened)
-    chair = _current_coach_name(app, team)
-    if fired_on is not None and chair != coach:
+    if fired_on is not None:
         return ("resolve", "fired", {
             "coach_name": coach, "team_name": team,
             "fired_date": fired_on.isoformat(),
             "wins": f.get("wins"), "losses": f.get("losses"),
             "otl": f.get("otl")})
+    chair = _current_coach_name(app, team)
     if chair == coach:
         age = _arc_age_days(arc, game_date)
         if age >= HOT_SEAT_HEAT_WINDOW_DAYS:
@@ -431,7 +454,9 @@ def _detect_trade_rumor(app, arc, game_date):
                         for x in (getattr(tr, "a_gave", None) or [])]
                 gave += [str(x or "")
                          for x in (getattr(tr, "b_gave", None) or [])]
-                if player not in gave:
+                # The log holds asset_label() strings ("Name (POS, Tier)"
+                # with optional " [$X.XXM retained]"), never bare names.
+                if not any(_gave_names_player(g, player) for g in gave):
                     continue
                 if team not in (a, b):
                     continue  # not his club's deal (duplicate-name guard)

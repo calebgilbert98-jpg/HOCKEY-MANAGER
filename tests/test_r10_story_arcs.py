@@ -76,6 +76,20 @@ def mkcoach(name):
                                  id=abs(hash(name)) % 10 ** 9)
 
 
+def _pos(v):
+    return types.SimpleNamespace(value=v)
+
+
+def mklabel(name, pos="C", retained=0):
+    """A REAL engine asset label via trade_engine.asset_label -- "Name
+    (POS, Tier)" with optional " [$X.XXM retained]" -- never a bare
+    name, matching what execute_trade writes into CompletedTrade
+    a_gave/b_gave."""
+    return te.asset_label(types.SimpleNamespace(
+        full_name=name, primary_position=_pos(pos),
+        retained_amount=retained))
+
+
 def mkteam(name, players, coach=None, wins=5, losses=5, otl=0, conf=70.0):
     t = types.SimpleNamespace(team_name=name, roster=list(players),
                               wins=wins, losses=losses, ot_losses=otl,
@@ -209,7 +223,8 @@ t_wolves = mkteam("Wolves", [mkplayer("Fill Er", ovr=75, gp=20, goals=4,
 app2.league.teams.append(t_wolves)
 app2.trade_history.append(te.CompletedTrade(
     date="2027-01-21", team_a="Avalanche", team_b="Wolves",
-    a_gave=["Rory Rumor"], b_gave=["Fill Er"],
+    a_gave=[mklabel("Rory Rumor", "C")],
+    b_gave=[mklabel("Fill Er", "C")],
     summary="Rory Rumor to Wolves"))
 t_rumor.roster.remove(rp)
 t_wolves.roster.append(rp)
@@ -236,7 +251,8 @@ tapp4 = types.SimpleNamespace(
 dn._controversies(tapp4, DAY, random.Random(15))
 app4.trade_history.append(te.CompletedTrade(
     date="2026-12-20", team_a="Storm", team_b="Wolves",
-    a_gave=["Sam Spec"], b_gave=["Fill Er"], summary="old deal"))
+    a_gave=[mklabel("Sam Spec", "C")],
+    b_gave=[mklabel("Fill Er", "C")], summary="old deal"))
 n = sa.process_day(app4, DAY + timedelta(days=5))
 check("4d pre-arc trade does not resolve the arc", n == 0
       and len(arcs_of(app4, "trade_rumor")) == 1)
