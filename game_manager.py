@@ -6129,7 +6129,10 @@ NHL League Office""",
                         import media_engine
                         _mev = media_engine.cover_game(
                             getattr(self, 'league', None), home_team, away_team,
-                            winner, loser, scores, went_ot, game_date)
+                            winner, loser, scores, went_ot, game_date,
+                            # R13: _process_single_game_result (above) already
+                            # recorded tonight in team.recent_results.
+                            tonight_recorded=True)
                         media_engine.route_events(self, _mev, game_date)
                     except Exception:
                         pass
@@ -9422,7 +9425,10 @@ NHL League Office""",
                         import media_engine
                         _mev = media_engine.cover_game(
                             getattr(self, 'league', None), home_team, away_team,
-                            winner, loser, scores, went_to_ot, game_date)
+                            winner, loser, scores, went_to_ot, game_date,
+                            # R13: _record_game_result runs below, so tonight
+                            # is not in team.recent_results yet.
+                            tonight_recorded=False)
                         media_engine.route_events(self, _mev, game_date)
                     except Exception:
                         pass
