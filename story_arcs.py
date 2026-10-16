@@ -378,6 +378,10 @@ def _detect_hot_seat(app, arc, game_date):
     if not coach or not team:
         return ("expire",)
     opened = _arc_opened_date(arc)
+    if opened is None:
+        # The arc's own timeline is unreadable: no firing record can be
+        # proved to postdate the story. Fail closed.
+        return None
     fired_on = _carousel_fired_date(coach, opened)
     chair = _current_coach_name(app, team)
     if fired_on is not None and chair != coach:
@@ -413,38 +417,42 @@ def _detect_trade_rumor(app, arc, game_date):
     if not player or not team:
         return ("expire",)
     opened = _arc_opened_date(arc)
-    for tr in _trade_history(app):
-        try:
-            a = str(getattr(tr, "team_a", "") or "").strip()
-            b = str(getattr(tr, "team_b", "") or "").strip()
-            if not a or not b:
-                continue
-            gave = [str(x or "")
-                    for x in (getattr(tr, "a_gave", None) or [])]
-            gave += [str(x or "")
-                     for x in (getattr(tr, "b_gave", None) or [])]
-            if player not in gave:
-                continue
-            if team not in (a, b):
-                continue  # not his club's deal (duplicate-name guard)
-            d = _parse_trade_date(getattr(tr, "date", None))
-            if d is None:
-                continue
-            if opened is not None and d < opened:
-                continue
+    # A trade resolves the arc only when it provably postdates the story.
+    # With an unreadable opened date nothing is provable: the loop is
+    # skipped and only the date-safe deadline check below runs.
+    if opened is not None:
+        for tr in _trade_history(app):
             try:
-                if d > game_date:
+                a = str(getattr(tr, "team_a", "") or "").strip()
+                b = str(getattr(tr, "team_b", "") or "").strip()
+                if not a or not b:
                     continue
+                gave = [str(x or "")
+                        for x in (getattr(tr, "a_gave", None) or [])]
+                gave += [str(x or "")
+                         for x in (getattr(tr, "b_gave", None) or [])]
+                if player not in gave:
+                    continue
+                if team not in (a, b):
+                    continue  # not his club's deal (duplicate-name guard)
+                d = _parse_trade_date(getattr(tr, "date", None))
+                if d is None:
+                    continue
+                if d < opened:
+                    continue
+                try:
+                    if d > game_date:
+                        continue
+                except Exception:
+                    continue
+                new_team = b if a == team else a
+                if not _clean_name(new_team):
+                    continue
+                return ("resolve", "traded", {
+                    "player_name": player, "old_team": team,
+                    "new_team": new_team, "trade_date": d.isoformat()})
             except Exception:
                 continue
-            new_team = b if a == team else a
-            if not _clean_name(new_team):
-                continue
-            return ("resolve", "traded", {
-                "player_name": player, "old_team": team,
-                "new_team": new_team, "trade_date": d.isoformat()})
-        except Exception:
-            continue
     deadline = _trade_deadline(app)
     if deadline is not None:
         try:
@@ -530,6 +538,12 @@ def process_day(app: Any, game_date: date) -> int:
         ledger = get_ledger(app)
         for arc in ledger.open_arcs():
             try:
+                # An arc whose own timeline is unreadable can never prove
+                # a post-open resolution: expire it rather than letting it
+                # linger or, worse, resolve on a stale record.
+                if _arc_opened_date(arc) is None:
+                    ledger.expire_arc(arc.get("id"))
+                    continue
                 outcome = _detect_resolution(app, arc, game_date)
             except Exception:
                 outcome = None
@@ -577,14 +591,14 @@ _FOLLOWUP_TEMPLATES = {
         "{w}-{l}-{otl} was enough for the {team} board -- {coach} has been let go.",
     ],
     ("hot_seat", "retained"): [
-        "VOTE OF CONFIDENCE: {team} is sticking with {coach} -- {weeks} after the hot-seat talk, he's still behind the bench.",
+        "VOTE OF CONFIDENCE: {team} is sticking with {coach} -- {weeks} {weeks_word} after the hot-seat talk, he's still behind the bench.",
         "{coach} survives in {team}: the board is standing by its coach despite the {w}-{l}-{otl} noise.",
-        "The hot seat cools in {team} -- {coach} is still the coach {weeks} after the speculation peaked.",
+        "The hot seat cools in {team} -- {coach} is still the coach {weeks} {weeks_word} after the speculation peaked.",
         "VOTE OF CONFIDENCE: {team} brass back {coach} to turn the {w}-{l}-{otl} start around.",
         "{coach} lives to coach another day in {team} -- no change behind the bench.",
         "Despite weeks of hot-seat chatter, {team} keeps {coach}. The message: fix it with this group.",
         "VOTE OF CONFIDENCE: {coach} gets more runway in {team} -- the board isn't blinking.",
-        "The {team} room still answers to {coach} -- {weeks} of speculation, no firing.",
+        "The {team} room still answers to {coach} -- {weeks} {weeks_word} of speculation, no firing.",
     ],
     ("trade_rumor", "traded"): [
         "DONE DEAL: {player} is on the move -- {old_team} dealt him to {new_team}. The rumor mill called this one.",
