@@ -398,3 +398,31 @@ jobs:
 
           print("Discord posting complete.")
           PYEOF
+
+  engine-smoke-tests:
+    # R16b: engine smoke tests asserting NAMED invariants (sim-day
+    # determinism, trade-eval totality, cap-math identities) -- green on
+    # every push to native-ui. The determinism test boots the real engine
+    # twice (Small DB + fantasy draft, ~11 min per boot), hence the
+    # generous timeout; the job runs in parallel with the native build.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-ui
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run engine smoke tests (R16b)
+        shell: bash
+        run: python -m pytest tests/test_r16b_engine_smoke.py -v
