@@ -33,9 +33,28 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import PySide6 as _pyside6  # noqa: E402
+
+if "qtstub" in (_pyside6.__file__ or ""):
+    # test_native_team_h imports qtstub's fake PySide6 into this pytest
+    # process (its screens also import PySide6 lazily inside methods, so the
+    # binding must stay process-global). The two bindings are mutually
+    # exclusive and this module needs the real QApplication/QTimer event
+    # loop, so it opts out here: run it directly as a script instead.
+    import pytest  # noqa: E402
+
+    pytest.skip(
+        "real PySide6 required: qtstub shadow active in this pytest process "
+        "(imported by test_native_team_h); run directly: "
+        "QT_QPA_PLATFORM=offscreen python3 tests/test_season_flow_bypass.py",
+        allow_module_level=True,
+    )
+
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-app = QApplication([])
+# Singleton-safe: another Qt test module imported earlier in the same pytest
+# process may already own the QApplication instance.
+app = QApplication.instance() or QApplication([])
 
 from native_ui.screens.season_flow import SeasonFlowScreen  # noqa: E402
 

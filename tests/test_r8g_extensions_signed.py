@@ -19,7 +19,8 @@ import types
 import random
 from datetime import date
 
-_REPO = os.environ.get("R8G_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R8G_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn
@@ -288,6 +289,17 @@ check("B1 legacy bare-date mark allows after window",
       dn._recent_ok(b1app, "legacy:k", "notes",
                     DAY + timedelta(days=500), window=400))
 
-print()
-print("FAILED:", check.failed)
-sys.exit(1 if check.failed else 0)
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check.failed == 0, f"{check.failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print()
+    print("FAILED:", check.failed)
+    sys.exit(1 if check.failed else 0)

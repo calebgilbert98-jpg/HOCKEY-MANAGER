@@ -19,7 +19,8 @@ import types
 import random
 from datetime import date
 
-_REPO = os.environ.get("R8C_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R8C_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn

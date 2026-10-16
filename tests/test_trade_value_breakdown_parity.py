@@ -181,5 +181,10 @@ def main():
     return 0 if ok else 1
 
 
+def test_main_returns_zero():
+    """The script's own main() returns 0 iff all its internal checks pass."""
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

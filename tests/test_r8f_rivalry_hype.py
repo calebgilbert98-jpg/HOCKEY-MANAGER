@@ -20,7 +20,8 @@ import types
 import random
 from datetime import date
 
-_REPO = os.environ.get("R8F_REPO", os.path.expanduser("~/workspace/hockey-manager"))
+_REPO = os.environ.get(
+    "R8F_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 import daily_news as dn
@@ -305,5 +306,16 @@ check("bucket registered in _GENERATORS", "rivalry_hype" in names)
 entry = [g for g in dn._GENERATORS if g[0] == "rivalry_hype"][0]
 check("weight in 0.55-0.65 range", 0.55 <= entry[2] <= 0.65)
 
-print("FAILED: %d" % check.failed)
-sys.exit(1 if check.failed else 0)
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check.failed == 0, f"{check.failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print("FAILED: %d" % check.failed)
+    sys.exit(1 if check.failed else 0)

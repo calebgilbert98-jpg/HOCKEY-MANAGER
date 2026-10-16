@@ -561,6 +561,15 @@ class QGridLayout(_BoxLayout):
         super().addWidget(w)
 
 
+class QFormLayout(_BoxLayout):
+    def addRow(self, *args):
+        # QFormLayout.addRow(label, field) or addRow(widget)
+        self._items.append(("row", args))
+
+    def labelForField(self, field):
+        return None
+
+
 class QSizePolicy:
     Expanding = 1
 

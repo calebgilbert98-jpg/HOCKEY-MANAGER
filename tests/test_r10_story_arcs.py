@@ -29,7 +29,8 @@ import types
 import random
 from datetime import date, timedelta
 
-_REPO = os.environ.get("R10_REPO", os.path.expanduser("~/workspace/hockey-manager-r10"))
+_REPO = os.environ.get(
+    "R10_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _REPO)
 
 # Stub dressing_room before story_arcs can lazily import it: the real
@@ -439,8 +440,19 @@ bare = types.SimpleNamespace()
 check("bare app process_day -> 0", sa.process_day(bare, DAY) == 0)
 check("bare app deliver -> 0", sa.deliver_followups(bare, DAY) == 0)
 
-print()
-if check.failed:
-    print(f"{check.failed} FAILURES")
-    sys.exit(1)
-print("ALL CHECKS PASSED")
+def test_script_checks_all_pass():
+    """Aggregate: every module-level check() above recorded zero failures.
+
+    The file's historical script convention runs its checks at import; this
+    test makes the result visible to pytest instead of only to the script's
+    exit code.
+    """
+    assert check.failed == 0, f"{check.failed} check(s) failed"
+
+
+if __name__ == "__main__":
+    print()
+    if check.failed:
+        print(f"{check.failed} FAILURES")
+        sys.exit(1)
+    print("ALL CHECKS PASSED")
