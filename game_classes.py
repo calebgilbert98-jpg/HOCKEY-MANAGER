@@ -4887,6 +4887,13 @@ class League:
                 pass
             return
 
+        # Save the caller's RNG state: the solver below reseeds `random`
+        # for reproducible schedules, and it must not perturb downstream
+        # randomness. (R16b: the old `random.seed(int(time.time()))` reset
+        # here poisoned the global stream with wall-clock time, breaking
+        # fixed-seed determinism for the fantasy draft and every sim day
+        # after a cold schedule build.)
+        _rng_state = random.getstate()
         random.seed(rotation_seed)  # For reproducible but varied schedules
         
         self.schedule.clear()
@@ -4928,9 +4935,9 @@ class League:
         # structure skips the constraint solver entirely.
         self._save_schedule_template(season_year, rotation_seed)
 
-        # Reset random seed to avoid affecting other game elements
-        import time
-        random.seed(int(time.time()))
+        # Restore the caller's RNG state (see above): schedule generation
+        # leaves the global stream exactly as it found it.
+        random.setstate(_rng_state)
 
     def _generate_authentic_nhl_schedule(self, nhl_teams, season_year, rotation_seed):
         """Generate NHL schedule with simple chronological approach to prevent consecutive games."""
