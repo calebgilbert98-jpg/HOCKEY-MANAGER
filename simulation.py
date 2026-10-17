@@ -8,12 +8,18 @@
 
 import random
 from collections import deque
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import math
 from enum import Enum
 from game_classes import Team, Player, PlayerPosition
 try:
-    from dressing_room import DressingRoom
-except ImportError:
+    DressingRoom = importlib.import_module("dressing_room").DressingRoom
+except (ImportError, AttributeError):
+    # R18: dressing_room defines no module-level DressingRoom (only
+    # DressingRoomView), so the old `from dressing_room import DressingRoom`
+    # always raised ImportError -> None. Catch AttributeError too to keep
+    # the identical always-None behavior.
     DressingRoom = None
 from player_archetypes import (
     get_archetype, complementarity, matchup_multiplier, get_tendency,
@@ -2511,7 +2517,7 @@ class GameSim:
         Additive and safe: impact_system.nudge_momentum caps the swing.
         """
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             _dr.apply_pregame_talks(self)
             _dr.apply_practice_edge(self)
         except Exception:
@@ -2520,7 +2526,7 @@ class GameSim:
     def _apply_dressing_room_intermission(self):
         """Module 03: intermission talks move the third-period needle."""
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             _dr.apply_intermission_talk(self)
         except Exception:
             pass

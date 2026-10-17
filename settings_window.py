@@ -286,7 +286,7 @@ class SettingsView(ctk.CTkFrame):
         honest notice and return True for clients (callers should disable
         their sim controls)."""
         try:
-            from windows import _mp_is_client as _is_client
+            from mp_routes import _mp_is_client as _is_client
             if not _is_client(getattr(self, "app", None)):
                 return False
         except Exception:

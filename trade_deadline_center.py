@@ -1671,7 +1671,7 @@ class QuickTradeInterface(_DeadlineScreenBase):
             # Local send_offer would execute the trade on the snapshot.
             _routed = False
             try:
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 import trade_engine as _te
                 _is_pick = _te._is_pick
                 _offer = {
@@ -1891,7 +1891,7 @@ class EmergencyTradeInterface(_DeadlineScreenBase):
         # block registry lives there and the market listings sync from it.
         # Local listing would diverge the snapshot.
         try:
-            from windows import _mp_route as _route, \
+            from mp_routes import _mp_route as _route, \
                 _mp_is_client as _is_client
             if _is_client(self.app):
                 _ids = [str(getattr(p, "id", "")) for p in expiring]

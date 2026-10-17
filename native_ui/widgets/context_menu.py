@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QComboBox, QTextEdit,
     QPushButton, QRadioButton, QButtonGroup, QGroupBox,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 
@@ -748,7 +750,7 @@ class EntityContextMenu(QMenu):
         """Build the ShortlistManager exactly the way the Shortlist
         screen's _manager() does (same per-save storage key)."""
         try:
-            import shortlist_system as _ss
+            _ss = importlib.import_module("shortlist_system")
             gm = _resolve_gm(game)
             save_key = None
             try:
@@ -849,9 +851,10 @@ class EntityContextMenu(QMenu):
         if not intensities:
             intensities = ["Light", "Standard", "Intensive"]
         try:
-            from enhanced_practice_system import (
-                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM,
-                PracticeEngine, ACTIVE_TRAINING_PROGRAMS)
+            FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+            INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
+            PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+            ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
         except Exception as exc:
             QMessageBox.warning(
                 main_window, "Training Unavailable",
@@ -945,8 +948,8 @@ class EntityContextMenu(QMenu):
         gm = _resolve_gm(game)
         prog, history, engine = None, None, None
         try:
-            from enhanced_practice_system import (
-                PracticeEngine, ACTIVE_TRAINING_PROGRAMS)
+            PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+            ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
             if gm is not None and getattr(gm, "training_programs", None):
                 prog = gm.training_programs.get(pid)
             if prog is None:

@@ -17,6 +17,7 @@ separate surface for diagnosing tactics, not decorating box scores.
 """
 
 from collections import Counter, defaultdict
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
 
 
 MAX_GAMES = 10
@@ -419,7 +420,21 @@ def analyst_report(team):
 # AnalyticsHubView -- the dedicated screen
 # ---------------------------------------------------------------------------
 
-class AnalyticsHubView(__import__("customtkinter").CTkFrame):
+try:
+    # R18: importlib, not __import__ or a static import -- the bundle
+    # hard-excludes customtkinter and PyInstaller follows every static
+    # import statement (but not importlib/__import__ calls).
+    _AnalyticsHubBase = importlib.import_module("customtkinter").CTkFrame
+except ImportError:
+    # Headless/bundle: the view is never instantiated without customtkinter.
+    # Fall back to object so the module imports cleanly; the manager.py
+    # stub-guard installs a fake customtkinter (CTkFrame=object) into
+    # sys.modules before the view is actually used, which resolves to the
+    # same object base here.
+    _AnalyticsHubBase = object
+
+
+class AnalyticsHubView(_AnalyticsHubBase):
     """Analytics Hub: shot/xG maps, momentum graphs, zone entries, line
     trends, and Ask the Analyst. The player-card Analytics tabs are
     preserved untouched -- this is the tactics-diagnosis surface."""
@@ -428,12 +443,21 @@ class AnalyticsHubView(__import__("customtkinter").CTkFrame):
             "Ask the Analyst"]
 
     def __init__(self, parent, app=None):
-        import customtkinter as ctk
-        from ctk_theme import (
-            init_ctk_theme, primary_button, secondary_button, heading,
-            body, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER, TEXT,
-            TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE, ROW_HOVER,
-            ROW_SELECTED,
+        # R18: importlib, not static imports -- PyInstaller follows every
+        # static import statement, which would pull customtkinter/ctk_theme
+        # (both hard-excluded) into the native bundle's module graph.
+        import importlib as _il
+        ctk = _il.import_module("customtkinter")
+        _ct = _il.import_module("ctk_theme")
+        (init_ctk_theme, primary_button, secondary_button, heading,
+         body, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER, TEXT,
+         TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE, ROW_HOVER,
+         ROW_SELECTED) = (
+            _ct.init_ctk_theme, _ct.primary_button, _ct.secondary_button,
+            _ct.heading, _ct.body, _ct.TEAL, _ct.TEAL_HOVER, _ct.BG,
+            _ct.PANEL, _ct.CARD, _ct.BORDER, _ct.TEXT, _ct.TEXT_DIM,
+            _ct.TEXT_FAINT, _ct.GOLD, _ct.GREEN, _ct.RED, _ct.BLUE,
+            _ct.ROW_HOVER, _ct.ROW_SELECTED,
         )
         self._ctk = ctk
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,

@@ -3,6 +3,8 @@
 # Team visual identity system with authentic NHL colors and styling
 
 from typing import (Dict, Optional)
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from dataclasses import dataclass
 
 @dataclass
@@ -511,7 +513,7 @@ def jersey_chip(parent, team_name, w=46, h=26):
 
     Unknown or missing names fall back to a neutral chip. Never raises.
     """
-    import tkinter as tk
+    tk = importlib.import_module("tkinter")
     cv = tk.Canvas(parent, width=w, height=h, highlightthickness=0, bd=0)
     try:
         colors = nhl_identity.get_team_colors(team_name)

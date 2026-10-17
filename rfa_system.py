@@ -39,6 +39,8 @@ Design rules:
 from __future__ import annotations
 
 import math
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -465,7 +467,7 @@ def _is_user_team(team) -> bool:
 def _market_value(player) -> int:
     """Best-effort market AAV using the game's own estimator when present."""
     try:
-        from windows import ContractNegotiationView
+        ContractNegotiationView = importlib.import_module("windows").ContractNegotiationView
         v = ContractNegotiationView._estimate_market_value(player)
         return int(v or 0)
     except Exception:
@@ -1614,7 +1616,7 @@ def execute_offer_sheet(league, offering_team, original_team, player,
     # Dressing room: poaching a man shakes the new room -- the room
     # reacts to WHO he is, bounded.
     try:
-        import dressing_room as _dr_arr
+        _dr_arr = importlib.import_module("dressing_room")
         _dr_arr.cascade_on_arrival(offering_team, player, how="offer sheet")
     except Exception:
         pass
@@ -1817,7 +1819,7 @@ def execute_offer_sheet_trade(league, offering_team, original_team, player,
         except Exception:
             pass
         try:
-            import dressing_room as _dr_arr
+            _dr_arr = importlib.import_module("dressing_room")
             _dr_arr.cascade_on_arrival(offering_team, player,
                                        how="offer sheet")
         except Exception:
@@ -1859,7 +1861,7 @@ def _ask_user_offering_trade_alt(app, offering_team, original_team, player,
         # OS-modal dialog. The surrounding offer-sheet resolution is
         # synchronous by design, so this stays on the blocking facade
         # rather than the async ask_card (restructure deferred to T2-Phase 2).
-        from popup_system import messagebox as _mb
+        _mb = importlib.import_module("popup_system").messagebox
     except Exception:
         return False
     try:

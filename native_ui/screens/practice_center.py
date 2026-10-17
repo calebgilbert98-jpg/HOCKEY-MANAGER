@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QSpinBox, QGroupBox, QScrollArea, QMessageBox,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -142,7 +144,7 @@ class PracticeCenterScreen(BaseScreen):
                 return eng
         # Build one directly (lazy: module needs customtkinter).
         try:
-            from enhanced_practice_system import PracticeEngine
+            PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
             eng = PracticeEngine()
             try:
                 if self.game is not None:
@@ -156,8 +158,8 @@ class PracticeCenterScreen(BaseScreen):
     def _enums(self):
         """(PracticeType, PracticeIntensity) or (None, None)."""
         try:
-            from enhanced_practice_system import (
-                PracticeType, PracticeIntensity)
+            PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+            PracticeIntensity = importlib.import_module("enhanced_practice_system").PracticeIntensity
             return PracticeType, PracticeIntensity
         except Exception:
             return None, None

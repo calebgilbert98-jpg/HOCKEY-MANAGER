@@ -4,6 +4,8 @@
 # Provides intelligent season progression and milestone detection
 
 from datetime import date, timedelta
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from enum import Enum
 from dataclasses import dataclass
 from typing import (List, Optional, Callable)
@@ -401,7 +403,7 @@ class AutomatedSeasonFlow:
     def _show_milestone_notification(self, milestone):
         """Show notification for important milestones"""
         try:
-            from popup_system import messagebox
+            messagebox = importlib.import_module("popup_system").messagebox
             
             messagebox.showinfo(
                 f"Season Milestone: {milestone.name}",

@@ -22,6 +22,8 @@ a bad move. The user can always resolve manually.
 """
 
 from waiver_logic import is_waiver_eligible
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 
 def _player_overall(p):
@@ -230,8 +232,8 @@ def auto_run_practice(team, app=None):
       - High fatigue or injured: light or skip
     Returns (sessions_run, error_msg)."""
     try:
-        from enhanced_practice_system import (
-            PracticeType, PracticeIntensity)
+        PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+        PracticeIntensity = importlib.import_module("enhanced_practice_system").PracticeIntensity
     except Exception as e:
         return 0, f"Practice system unavailable: {e}"
     try:
@@ -247,7 +249,7 @@ def auto_run_practice(team, app=None):
     # never existed, and instantiating the ctk PracticeCenterView as a
     # fallback only ever failed (a Team is not a tkinter master).
     try:
-        from enhanced_practice_system import PracticeEngine
+        PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
         ps = PracticeEngine()
     except Exception as e:
         return 0, f"Could not init practice system: {e}"

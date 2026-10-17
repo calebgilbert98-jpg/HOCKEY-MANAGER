@@ -105,7 +105,7 @@ class ManagerHubView(ctk.CTkFrame):
             # MULTIPLAYER: route to the host; the board and roster morale
             # are canonical there. Local application would diverge.
             try:
-                from windows import _mp_route as _route, \
+                from mp_routes import _mp_route as _route, \
                     _mp_is_client as _is_client
                 if _is_client(self.app):
                     def _met(_msg=""):
@@ -770,7 +770,7 @@ class TeamTalkView(ctk.CTkFrame):
         # MULTIPLAYER: route the option to the host; the canonical room
         # state lives there. Local apply would diverge the snapshot.
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _opt = {k: option.get(k) for k in
                     ("label", "text", "boost", "morale", "fit")
                     if isinstance(option, dict)}

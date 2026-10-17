@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QComboBox, QSpinBox, QCheckBox, QDialog, QGroupBox,
     QButtonGroup,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
@@ -42,7 +44,7 @@ except Exception:
     _rs = None
 
 try:
-    import dressing_room as _dr
+    _dr = importlib.import_module("dressing_room")
 except Exception:
     _dr = None
 

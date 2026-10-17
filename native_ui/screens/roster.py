@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QInputDialog, QFrame, QGridLayout, QScrollArea, QTableWidget,
     QProgressBar, QHeaderView, QSizePolicy,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -563,7 +565,7 @@ class RosterScreen(BaseScreen):
             league = safe_call(lambda: getattr(gm, "league", None), context="roster/load_league")
             crisis = None
             try:
-                import dressing_room as _dr
+                _dr = importlib.import_module("dressing_room")
                 # Prefer a stored crisis flag; fall back to live detection.
                 dr = _dr.ensure_dressing_room_fields(team)
                 if dr.get("captaincy_crisis"):

@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
     QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -146,7 +148,7 @@ class ShortlistScreen(BaseScreen):
 
     def _manager(self):
         try:
-            import shortlist_system as _ss
+            _ss = importlib.import_module("shortlist_system")
             gm = safe_call(lambda: getattr(self.game, "game_manager", None),
                            context="shortlist/get_game_manager") or self.game
             save_key = None

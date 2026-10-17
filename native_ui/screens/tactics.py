@@ -43,6 +43,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QProgressBar, QAbstractItemView,
     QMessageBox,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer, QEvent
 
 import time
@@ -1598,7 +1600,7 @@ class TacticsScreen(BaseScreen):
     def _refresh_practice_labels(self):
         # dressing_room pulls in customtkinter at module scope; guard it.
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             self._foci_labels = {
                 k: v.get("label", k)
                 for k, v in _dr.PRACTICE_FOCI.items()}

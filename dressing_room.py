@@ -2410,7 +2410,7 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
         # MULTIPLAYER: route to the host; the canonical room state lives
         # there. Local give_talk would diverge the snapshot.
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _ctx = self._talk_context("pregame")
             if _route(self.app, "team_talk", {
                     "tone": tone, "situation": "pregame",
@@ -2442,7 +2442,7 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             tone, speaker = "calm", "coach"
         # MULTIPLAYER: route to the host (see _give_pregame_talk).
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _ctx = self._talk_context("intermission")
             if _route(self.app, "team_talk", {
                     "tone": tone, "situation": "intermission",

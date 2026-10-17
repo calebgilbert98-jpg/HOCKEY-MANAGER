@@ -34,6 +34,8 @@ Design rules (house style):
 from __future__ import annotations
 
 import logging
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import random
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -272,7 +274,7 @@ def _carousel_fired_date(coach_name: str,
     if not coach_name:
         return None
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         carousel = getattr(_dr, "COACH_CAROUSEL", None) or []
     except Exception:
         return None

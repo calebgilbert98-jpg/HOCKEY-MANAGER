@@ -658,7 +658,7 @@ class OfferSheetWindow(ctk.CTkFrame):
         # (window, compensation, cap, willingness, match) against the
         # canonical state. Result via ACTION_ACK/REJECT + STATE_SYNC.
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self.app, "offer_sheet", {
                     "player_id": str(getattr(p, "id", "")),
                     "aav": aav,

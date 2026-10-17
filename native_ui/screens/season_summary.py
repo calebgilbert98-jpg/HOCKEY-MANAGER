@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QScrollArea, QFrame, QPushButton, QAbstractItemView,
     QHeaderView,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -143,7 +145,7 @@ def _ceremony_script(game, league):
     """Engine's full ceremony script via awards_ceremony.build_ceremony_data
     over the thin proxy (same as the web route)."""
     try:
-        import awards_ceremony as ac
+        ac = importlib.import_module("awards_ceremony")
     except Exception:
         return []
     gm = _gm(game)

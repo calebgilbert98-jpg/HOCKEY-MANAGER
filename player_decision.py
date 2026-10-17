@@ -23,6 +23,8 @@ seeded lazily on first read.
 from __future__ import annotations
 
 import math
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -155,7 +157,7 @@ def _ovr(player) -> float:
 
 def _market_value(player) -> int:
     try:
-        from windows import ContractNegotiationView
+        ContractNegotiationView = importlib.import_module("windows").ContractNegotiationView
         v = ContractNegotiationView._estimate_market_value(player)
         if v:
             return int(v)
@@ -283,7 +285,7 @@ def _people_pull(player, team) -> Tuple[float, List[str]]:
 
 def _ledger(app) -> Any:
     try:
-        from main import get_ledger
+        get_ledger = importlib.import_module("main").get_ledger
         return get_ledger(app)
     except Exception:
         return None

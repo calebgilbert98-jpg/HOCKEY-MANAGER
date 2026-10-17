@@ -23,6 +23,8 @@ in BOTH engines (see docs/TACTICS_REWORK_GUIDE.md).
 """
 import math
 import random
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from typing import NamedTuple
 
 from collections import deque
@@ -1358,7 +1360,7 @@ class AdvancedGameSim:
         capped at +/-4% -- a nudge, not a rewrite.
         """
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             for team in (self.home_team, self.away_team):
                 boost = _dr.consume_pregame_boost(team)
                 name = team.team_name
@@ -1382,7 +1384,7 @@ class AdvancedGameSim:
     def _apply_dressing_room_intermission(self):
         """Module 03: second-intermission words move the third-period needle."""
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             diff = (self.score.get(self.home_team.team_name, 0)
                     - self.score.get(self.away_team.team_name, 0))
             for team, is_home in ((self.home_team, True),

@@ -263,7 +263,7 @@ def _position_breakdown(team):
 def _buyout_schedule(p):
     """(total, annual, byears, rows) via the game's real NHL buyout math."""
     try:
-        from windows import buyout_schedule
+        from buyout_math import buyout_schedule
         return buyout_schedule(p)
     except Exception:
         return 0, 0, 0, []

@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QFrame, QComboBox, QListWidget, QLineEdit, QButtonGroup, QScrollArea,
     QAbstractItemView, QMessageBox,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
@@ -202,7 +204,7 @@ def _loader():
     """Return (load_settings_fn, settings_path). Prefers the game's own
     settings_window module; falls back to the local mirror. Never raises."""
     try:
-        import settings_window as sw
+        sw = importlib.import_module("settings_window")
         path = os.path.join(os.path.dirname(os.path.abspath(sw.__file__)),
                             "settings.json")
         return sw.load_settings, path
@@ -237,7 +239,7 @@ def _defaults():
     mirror otherwise. Used by Reset to Defaults.
     """
     try:
-        import settings_window as sw
+        sw = importlib.import_module("settings_window")
         if hasattr(sw, "default_settings"):
             d = sw.default_settings()
         else:

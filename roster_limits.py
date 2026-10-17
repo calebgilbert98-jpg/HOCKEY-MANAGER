@@ -27,6 +27,8 @@ only reads them.
 """
 
 import random
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 # --- Limits -----------------------------------------------------------------
 ACTIVE_ROSTER_MAX = 23          # NHL 23-man active roster
@@ -942,7 +944,7 @@ def _stamp_recall_effects(team, player):
         except Exception:
             pass
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         _dr.cascade_on_arrival(team, player, how="callup", date_str="")
     except Exception:
         pass

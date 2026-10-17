@@ -6,6 +6,8 @@ Next step in Phase 2 implementation - Intelligent CPU team behaviors
 
 import random
 from dataclasses import dataclass
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from typing import List, Dict, Optional, Tuple, Any
 from enum import Enum
 from datetime import date, timedelta
@@ -409,7 +411,7 @@ class AITeamManager:
             # from the carousel first, then the FA pool by fit. Cheap
             # no-op when the bench is full. Never raises.
             try:
-                import dressing_room as _dr
+                _dr = importlib.import_module("dressing_room")
                 _dr.ai_hire_assistant_coach(
                     team, league=getattr(self, "_league_ref", None),
                     date_str=str(current_date)[:10])
@@ -556,7 +558,7 @@ class AITeamManager:
                 _gp = _w + _l + _otl
                 _pct = (2.0 * _w + _otl) / (2.0 * _gp) if _gp > 0 else 0.0
                 if _gp >= 20 and _pct < 0.300:
-                    from dressing_room import fire_coach as _fire_coach
+                    _fire_coach = importlib.import_module("dressing_room").fire_coach
                     _league = getattr(self, "_league_ref", None)
                     _coach_result = _fire_coach(
                         team, reason="fired",
@@ -1626,7 +1628,7 @@ class AITeamManager:
             # Dressing room: AI rooms react to WHO arrives, same as the
             # user's room -- even playing field.
             try:
-                import dressing_room as _dr_arr
+                _dr_arr = importlib.import_module("dressing_room")
                 _dr_arr.cascade_on_arrival(team, p, how="signing")
             except Exception:
                 pass
@@ -2149,7 +2151,7 @@ class AITeamManager:
                 except Exception:
                     pass
                 try:
-                    import dressing_room as _dr_arr
+                    _dr_arr = importlib.import_module("dressing_room")
                     _dr_arr.cascade_on_arrival(team, pl, how="signing")
                 except Exception:
                     pass

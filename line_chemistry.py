@@ -66,6 +66,8 @@ levers touched. Everything defensive: any failure returns neutral (1.0).
 from __future__ import annotations
 
 import math
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -84,7 +86,7 @@ except Exception:  # pragma: no cover
     _complementarity = None
 
 try:
-    from dressing_room import affinity as _affinity
+    _affinity = importlib.import_module("dressing_room").affinity
 except Exception:  # pragma: no cover
     _affinity = None
 

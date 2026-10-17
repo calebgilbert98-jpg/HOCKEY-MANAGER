@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMessageBox, QPushButton, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -112,7 +114,7 @@ class DressingRoomScreen(BaseScreen):
             # Real game method (dressing_room.give_talk path)
             result = None
             try:
-                import dressing_room as _dr
+                _dr = importlib.import_module("dressing_room")
                 if hasattr(_dr, "give_talk"):
                     team = _user_team(self.game)
                     result = _dr.give_talk(game, team, tone)
@@ -150,7 +152,7 @@ class DressingRoomScreen(BaseScreen):
         # Social groups
         self._groups_list.clear()
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             groups = []
             if hasattr(_dr, "get_social_groups"):
                 groups = _dr.get_social_groups(team) or []
@@ -180,7 +182,7 @@ class DressingRoomScreen(BaseScreen):
         # Also try the module
         if not feed:
             try:
-                import dressing_room as _dr
+                _dr = importlib.import_module("dressing_room")
                 if hasattr(_dr, "get_feed"):
                     feed = _dr.get_feed(team) or []
             except Exception:

@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
     QLineEdit, QSpinBox, QFormLayout,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
@@ -481,7 +483,7 @@ def _install_pending_session_repair():
     the screen registry, i.e. before any load).
     """
     try:
-        from save_load_system import GameSaveManager as _GSM
+        _GSM = importlib.import_module("save_load_system").GameSaveManager
         if getattr(_GSM, "_staff_chain_app_fallback", False):
             return
 

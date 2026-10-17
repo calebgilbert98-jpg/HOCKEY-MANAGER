@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QCheckBox, QScrollArea, QProgressDialog, QFileDialog, QGridLayout,
     QGroupBox, QApplication,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
@@ -1315,7 +1317,7 @@ class SetupScreen(BaseScreen):
         }
         # League selection -> DatabaseConfig (web parity via new_game_setup).
         try:
-            import new_game_setup as _ngs
+            _ngs = importlib.import_module("new_game_setup")
             wiz = _ngs.make_config(
                 mode="custom",
                 database_size=str(cfg["database_size"]).lower(),

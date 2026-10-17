@@ -766,7 +766,7 @@ class CheckinView(ctk.CTkFrame):
             # would diverge the snapshot.
             _routed = False
             try:
-                from windows import _mp_route as _route, \
+                from mp_routes import _mp_route as _route, \
                     _mp_is_client as _is_client
                 if _is_client(getattr(self, "app", None)):
                     _fields = {
