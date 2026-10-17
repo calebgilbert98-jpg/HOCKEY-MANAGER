@@ -643,6 +643,20 @@ class HockeyManagerGUI(tk.Tk):
                 self.quit()
                 return
             
+    def raise_mandatory_captains_window(self, team):
+        """R18: Tk-host hook for the engine's captaincy blocker.
+
+        GameManager._require_captaincy_choice calls this instead of
+        importing the Tk-only windows module itself, so the engine stays
+        importable in the native bundle (tkinter is hard-excluded there).
+        Modal and non-dismissible, exactly as the engine's old inline
+        MandatoryCaptainsWindow block behaved.
+        """
+        from windows import MandatoryCaptainsWindow
+        win = MandatoryCaptainsWindow(self, team=team)
+        win.grab_set()
+        win.wait_window()
+
     def get_live_cap(self) -> int:
         """Current league salary cap, delegated to the game manager.
 
@@ -8530,10 +8544,10 @@ class HockeyManagerGUI(tk.Tk):
         # Note: no NMC check here -- matches single-player, where buyouts
         # don't require the player's consent (only waivers/assignment do).
         try:
-            import windows as _w
+            from buyout_math import buyout_schedule
             # Tuple like the single-player view unpacks it:
             # (total_cost, annual_hit, buyout_years, rows).
-            _total, annual, byears, rows = _w.buyout_schedule(player)
+            _total, annual, byears, rows = buyout_schedule(player)
         except Exception as e:
             return False, f"Buyout failed: {e}"
         annual = int(annual or 0)
@@ -19805,7 +19819,7 @@ class HockeyManagerGUI(tk.Tk):
             # MULTIPLAYER: route the answer's effects to the host; the
             # bundle records the pending choice.
             if self._mp_client_mode():
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 _a = {k: ans.get(k) for k in
                       ("label", "morale_effect", "board_effect",
                        "fan_effect") if isinstance(ans, dict)}
@@ -19856,7 +19870,7 @@ class HockeyManagerGUI(tk.Tk):
             # MULTIPLAYER: route the option to the host (canonical room
             # state); the bundle records the pending choice.
             if self._mp_client_mode():
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 _o = {k: opt.get(k) for k in
                       ("label", "text", "boost", "morale", "fit")
                       if isinstance(opt, dict)}
@@ -19934,7 +19948,7 @@ class HockeyManagerGUI(tk.Tk):
             # MULTIPLAYER: route the answer's effects to the host (see
             # _answer_bundle_presser).
             if self._mp_client_mode():
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 _a = {k: ans.get(k) for k in
                       ("label", "morale_effect", "board_effect",
                        "fan_effect") if isinstance(ans, dict)}
@@ -21138,7 +21152,7 @@ class HockeyManagerGUI(tk.Tk):
     def send_to_ahl(self, player):
         # MP: route to host; the host applies waivers/NMC/rules canonically.
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "send_to_minors",
                       {"player_id": str(getattr(player, "id", ""))}):
                 return
@@ -21869,7 +21883,7 @@ class HockeyManagerGUI(tk.Tk):
         data = message.action_data or {}
         # MP: route to host instead of mutating the snapshot.
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _pid = str(getattr(self._find_inbox_player(data), "id", ""))
             if _route(self, "extend_contract", {
                     "player_id": _pid,
@@ -21950,7 +21964,7 @@ class HockeyManagerGUI(tk.Tk):
         # MP: route to the host (authoritative); the host marks the
         # canonical message done so the sync retires the buttons.
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "rfa_qualify", {
                     "message_id": str(getattr(message, "id", "")),
                     "player_id": str(player_id),
@@ -21992,7 +22006,7 @@ class HockeyManagerGUI(tk.Tk):
         """
         # MP: route to host (buyout_player protocol action exists).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _data = getattr(message, "action_data", None) or {}
             _person = self._find_inbox_player(_data)
             if _route(self, "buyout_player", {
@@ -22060,7 +22074,7 @@ class HockeyManagerGUI(tk.Tk):
         """
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "staff_renew", {
                     "message_id": str(getattr(message, "id", "")),
                     "staff_id": str(staff_id),
@@ -22105,7 +22119,7 @@ class HockeyManagerGUI(tk.Tk):
         """Inbox action: match an offer sheet or take the pick compensation."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "offer_sheet_match", {
                     "message_id": str(getattr(message, "id", "")),
                     "match": bool(match)}):
@@ -22129,7 +22143,7 @@ class HockeyManagerGUI(tk.Tk):
         pick compensation on a declined offer sheet."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "offer_sheet_trade_alt", {
                     "message_id": str(getattr(message, "id", "")),
                     "accept": bool(accept)}):
@@ -22152,7 +22166,7 @@ class HockeyManagerGUI(tk.Tk):
         """Inbox action: walk away from an arbitration award (48h window)."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "arbitration_walkaway", {
                     "message_id": str(getattr(message, "id", "")),
                     "walk_away": bool(walk_away)}):

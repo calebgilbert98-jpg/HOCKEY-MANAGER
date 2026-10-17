@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QScrollArea, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget, QMenu, QTextEdit,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -33,7 +35,7 @@ from native_ui.safe import safe_call
 # advanced analysis. Imported lazily so the screen still loads if a mainline
 # module is unavailable; the wrappers below fall back to identical semantics.
 try:
-    import scouting_window_helpers as _scout_helpers
+    _scout_helpers = importlib.import_module("scouting_window_helpers")
     import scouting as _scout_logic
     import trade_market as _trade_market
     _MAINLINE_SCOUT_HELPERS = True

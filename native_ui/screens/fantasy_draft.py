@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer
 
 from .base import BaseScreen
@@ -116,7 +118,7 @@ def _fmt_salary(v):
 
 def _fd_module():
     try:
-        import fantasy_draft as _fd
+        _fd = importlib.import_module("fantasy_draft")
         return _fd
     except Exception:
         return None

@@ -12,6 +12,8 @@ pickled into save files via to_dict()/from_dict().
 
 import math
 import random
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
@@ -763,7 +765,7 @@ def market_happiness_delta(player, team) -> Tuple[int, str]:
         homesick = delta < 0
         if homesick:
             try:
-                from dressing_room import clique_of
+                clique_of = importlib.import_module("dressing_room").clique_of
                 if clique_of(team, player) is not None:
                     delta += 2
                     reasons.append("his clique looks after him")

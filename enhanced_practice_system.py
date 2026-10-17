@@ -2277,7 +2277,7 @@ class PracticeCenterView(ctk.CTkFrame):
             # MP: route to the host; the host schedules against the
             # canonical state and the result comes back via ACK/REJECT.
             try:
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 _app = getattr(self, "app", None)
                 if _app is not None and _route(
                         _app, "start_practice_plan", {

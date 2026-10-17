@@ -85,7 +85,7 @@ def execute_buyout(league, team, player, season_year=None):
     (discoverable via team_name == "Free Agent", like every other path).
     Returns the (total_cost, annual_hit, buyout_years, rows) schedule.
     """
-    from windows import buyout_schedule
+    from buyout_math import buyout_schedule
     from trade_engine import clear_retention_state as _clr_ret
 
     total, annual, byears, rows = buyout_schedule(player)
@@ -234,7 +234,7 @@ def process_buyout_window(league, app=None, rng=None):
     without the user's decision.
     """
     r = rng or random.Random()
-    from windows import buyout_schedule
+    from buyout_math import buyout_schedule
 
     summary = {"ai_buyouts": [], "user_candidates": 0, "window_year": None}
     try:
@@ -323,7 +323,7 @@ def process_buyout_window(league, app=None, rng=None):
 
 
 def _candidate_card(p, c, ovr, cap_hit):
-    from windows import buyout_schedule
+    from buyout_math import buyout_schedule
     try:
         total, annual, byears, rows = buyout_schedule(p)
     except Exception:

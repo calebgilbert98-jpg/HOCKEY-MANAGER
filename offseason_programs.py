@@ -17,6 +17,8 @@ Storage: player.offseason_program = {
 """
 
 from datetime import date
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from typing import Dict, List, Optional, Tuple
 
 # Reuse the Development Center focus/intensity labels so the GM learns
@@ -95,9 +97,9 @@ def run_offseason_week(players, on_date=None) -> Dict[str, dict]:
     """
     results = {}
     try:
-        from enhanced_practice_system import (
-            PracticeEngine, FOCUS_TO_PRACTICE_TYPE,
-            INTENSITY_LABEL_TO_ENUM)
+        PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+        FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+        INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
     except Exception:
         return results
 

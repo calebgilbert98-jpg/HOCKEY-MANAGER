@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QGroupBox, QScrollArea, QMessageBox, QRadioButton,
     QButtonGroup, QLineEdit, QCheckBox, QFrame,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -179,7 +181,7 @@ class DevelopmentScreen(BaseScreen):
                 self._practice_engine = eng
                 return eng
         try:
-            from enhanced_practice_system import PracticeEngine
+            PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
             eng = PracticeEngine()
             self._practice_engine = eng
             try:
@@ -195,8 +197,8 @@ class DevelopmentScreen(BaseScreen):
     def _enums():
         """(PracticeType, PracticeIntensity) or (None, None)."""
         try:
-            from enhanced_practice_system import (
-                PracticeType, PracticeIntensity)
+            PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+            PracticeIntensity = importlib.import_module("enhanced_practice_system").PracticeIntensity
             return PracticeType, PracticeIntensity
         except Exception:
             return None, None
@@ -311,7 +313,7 @@ class DevelopmentScreen(BaseScreen):
             except Exception:
                 pass
         try:
-            from enhanced_practice_system import ACTIVE_TRAINING_PROGRAMS
+            ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
             sources.append(ACTIVE_TRAINING_PROGRAMS)
         except Exception:
             pass
@@ -389,7 +391,7 @@ class DevelopmentScreen(BaseScreen):
         removed = False
         gm, _team = self._gm_team()
         try:
-            from enhanced_practice_system import ACTIVE_TRAINING_PROGRAMS
+            ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
             sources = [ACTIVE_TRAINING_PROGRAMS]
         except Exception:
             sources = []
@@ -499,9 +501,9 @@ class DevelopmentScreen(BaseScreen):
                                 "Pick a training focus.")
             return
         try:
-            from enhanced_practice_system import (
-                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM,
-                ACTIVE_TRAINING_PROGRAMS)
+            FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+            INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
+            ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
         except Exception as e:
             QMessageBox.warning(self, "Assign Program",
                                 f"Training system unavailable: {e}")

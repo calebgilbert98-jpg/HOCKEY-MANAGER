@@ -4,6 +4,8 @@
 
 import random
 import itertools
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 import uuid
 from datetime import datetime, timedelta
 from enum import Enum, auto
@@ -475,7 +477,7 @@ _STINT_STAT_MAP = (
 def _team_abbr_safe(team_name):
     """Three-letter team code without risking a circular import."""
     try:
-        from playoff_system import team_abbr as _ta
+        _ta = importlib.import_module("playoff_system").team_abbr
         return _ta(team_name)
     except Exception:
         pass
@@ -8820,7 +8822,7 @@ class League:
         Idempotent: a no-op when this year's televised lottery already ran.
         """
         try:
-            from draft_lottery import run_lottery
+            run_lottery = importlib.import_module("draft_lottery").run_lottery
             stored = getattr(self, "lottery_results", None) or {}
             if year in stored and stored[year]:
                 return

@@ -4,6 +4,8 @@
 Pure logic, no GUI. Powers the Trade Center window and draft-day trades.
 """
 from __future__ import annotations
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 import random
 from dataclasses import dataclass, field
@@ -3881,7 +3883,7 @@ def _maybe_fire_trade_speculation(league, user_team, partner_team,
             return
         # Deliver to the league inbox via the standard pipeline.
         try:
-            import main as _main
+            _main = importlib.import_module("main")
             _deliver = getattr(_main, "deliver_headline", None)
             if _deliver is not None:
                 _deliver(league, _msg)
@@ -3947,7 +3949,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
         # Dressing-room cascade (module 03): the old room reacts to the
         # departure, the new room absorbs the arrival.
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             _dr.cascade_on_trade(old_team, traded=player, date_str=date_str)
             _dr.cascade_on_trade(new_team, arriving=player, date_str=date_str)
         except Exception:
@@ -4001,7 +4003,7 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
     # team is excluded because the user answers for themselves. Fires once
     # per side per trade, after the per-player cascades above.
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         moved_names = []
         for a in list(user_assets) + list(partner_assets):
             if isinstance(a, DraftPick):

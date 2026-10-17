@@ -35,6 +35,8 @@ Entry points:
 """
 
 import random
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 # Potential grade -> numeric ceiling (mirrors the draft board's grade scale).
 _GRADE_SCORE = {
@@ -817,10 +819,10 @@ def _incoming_call_dialog(view, caller, gives, gets, prosp, overall, why):
     the old askyesno -- the draft clock freezes while the phone is live.
     Returns 'accept' | 'counter' | 'decline'.
     """
-    import customtkinter as ctk
+    ctk = importlib.import_module("customtkinter")
     import trade_engine as te
     try:
-        from popup_system import InGamePopup
+        InGamePopup = importlib.import_module("popup_system").InGamePopup
     except Exception:
         return 'decline'
     try:
@@ -969,11 +971,11 @@ def _user_counter_flow(view, caller, gives, gets, overall):
     Returns (new_gives, new_gets, waiver_assets) if the AI accepts (or
     counters back once), else None.
     """
-    import customtkinter as ctk
-    import tkinter as tk
+    ctk = importlib.import_module("customtkinter")
+    tk = importlib.import_module("tkinter")
     import trade_engine as te
     try:
-        from popup_system import InGamePopup
+        InGamePopup = importlib.import_module("popup_system").InGamePopup
     except Exception:
         return None
     ct = getattr(view, '_ct', None) or {}
@@ -1157,9 +1159,12 @@ def incoming_offer_for_user(view):
         # dialog. Dismiss = safe default (decline). The draft clock
         # freezes while the call is parked (view._ddt_call_parked, checked
         # in _sp_clock_tick and process_draft_pick).
-        from popup_system import (ask_card, cards_available,
-                                  get_pending_session, register_pending_item,
-                                  unregister_pending_item, PAUSES_DAY)
+        ask_card = importlib.import_module("popup_system").ask_card
+        cards_available = importlib.import_module("popup_system").cards_available
+        get_pending_session = importlib.import_module("popup_system").get_pending_session
+        register_pending_item = importlib.import_module("popup_system").register_pending_item
+        unregister_pending_item = importlib.import_module("popup_system").unregister_pending_item
+        PAUSES_DAY = importlib.import_module("popup_system").PAUSES_DAY
         _app = view.app
         _sess_id = f"draft_call:{overall}"
         _sess = get_pending_session(_app, _sess_id)

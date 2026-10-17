@@ -24,6 +24,8 @@ All public functions never raise.
 """
 
 import random as _random
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 CONSIDERATION_MIN_DAYS = 3
 CONSIDERATION_MAX_DAYS = 7
@@ -618,7 +620,7 @@ def _sign_ai_winner(app, league, player, team, aav, years, signing_bonus=0):
         except Exception:
             pass
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             _dr.cascade_on_arrival(team, player, how="signing")
         except Exception:
             pass

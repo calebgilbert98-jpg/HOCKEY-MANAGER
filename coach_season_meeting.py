@@ -92,6 +92,8 @@ needs Chris's approval -- flagged in the build report):
 from __future__ import annotations
 
 from datetime import date
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -978,7 +980,7 @@ def season_meeting_blocker(app: Any) -> Optional[Dict[str, Any]]:
                 open_season_meeting_window(app)
             except Exception as e:
                 try:
-                    from popup_system import messagebox
+                    messagebox = importlib.import_module("popup_system").messagebox
                     messagebox.showwarning(
                         "Season Meeting",
                         "The season-meeting screen failed to open:\n%s\n\n"
@@ -1044,7 +1046,8 @@ def open_season_meeting_window(app: Any) -> Any:
     ``store_mandate(game_manager.user_team, {...})`` with the keys
     documented in this module's docstring.
     """
-    from coach_meeting_window import open_season_meeting
+    open_season_meeting = importlib.import_module(
+        "coach_meeting_window").open_season_meeting
     return open_season_meeting(app)
 
 

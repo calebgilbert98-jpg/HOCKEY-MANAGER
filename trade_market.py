@@ -43,6 +43,8 @@ resolved at evaluation time, so save/load never pickles live objects.
 """
 
 from datetime import date, timedelta
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 # ---------------------------------------------------------------------------
 # Tuning knobs (all module-level; Chris approves changes)
@@ -3306,7 +3308,7 @@ def _shortlist_mgr(league=None):
     (D15: no more cross-save contamination through the global file);
     legacy global otherwise. None if unavailable. Never raises."""
     try:
-        from shortlist_system import ShortlistManager
+        ShortlistManager = importlib.import_module("shortlist_system").ShortlistManager
         key = league_shortlist_key(league) if league is not None else None
         return ShortlistManager(save_key=key)
     except Exception:

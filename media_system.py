@@ -5,6 +5,8 @@
 
 import random
 from datetime import date, timedelta
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from dataclasses import dataclass
 from typing import (List, Optional)
 from enum import Enum
@@ -417,7 +419,7 @@ class MediaSystem:
         # Dressing-room cascade (module 03): the room hears the presser.
         # cascade_on_press normalizes both dict and MediaEvent shapes.
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             _team = getattr(self.game_manager, "user_team", None)
             if _team is not None:
                 _dr.cascade_on_press(_team, event, response_choice)

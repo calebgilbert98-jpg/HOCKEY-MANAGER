@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -107,10 +108,12 @@ class SeasonMeetingScreen(BaseScreen):
     def _init_meeting(self):
         """Set up team/coach and start or resume the conversation."""
         try:
-            from coach_meeting_window import (
-                _get_head_coach, _coach_name, _board_expectation,
-                _meeting_reason, _opening_line, coach_assessment,
-            )
+            _get_head_coach = importlib.import_module("coach_meeting_window")._get_head_coach
+            _coach_name = importlib.import_module("coach_meeting_window")._coach_name
+            _board_expectation = importlib.import_module("coach_meeting_window")._board_expectation
+            _meeting_reason = importlib.import_module("coach_meeting_window")._meeting_reason
+            _opening_line = importlib.import_module("coach_meeting_window")._opening_line
+            coach_assessment = importlib.import_module("coach_meeting_window").coach_assessment
             from coach_season_meeting import is_meeting_pending
         except ImportError:
             self._show_degraded("Meeting system unavailable.")
@@ -227,7 +230,8 @@ class SeasonMeetingScreen(BaseScreen):
 
     def _coach_name(self):
         try:
-            from coach_meeting_window import _coach_name, _get_head_coach
+            _coach_name = importlib.import_module("coach_meeting_window")._coach_name
+            _get_head_coach = importlib.import_module("coach_meeting_window")._get_head_coach
             coach = _get_head_coach(self.team)
             return _coach_name(coach) or "Coach"
         except Exception:
@@ -279,14 +283,13 @@ class SeasonMeetingScreen(BaseScreen):
             "roster's strength and the board's mandate.")
         self._clear_options()
         try:
-            from coach_meeting_window import (
-                _EXPECT_LABELS, expectation_options,
-            )
+            _EXPECT_LABELS = importlib.import_module("coach_meeting_window")._EXPECT_LABELS
+            expectation_options = importlib.import_module("coach_meeting_window").expectation_options
             from coach_season_meeting import coach_assessment as _ca
             # expected_pace may not exist; use default
             pace = {}
             try:
-                from coach_meeting_window import expected_pace
+                expected_pace = importlib.import_module("coach_meeting_window").expected_pace
                 pace = expected_pace()
             except ImportError:
                 pass
@@ -303,7 +306,7 @@ class SeasonMeetingScreen(BaseScreen):
         self._set_prompt("Set the rookie playing-time stance.")
         self._clear_options()
         try:
-            from coach_meeting_window import _ROOKIE_LABELS
+            _ROOKIE_LABELS = importlib.import_module("coach_meeting_window")._ROOKIE_LABELS
             for key in ("heavy", "earned", "sheltered", "none"):
                 label, desc = _ROOKIE_LABELS.get(key, (key, ""))
                 self._option_button(
@@ -318,7 +321,7 @@ class SeasonMeetingScreen(BaseScreen):
             "fits the way he coaches.")
         self._clear_options()
         try:
-            from coach_meeting_window import _identity_presets
+            _identity_presets = importlib.import_module("coach_meeting_window")._identity_presets
             for key, preset in _identity_presets().items():
                 name = preset.get("name", key)
                 tagline = preset.get("tagline", "")
@@ -350,7 +353,7 @@ class SeasonMeetingScreen(BaseScreen):
             "this beat is mandatory.")
         self._clear_options()
         try:
-            from coach_meeting_window import _DEPLOYER_OPTIONS
+            _DEPLOYER_OPTIONS = importlib.import_module("coach_meeting_window")._DEPLOYER_OPTIONS
             for key, label, full in _DEPLOYER_OPTIONS:
                 self._option_button(
                     f'{label}: "{full}"',
@@ -360,10 +363,11 @@ class SeasonMeetingScreen(BaseScreen):
 
     def _stage_closing(self):
         try:
-            from coach_meeting_window import (
-                build_mandate, mandate_summary_lines,
-                _identity_presets, _closing_line, _season_label,
-            )
+            build_mandate = importlib.import_module("coach_meeting_window").build_mandate
+            mandate_summary_lines = importlib.import_module("coach_meeting_window").mandate_summary_lines
+            _identity_presets = importlib.import_module("coach_meeting_window")._identity_presets
+            _closing_line = importlib.import_module("coach_meeting_window")._closing_line
+            _season_label = importlib.import_module("coach_meeting_window")._season_label
             from coach_season_meeting import build_mandate as _bm
         except ImportError:
             self._set_prompt("Error loading mandate builder.")
@@ -406,9 +410,8 @@ class SeasonMeetingScreen(BaseScreen):
         self._set_prompt("Meeting complete -- sealed agreement:")
         self._clear_options()
         try:
-            from coach_meeting_window import (
-                mandate_summary_lines, _identity_presets,
-            )
+            mandate_summary_lines = importlib.import_module("coach_meeting_window").mandate_summary_lines
+            _identity_presets = importlib.import_module("coach_meeting_window")._identity_presets
             mandate = getattr(self.team, "season_mandate", None) or {}
             presets = _identity_presets()
             summary = "\n".join(
@@ -438,8 +441,14 @@ class SeasonMeetingScreen(BaseScreen):
     def _advance_to(self, stage):
         self.draft["stage"] = stage
         try:
-            from coach_meeting_window import _stage_prompt \
-                as _sp  # may not exist
+            # R18: getattr missing -> ImportError (not AttributeError), so the
+            # surrounding `except ImportError` keeps its exact old behavior
+            # (_stage_prompt was never a module-level name; this always
+            # fell through).
+            try:
+                _sp = importlib.import_module("coach_meeting_window")._stage_prompt
+            except AttributeError as _e:
+                raise ImportError(str(_e))
             prompt = _sp(stage)
             if prompt:
                 self._log("sys", prompt)
@@ -468,12 +477,13 @@ class SeasonMeetingScreen(BaseScreen):
             return  # stale click
 
         try:
-            from coach_meeting_window import (
-                _expectation_reaction, _rookie_reaction,
-                _tactics_reaction, _lines_reaction,
-                _tactics_owner_reaction, _deployer_reaction,
-                apply_trust_delta,
-            )
+            _expectation_reaction = importlib.import_module("coach_meeting_window")._expectation_reaction
+            _rookie_reaction = importlib.import_module("coach_meeting_window")._rookie_reaction
+            _tactics_reaction = importlib.import_module("coach_meeting_window")._tactics_reaction
+            _lines_reaction = importlib.import_module("coach_meeting_window")._lines_reaction
+            _tactics_owner_reaction = importlib.import_module("coach_meeting_window")._tactics_owner_reaction
+            _deployer_reaction = importlib.import_module("coach_meeting_window")._deployer_reaction
+            apply_trust_delta = importlib.import_module("coach_meeting_window").apply_trust_delta
             from coach_season_meeting import coach_assessment
         except ImportError:
             return
@@ -556,7 +566,7 @@ class SeasonMeetingScreen(BaseScreen):
 
     def _seal(self, mandate):
         try:
-            from coach_meeting_window import _finalize_meeting
+            _finalize_meeting = importlib.import_module("coach_meeting_window")._finalize_meeting
             ok = safe_call(lambda: _finalize_meeting(self.team, mandate), False, context="season_meeting/_seal")
         except ImportError:
             ok = False

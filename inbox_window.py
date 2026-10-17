@@ -1278,7 +1278,7 @@ class InboxView(ctk.CTkFrame):
         # answer; the host executes against canonical state and the next
         # sync refreshes. Local accept would diverge the snapshot.
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self.app, "answer_ai_offer",
                       {"negotiation_id": str(getattr(neg, "id", "")),
                        "decision": "accept"}):
@@ -1303,7 +1303,7 @@ class InboxView(ctk.CTkFrame):
         # MULTIPLAYER: route the walk-away so the host closes the
         # negotiation; a local decline would be wiped by the next sync.
         try:
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self.app, "answer_ai_offer",
                       {"negotiation_id": str(getattr(neg, "id", "")),
                        "decision": "decline"}):

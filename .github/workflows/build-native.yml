@@ -426,3 +426,7 @@ jobs:
       - name: Run engine smoke tests (R16b)
         shell: bash
         run: python -m pytest tests/test_r16b_engine_smoke.py -v
+
+      - name: Run bundle-hygiene tests (R18)
+        shell: bash
+        run: python -m pytest tests/test_r18_bundle_hygiene.py -v

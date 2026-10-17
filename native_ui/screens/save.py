@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QInputDialog,
     QHeaderView, QAbstractItemView, QGridLayout, QApplication,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 
@@ -91,7 +93,7 @@ def _suppress_tk_popups():
     bridge._web_suppress_tk_popups): failures report in-page, never as
     hidden Tk popups in the Qt process."""
     try:
-        import tkinter.messagebox as _mb
+        _mb = importlib.import_module("tkinter.messagebox")
     except Exception:
         yield
         return

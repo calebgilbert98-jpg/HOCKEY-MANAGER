@@ -58,6 +58,8 @@ TUNING CONSTANTS -- the check-in trust scale (NEEDS CHRIS'S APPROVAL):
 from __future__ import annotations
 
 from datetime import date
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -240,7 +242,7 @@ def team_games_played(team: Any) -> int:
 def team_points_pace(team: Any) -> Tuple[float, int]:
     """(points-pace 0..1, games played). dressing_room's helper first."""
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         fn = getattr(_dr, "_team_points_pace", None)
         if callable(fn):
             return fn(team, None)
@@ -474,7 +476,7 @@ def room_state(team: Any) -> Dict[str, Any]:
     except Exception:
         pass
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         atm = _dr.room_atmosphere(team) or {}
         out["atmosphere_label"] = str(atm.get("label") or out["atmosphere_label"])
         out["atmosphere_score"] = float(atm.get("score") or 0.0)

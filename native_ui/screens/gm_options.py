@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QLabel, QPushButton, QComboBox,
     QFrame, QMessageBox, QSizePolicy,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from .base import BaseScreen
@@ -253,7 +255,7 @@ class GMOptionsScreen(BaseScreen):
         import json
         import os
         try:
-            import main as _main
+            _main = importlib.import_module("main")
             base = os.path.dirname(os.path.abspath(_main.__file__))
         except Exception:
             base = os.path.dirname(os.path.abspath(__file__))

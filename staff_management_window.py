@@ -1615,7 +1615,7 @@ class StaffManagementView(ctk.CTkFrame):
             # the canonical staff list lives there. Local removal would
             # diverge the snapshot.
             try:
-                from windows import _mp_route as _route, \
+                from mp_routes import _mp_route as _route, \
                     _mp_is_client as _is_client
                 if _is_client(self.app):
                     _sent = 0
@@ -2314,7 +2314,7 @@ class StaffManagementView(ctk.CTkFrame):
             # MP: route to the host; the host applies severance + trust
             # shock against the canonical state.
             try:
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 _app = getattr(self, "app", None) or getattr(self, "parent", None)
                 if _app is not None and _route(
                         _app, "fire_staff",

@@ -10,14 +10,23 @@ try:
     import customtkinter as ctk
 except ImportError:
     # Headless environments (sim bots, servers) don't have customtkinter.
-    # This module is mostly GUI views, but it also hosts pure helpers
-    # (e.g. buyout_schedule) that headless code paths import -- e.g. the
-    # offseason buyout window. Import must not fail headless.
+    # This module is mostly GUI views. The pure helpers it used to host
+    # (buyout_schedule, _mp_route/_mp_is_client) moved to the tkinter-free
+    # buyout_math / mp_routes modules in R18 (the native bundle
+    # hard-excludes tkinter); they are re-exported below for the legacy
+    # Tk call sites. Import must not fail headless.
     ctk = None
 
 # View base: ctk.CTkFrame when the GUI toolkit is present, plain object
 # headless (views are never instantiated without a GUI).
 _CTkFrameBase = ctk.CTkFrame if ctk is not None else object
+# R18: the pure MP-routing helpers live in the tkinter-free mp_routes
+# module now (the bundle hard-excludes tkinter, so engine code imports
+# them from there). Re-exported here so legacy Tk call sites keep working.
+from mp_routes import _mp_is_client, _mp_route
+# R18: buyout math lives in the tkinter-free buyout_math module; aliased
+# here so the legacy windows.buyout_schedule wrapper below keeps working.
+from buyout_math import buyout_schedule as _buyout_schedule_impl
 from game_classes import (StaffRole, PlayerPosition, to_100_scale,
     position_label,)
 import random
@@ -26,67 +35,6 @@ import re
 from player_context_menu import PlayerContextMenu, add_player_context_menu
 from ui_widgets import PillButton
 from manager_career import morale_label
-
-
-def _mp_is_client(app):
-    """True when this app instance is an MP client (not host, not SP)."""
-    try:
-        return getattr(app, "mp_client", None) is not None
-    except Exception:
-        return False
-
-
-def _mp_route(app, action, params, on_sent=None):
-    """Route a management action to the host in MP client mode.
-
-    Returns True when routed -- the caller must NOT mutate local state.
-    The host validates, applies to the canonical state, and the next
-    STATE_SYNC refreshes the UI (the action_ack/action_rejected toast
-    confirms the outcome). Returns False on the host / in single-player,
-    where the caller keeps its normal local behavior.
-
-    If the send itself fails, the action is CONSUMED (True): the caller
-    must not fall through to its local branch, which would mutate a
-    snapshot the next sync wipes. The user gets an honest error instead,
-    and on_sent is NOT called -- success UX must live in on_sent, never
-    after this call, or a failed send would show a false confirmation.
-    """
-    try:
-        client = getattr(app, "mp_client", None)
-        if client is None:
-            return False
-        if getattr(app, "_mp_spectator", False):
-            try:
-                messagebox.showinfo(
-                    "Spectating",
-                    "You're watching as a spectator -- claim a team to "
-                    "manage.")
-            except Exception:
-                pass
-            return True
-        p = dict(params or {})
-        team = getattr(app, "user_team", None)
-        p.setdefault("team_id",
-                     getattr(team, "team_name", "") if team else "")
-        try:
-            client.send_action(action, p)
-        except Exception as e:
-            try:
-                messagebox.showerror(
-                    "Not Sent",
-                    f"Couldn't reach the host ({e}). Nothing changed -- "
-                    f"try again.")
-            except Exception:
-                pass
-            return True
-        if on_sent is not None:
-            try:
-                on_sent()
-            except Exception:
-                pass
-        return True
-    except Exception:
-        return False
 
 
 def _sfont(family, size, weight=""):
@@ -6973,7 +6921,7 @@ class ScoutingView(_CTkFrameBase):
         # MP: route the region clear to the host.
         if self.selected_scout:
             try:
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
             except ImportError:
                 _route = None
             if _route is not None and _route(
@@ -17581,23 +17529,12 @@ def buyout_schedule(player):
     """NHL buyout math. Returns (total_cost, annual_hit, buyout_years, rows).
 
     rows: list of (season_offset, cap_hit, savings) for each buyout year.
+
+    R18: the implementation lives in the tkinter-free ``buyout_math``
+    module (the bundle hard-excludes tkinter). This wrapper keeps the
+    legacy ``windows.buyout_schedule`` import path working.
     """
-    salary = player.contract.salary
-    years = player.contract.years_remaining
-    if years <= 0 or salary <= 0:
-        return 0, 0, 0, []
-    fraction = 1 / 3 if player.age < 26 else 2 / 3
-    total_cost = salary * years * fraction
-    buyout_years = 2 * years
-    annual = total_cost / buyout_years
-    rows = []
-    for i in range(1, buyout_years + 1):
-        if i <= years:
-            savings = salary - annual
-        else:
-            savings = -annual
-        rows.append((i, annual, savings))
-    return total_cost, annual, buyout_years, rows
+    return _buyout_schedule_impl(player)
 
 
 

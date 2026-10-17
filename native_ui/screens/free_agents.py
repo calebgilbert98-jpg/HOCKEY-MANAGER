@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QWidget, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QIntValidator
 
@@ -381,7 +383,7 @@ def _market_data(game):
 
 def _frenzy_active(game):
     try:
-        from event_day_hubs import is_free_agency_day
+        is_free_agency_day = importlib.import_module("event_day_hubs").is_free_agency_day
         d = safe_call(lambda: getattr(game, "current_date", None), context="free_agents/frenzy_date")
         return bool(is_free_agency_day(d))
     except Exception:

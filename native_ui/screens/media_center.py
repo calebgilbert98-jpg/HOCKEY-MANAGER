@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QSlider, QTabWidget, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 
 from ..dialogs import modal as _modal
@@ -570,7 +572,7 @@ class MediaCenterScreen(BaseScreen):
     def _run_press_cascade(self, event, response_choice, ms):
         """Dressing-room cascade the backend runs for dict events only."""
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
             team = safe_call(lambda: getattr(ms.game_manager, "user_team", None), context="media_center/user_team")
             if team is not None:
                 _dr.cascade_on_press(team, event, response_choice)

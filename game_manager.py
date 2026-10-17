@@ -8,6 +8,11 @@ The Tkinter UI (HockeyManagerGUI in main.py) wraps GameManager.
 The native Qt UI (native_ui/) uses GameManager directly.
 """
 import random
+import importlib  # R18: deferred Tk-module imports below use
+                  # importlib.import_module (invisible to PyInstaller's
+                  # static analysis, which follows every static import
+                  # statement, even deferred ones). Same names bound,
+                  # same ImportError behavior in the bundle.
 from datetime import date, timedelta, datetime
 
 from game_classes import (
@@ -51,7 +56,7 @@ def _blockers_app():
     if app is not None:
         return app
     try:
-        import tkinter as _tk
+        _tk = importlib.import_module("tkinter")
         _root = _tk._default_root
         if _root is not None and hasattr(_root, "get_continue_state"):
             return _root
@@ -221,7 +226,7 @@ class GameManager:
         # any headless use) can save/load. Required for MP state_provider.
         self.save_manager = None
         try:
-            from save_load_system import GameSaveManager as _GSM
+            _GSM = importlib.import_module("save_load_system").GameSaveManager
             self.save_manager = _GSM(self)
         except Exception:
             pass
@@ -285,7 +290,7 @@ class GameManager:
         try:
             debug_print("DEBUG: Attempting to import progress_window...")
             # Import progress window
-            from progress_window import DatabaseGenerationProgress
+            DatabaseGenerationProgress = importlib.import_module("progress_window").DatabaseGenerationProgress
             debug_print("DEBUG: Progress window import successful")
             
             debug_print("DEBUG: Attempting to import database_generator...")
@@ -557,7 +562,7 @@ class GameManager:
 
         print(f"Collected {len(all_nhl_players)} players for fantasy draft")
 
-        from fantasy_draft import FantasyDraftManager
+        FantasyDraftManager = importlib.import_module("fantasy_draft").FantasyDraftManager
         mgr = FantasyDraftManager(nhl_teams, all_nhl_players)
         # Propagate the game's salary-cap setting into the draft config so
         # the cap/floor guards respect it (the default config always has it
@@ -2194,11 +2199,18 @@ NHL League Office""",
         if mgr is None:
             self._captaincy_choice_pending = True
             return False
+        # R18: the Tk-only MandatoryCaptainsWindow lives in the legacy
+        # windows module, which the native bundle must not import (tkinter
+        # is hard-excluded). The legacy Tk app exposes
+        # raise_mandatory_captains_window(); other hosts (native Qt,
+        # headless) leave _captaincy_choice_pending armed and raise their
+        # own blocker -- identical to the old ImportError fail-soft.
+        raise_fn = getattr(app, "raise_mandatory_captains_window", None)
+        if raise_fn is None:
+            self._captaincy_choice_pending = True
+            return False
         try:
-            from windows import MandatoryCaptainsWindow
-            win = MandatoryCaptainsWindow(app, team=team)
-            win.grab_set()
-            win.wait_window()
+            raise_fn(team)
         except Exception:
             self._captaincy_choice_pending = True
             return False
@@ -2736,7 +2748,7 @@ NHL League Office""",
             return False, "No player selected."
         if self._mp_client_mode():
             try:
-                from windows import _mp_route as _route
+                from mp_routes import _mp_route as _route
                 if _route(self, "call_up",
                           {"player_id": str(getattr(player, "id", ""))}):
                     return True, None
@@ -2758,7 +2770,7 @@ NHL League Office""",
         except AttributeError:
             return False, "No active roster available."
         try:
-            import dressing_room as _dr_arr
+            _dr_arr = importlib.import_module("dressing_room")
             _dr_arr.cascade_on_arrival(
                 self.user_team, player, how="callup",
                 date_str=str(getattr(self, "current_date", "")))
@@ -2985,7 +2997,7 @@ NHL League Office""",
             pass
         # Dressing room: the room reacts to WHO arrives, bounded.
         try:
-            import dressing_room as _dr_arr
+            _dr_arr = importlib.import_module("dressing_room")
             _dr_arr.cascade_on_arrival(
                 claiming_team, player, how="waiver claim",
                 date_str=str(getattr(self, "current_date", "")))
@@ -3095,7 +3107,7 @@ NHL League Office""",
         data = message.action_data or {}
         # MP: route to host instead of mutating the snapshot.
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _pid = str(getattr(self._find_inbox_player(data), "id", ""))
             if _route(self, "extend_contract", {
                     "player_id": _pid,
@@ -3205,7 +3217,7 @@ NHL League Office""",
         """Inbox action: walk away from an arbitration award (48h window)."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "arbitration_walkaway", {
                     "message_id": str(getattr(message, "id", "")),
                     "walk_away": bool(walk_away)}):
@@ -3244,7 +3256,7 @@ NHL League Office""",
         """
         # MP: route to host (buyout_player protocol action exists).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             _data = getattr(message, "action_data", None) or {}
             _person = self._find_inbox_player(_data)
             if _route(self, "buyout_player", {
@@ -3306,7 +3318,7 @@ NHL League Office""",
         """Inbox action: match an offer sheet or take the pick compensation."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "offer_sheet_match", {
                     "message_id": str(getattr(message, "id", "")),
                     "match": bool(match)}):
@@ -3330,7 +3342,7 @@ NHL League Office""",
         pick compensation on a declined offer sheet."""
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "offer_sheet_trade_alt", {
                     "message_id": str(getattr(message, "id", "")),
                     "accept": bool(accept)}):
@@ -3354,7 +3366,7 @@ NHL League Office""",
         # MP: route to the host (authoritative); the host marks the
         # canonical message done so the sync retires the buttons.
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "rfa_qualify", {
                     "message_id": str(getattr(message, "id", "")),
                     "player_id": str(player_id),
@@ -3396,7 +3408,7 @@ NHL League Office""",
         """
         # MP: route to the host (authoritative).
         if self._mp_client_mode():
-            from windows import _mp_route as _route
+            from mp_routes import _mp_route as _route
             if _route(self, "staff_renew", {
                     "message_id": str(getattr(message, "id", "")),
                     "staff_id": str(staff_id),
@@ -3763,9 +3775,9 @@ NHL League Office""",
         # BLOCKS_ADVANCE entry -- dialogs never block the day, their parent
         # flows might.
         try:
-            from popup_system import (get_pending_items as _gpi,
-                                      BLOCKS_ADVANCE as _BA,
-                                      PAUSES_DAY as _PD)
+            _gpi = importlib.import_module("popup_system").get_pending_items
+            _BA = importlib.import_module("popup_system").BLOCKS_ADVANCE
+            _PD = importlib.import_module("popup_system").PAUSES_DAY
             for _it in _gpi(self, kinds=(_BA, _PD)):
                 _iid = _it.get("id")
                 if any(b.get("id") == _iid for b in blockers):
@@ -3780,7 +3792,7 @@ NHL League Office""",
                     # The question is waiting where it was left: re-present
                     # any unanswered card parked for that screen.
                     try:
-                        from popup_system import represent_screen_questions
+                        represent_screen_questions = importlib.import_module("popup_system").represent_screen_questions
                         represent_screen_questions(self, _s, parent=self)
                     except Exception:
                         pass
@@ -4925,7 +4937,7 @@ NHL League Office""",
         # can explain the number (qualitative signal only, never the
         # multiplier).
         try:
-            from popup_system import get_negotiation_session as _gns
+            _gns = importlib.import_module("popup_system").get_negotiation_session
             _nsess = _gns(self, person, defaults={})
             if _nsess is not None:
                 _nsess["scarcity_signal"] = _scarc_sig3
@@ -5078,7 +5090,7 @@ NHL League Office""",
             # Dressing room: a new face in the room -- the room reacts to
             # WHO he is (blue-chip hype, veteran gravity), bounded.
             try:
-                import dressing_room as _dr_arr
+                _dr_arr = importlib.import_module("dressing_room")
                 _dr_arr.cascade_on_arrival(
                     self.user_team, person, how="signing",
                     date_str=str(getattr(self, "current_date", "")))
@@ -5530,7 +5542,7 @@ NHL League Office""",
             # so rest days actually rest. Only histories with fatigue > 0 are
             # visited, so this stays cheap league-wide.
             try:
-                import enhanced_practice_system as _eps
+                _eps = importlib.import_module("enhanced_practice_system")
                 _ph = getattr(_eps, "_SHARED_PLAYER_HISTORIES", None) or {}
                 if _ph:
                     _peng = _eps.PracticeEngine()
@@ -6443,7 +6455,7 @@ NHL League Office""",
                     _parked = False
                 if _parked:
                     try:
-                        from popup_system import represent_dialog
+                        represent_dialog = importlib.import_module("popup_system").represent_dialog
                         represent_dialog("playoffs_mode", "playoffs_mode_card",
                                          parent=self)
                     except Exception:
@@ -6514,7 +6526,7 @@ NHL League Office""",
             # bracket; No quick-sims headless. Dismiss = defer (the card
             # is re-presented if end_of_season is re-entered; the
             # _season_end_handled_year guard keeps it honest).
-            from popup_system import ask_card as _pm_ask_card
+            _pm_ask_card = importlib.import_module("popup_system").ask_card
             _set_playoffs_mode_app(self)
 
             def _pm_on_answer(_ans, _self=self):
@@ -6942,7 +6954,7 @@ NHL League Office""",
             """
             if not self._career_prompts_allowed():
                 return 1.0
-            from popup_system import get_pending_session
+            get_pending_session = importlib.import_module("popup_system").get_pending_session
             my_strength = self._career_team_strength(self.user_team)
             opp_strength = self._career_team_strength(opponent)
             situation = "favorite" if my_strength > opp_strength + 5 else (
@@ -7010,7 +7022,7 @@ NHL League Office""",
             # UI-agnostic: Tk dialog only when a Tk runtime is present.
             # Headless/Qt: fall through to neutral 1.0 via _ui_notify.
             try:
-                import tkinter as _tk
+                _tk = importlib.import_module("tkinter")
             except ImportError:
                 _tk = None
             if _tk is None:
@@ -7059,7 +7071,9 @@ NHL League Office""",
             State lives on the league object so it survives save/load.
             """
             try:
-                from event_day_hubs import get_todays_event, is_draft_day, prompt_event_day
+                get_todays_event = importlib.import_module("event_day_hubs").get_todays_event
+                is_draft_day = importlib.import_module("event_day_hubs").is_draft_day
+                prompt_event_day = importlib.import_module("event_day_hubs").prompt_event_day
             except ImportError as e:
                 debug_print(f"Event-day hubs unavailable: {e}")
                 return
@@ -7577,7 +7591,7 @@ NHL League Office""",
                 _msig = ""
                 _ss3, _spos3 = "balanced", None
                 try:
-                    from popup_system import get_negotiation_session as _gns3
+                    _gns3 = importlib.import_module("popup_system").get_negotiation_session
                     from salary_cap_system import \
                         scarcity_signal_text as _sst3
                     _ns3 = _gns3(self, person, defaults={})
@@ -8058,7 +8072,7 @@ NHL League Office""",
             ticks. User and AI teams run the same engine; only the choices
             differ (the GM's vs automated)."""
             try:
-                import dressing_room as _dr
+                _dr = importlib.import_module("dressing_room")
                 league = getattr(self, "league", None)
                 teams = list(getattr(league, "teams", []) or [])
                 date_str = ""
@@ -8963,9 +8977,11 @@ NHL League Office""",
             Development Center window.
             """
             try:
-                from enhanced_practice_system import (
-                    PracticeEngine, PracticeType, ACTIVE_TRAINING_PROGRAMS,
-                    FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+                PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+                PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+                ACTIVE_TRAINING_PROGRAMS = importlib.import_module("enhanced_practice_system").ACTIVE_TRAINING_PROGRAMS
+                FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+                INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
                 from datetime import date
             except Exception:
                 return
@@ -9089,7 +9105,7 @@ NHL League Office""",
             D1: coach_instruction is the user's explicit game-day call,
             forwarded to open_pbp_window (applied via the standard channel).
             """
-            from pbp_visual_sim import open_pbp_window
+            open_pbp_window = importlib.import_module("pbp_visual_sim").open_pbp_window
 
             # Deployment directive: same direction-cache fill as the batch path.
             try:
@@ -10001,7 +10017,7 @@ NHL League Office""",
                 if busy:
                     if overlay is None or not overlay.is_showing:
                         try:
-                            from day_sim_loading import DaySimLoadingOverlay
+                            DaySimLoadingOverlay = importlib.import_module("day_sim_loading").DaySimLoadingOverlay
                             overlay = DaySimLoadingOverlay(self)
                             self._day_sim_overlay = overlay
                         except Exception:
@@ -10045,14 +10061,14 @@ NHL League Office""",
             # selected states) and the game visualizer wear the team color.
             try:
                 if getattr(self, 'user_team', None):
-                    import ctk_theme
+                    ctk_theme = importlib.import_module("ctk_theme")
                     from team_identity_system import accent_for_team
                     accent, hover, _text = accent_for_team(self.user_team.team_name)
                     ctk_theme.set_team_accent(accent, hover, _text)
                     # Plain-tkinter dashboard reads modern_ui.AppColors at
                     # build time -- keep it in step (ACCENT_BG is a whisper
                     # of the accent over the window background).
-                    from modern_ui import AppColors
+                    AppColors = importlib.import_module("modern_ui").AppColors
                     AppColors.ACCENT = accent
                     AppColors.ACCENT_DIM = hover
                     AppColors.ACCENT_BG = _mix_hex(accent, "#0e0e11", 0.85)
@@ -10675,7 +10691,7 @@ NHL League Office""",
             if getattr(self, "_bulk_simming", False):
                 human = [r.get("player") for r in candidates[:3]]
             else:
-                import awards_ceremony as ac
+                ac = importlib.import_module("awards_ceremony")
                 human = ac.collect_human_vezina_ballot(self, candidates)
             if human:
                 ballots.append(human)
@@ -10869,7 +10885,7 @@ NHL League Office""",
         Generating here -- before the screen opens -- fixes every UI at
         the source instead of porting a generator per UI.
         """
-        from playoff_system import PlayoffBracket
+        PlayoffBracket = importlib.import_module("playoff_system").PlayoffBracket
         league = getattr(self, "league", None)
         if league is None:
             return None
@@ -10903,7 +10919,7 @@ NHL League Office""",
         existing _playoffs_complete() then sees the league bracket's
         champion. Additive: the windowed path is untouched.
         """
-        from playoff_system import PlayoffBracket
+        PlayoffBracket = importlib.import_module("playoff_system").PlayoffBracket
         bracket = self._ensure_playoff_bracket()
         if bracket is None:
             return
@@ -11597,10 +11613,10 @@ NHL League Office""",
         # Note: no NMC check here -- matches single-player, where buyouts
         # don't require the player's consent (only waivers/assignment do).
         try:
-            import windows as _w
+            from buyout_math import buyout_schedule
             # Tuple like the single-player view unpacks it:
             # (total_cost, annual_hit, buyout_years, rows).
-            _total, annual, byears, rows = _w.buyout_schedule(player)
+            _total, annual, byears, rows = buyout_schedule(player)
         except Exception as e:
             return False, f"Buyout failed: {e}"
         annual = int(annual or 0)
@@ -11664,7 +11680,7 @@ NHL League Office""",
         team.roster.append(player)
         # Dressing room: first-time NHL arrival only (guarded inside).
         try:
-            import dressing_room as _dr_arr
+            _dr_arr = importlib.import_module("dressing_room")
             _dr_arr.cascade_on_arrival(
                 team, player, how="callup",
                 date_str=str(getattr(self, "current_date", "")))
@@ -12775,8 +12791,9 @@ NHL League Office""",
         center makes -- can_practice gate, then execute_practice against
         the canonical player (skill gain + fatigue land on real state)."""
         try:
-            from enhanced_practice_system import (
-                PracticeEngine, PracticeType, PracticeIntensity)
+            PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+            PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+            PracticeIntensity = importlib.import_module("enhanced_practice_system").PracticeIntensity
         except Exception:
             return False, "Practice system isn't available."
         player = self._mp_team_player(team, params.get("player_id", ""))
@@ -12864,7 +12881,7 @@ NHL League Office""",
                 return False, f"Press conference failed: {e}"
             return True, f"Presser answered ({_kind})."
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
         except Exception:
             return False, "Dressing room isn't available."
         stance = str(params.get("stance", "professional")
@@ -13610,8 +13627,8 @@ NHL League Office""",
         """Set training programs: writes the same game_manager.
         training_programs entries the practice window creates."""
         try:
-            from enhanced_practice_system import (
-                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+            FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+            INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
             from datetime import date as _date
         except Exception:
             return False, "Practice system isn't available."
@@ -13644,9 +13661,9 @@ NHL League Office""",
         # (gm.training_programs[player.id]) and runs a first session
         # immediately through the practice engine. String keys would
         # never match the int-keyed lookup in _process_training_programs.
-        from enhanced_practice_system import (
-            PracticeEngine, FOCUS_TO_PRACTICE_TYPE,
-            INTENSITY_LABEL_TO_ENUM)
+        PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
+        FOCUS_TO_PRACTICE_TYPE = importlib.import_module("enhanced_practice_system").FOCUS_TO_PRACTICE_TYPE
+        INTENSITY_LABEL_TO_ENUM = importlib.import_module("enhanced_practice_system").INTENSITY_LABEL_TO_ENUM
         _engine = PracticeEngine()
         _ptype = FOCUS_TO_PRACTICE_TYPE.get(focus)
         _intensity = INTENSITY_LABEL_TO_ENUM.get(intensity)
@@ -14041,7 +14058,7 @@ NHL League Office""",
             pass
         # Dressing room: the room reacts to WHO arrives, bounded.
         try:
-            import dressing_room as _dr_arr
+            _dr_arr = importlib.import_module("dressing_room")
             _dr_arr.cascade_on_arrival(
                 team, player, how="signing",
                 date_str=str(getattr(self, "current_date", "")))
@@ -14102,8 +14119,8 @@ NHL League Office""",
         if player is None:
             return False, "That player isn't on your club."
         try:
-            from enhanced_practice_system import (
-                PracticeType, PracticeIntensity)
+            PracticeType = importlib.import_module("enhanced_practice_system").PracticeType
+            PracticeIntensity = importlib.import_module("enhanced_practice_system").PracticeIntensity
             ptype = PracticeType(params.get("practice_type", ""))
             intensity = PracticeIntensity(params.get("intensity", ""))
             total = int(params.get("total_sessions", 0))
@@ -14116,7 +14133,7 @@ NHL League Office""",
             if engine is None:
                 # Fall back to a fresh engine (takes no constructor args;
                 # histories are module-level shared state).
-                from enhanced_practice_system import PracticeEngine
+                PracticeEngine = importlib.import_module("enhanced_practice_system").PracticeEngine
                 engine = PracticeEngine()
             result = engine.schedule_practice(player, ptype, intensity, total)
         except Exception as e:
@@ -14181,7 +14198,7 @@ NHL League Office""",
                 return False, f"Team talk failed: {e}"
             return True, str(reaction or "The room heard you.")
         try:
-            import dressing_room as _dr
+            _dr = importlib.import_module("dressing_room")
         except Exception:
             return False, "Dressing room isn't available."
         tone = str(params.get("tone", "calm") or "calm").lower()
@@ -14289,7 +14306,7 @@ NHL League Office""",
             # settings.json directly -- constructing a SettingsWindow here
             # used to flash a GUI and break headless/test use.
             try:
-                from settings_window import load_settings
+                load_settings = importlib.import_module("settings_window").load_settings
                 self.user_settings = load_settings()
             except Exception:
                 # Fallback to basic defaults
@@ -15573,7 +15590,7 @@ NHL League Office""",
                 _tsl.pack(anchor='w', padx=20)
                 # EHM/FM24: right-click a scorer -> player menu.
                 try:
-                    from player_context_menu import bind_player_context
+                    bind_player_context = importlib.import_module("player_context_menu").bind_player_context
                     bind_player_context(_tsl, player, self)
                 except Exception:
                     pass
@@ -15695,7 +15712,7 @@ NHL League Office""",
             except Exception:
                 pass
         import trade_engine as te
-        from popup_system import messagebox
+        messagebox = importlib.import_module("popup_system").messagebox
         league = getattr(self, "league", None)
         # Host's own clause players: single-player askyesnocancel.
         kept_in = list(in_players)
@@ -15954,7 +15971,7 @@ NHL League Office""",
         it pre-game, no re-ask). The view always rebuilds from the
         session's stored context: returning resumes the exact session.
         """
-        from manager_hub_window import TeamTalkView
+        TeamTalkView = importlib.import_module("manager_hub_window").TeamTalkView
         session_id = (sess or {}).get("id") if isinstance(sess, dict) else None
         tt = ((sess or {}).get("team_talk") or {}) if isinstance(sess, dict) else {}
         context = dict(tt.get("context") or {})
@@ -15994,7 +16011,7 @@ NHL League Office""",
                             boost = float(result)
                         except (TypeError, ValueError):
                             boost = 1.0
-                from popup_system import get_pending_session as _gps
+                _gps = importlib.import_module("popup_system").get_pending_session
                 s2 = _gps(self, session_id)
                 if s2 is not None:
                     s2["dialogs"]["talk"] = {
@@ -18033,8 +18050,7 @@ def launch_game_viewer_with_sim(home_team, away_team):
     """
     Run a full AdvancedGameSim and launch the professional GameViewer with real data
     """
-    import tkinter as tk
-    from GAME_VIEWER import launch_game_viewer
+    launch_game_viewer = importlib.import_module("GAME_VIEWER").launch_game_viewer
     
     print("Starting enhanced hockey simulation...")
     
@@ -18292,7 +18308,7 @@ def _blockers_app():
     if app is not None:
         return app
     try:
-        import tkinter as _tk
+        _tk = importlib.import_module("tkinter")
         _root = _tk._default_root
         if _root is not None and hasattr(_root, "get_continue_state"):
             return _root
@@ -18334,8 +18350,7 @@ def _continue_blockers_answer(session_id, dialog_id, value, **kwargs):
 
 
 try:
-    from popup_system import (register_dialog_resolver as
-                              _blockers_reg_resolver)
+    _blockers_reg_resolver = importlib.import_module("popup_system").register_dialog_resolver
     _blockers_reg_resolver("continue_blockers_answer",
                            _continue_blockers_answer)
 except Exception:

@@ -20,6 +20,8 @@
 
 import random
 import re
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from datetime import date
 from typing import List, Dict, Optional, Any, Tuple
 
@@ -3120,7 +3122,7 @@ def carousel_entry_for(coach: Any) -> Optional[Dict[str, Any]]:
     """Find a coach's COACH_CAROUSEL entry by id. None when he's not on the
     carousel. Never raises."""
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         carousel = getattr(_dr, "COACH_CAROUSEL", None) or []
         cid = getattr(coach, "id", None)
         for e in carousel:
@@ -3154,7 +3156,7 @@ def carousel_candidates_for_role(team: Any, job_role: str,
     """
     out: List[Dict[str, Any]] = []
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         carousel = list(getattr(_dr, "COACH_CAROUSEL", None) or [])
     except Exception:
         return out
@@ -3184,7 +3186,7 @@ def carousel_candidates_for_role(team: Any, job_role: str,
 def drop_from_carousel(coach: Any) -> bool:
     """Remove a coach from the carousel once hired. Never raises."""
     try:
-        import dressing_room as _dr
+        _dr = importlib.import_module("dressing_room")
         carousel = getattr(_dr, "COACH_CAROUSEL", None)
         if not isinstance(carousel, list):
             return False

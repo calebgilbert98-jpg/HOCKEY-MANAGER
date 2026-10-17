@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QWidget, QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
 )
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
@@ -119,7 +121,7 @@ def _bracket_payload(game):
 def _projection_payload(game):
     """Standings-based projection bracket (built on a copy, never the real one)."""
     try:
-        import playoff_system as ps
+        ps = importlib.import_module("playoff_system")
     except Exception:
         return {"available": False, "rounds": []}
     bracket = _bracket(game)
@@ -164,7 +166,7 @@ def _series_index(game):
 def _series_detail(game, series_id):
     """Series detail dict: status, tape, games, storylines, watch, road ahead."""
     try:
-        import playoff_system as ps
+        ps = importlib.import_module("playoff_system")
     except Exception:
         return {"found": False}
     found = _series_index(game).get(series_id)
@@ -176,7 +178,7 @@ def _series_detail(game, series_id):
             # Look up the projection bracket again for the raw series.
             bracket = _bracket(game)
             try:
-                import playoff_system as ps2
+                ps2 = importlib.import_module("playoff_system")
                 pbr = ps2.PlayoffBracket()
                 pbr.build_projection()
                 pbr.is_projection = True

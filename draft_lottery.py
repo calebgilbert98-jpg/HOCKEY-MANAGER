@@ -26,9 +26,13 @@ Wiring:
 
 import random
 from typing import Any, Dict, List, Optional
+import importlib  # R18: deferred Tk-module imports use importlib.import_module
+                  # (invisible to PyInstaller's static analysis).
 
 try:
-    import customtkinter as ctk
+    # R18: importlib, not a static import -- the bundle hard-excludes
+    # customtkinter and PyInstaller follows every static import statement.
+    ctk = importlib.import_module("customtkinter")
 except ImportError:
     # Headless environments (sim bots, servers) don't have customtkinter.
     # The lottery logic (run_lottery/lottery_reveal_text) is pure Python;
@@ -260,7 +264,7 @@ class LotteryRevealView(_LotteryRevealViewBase):
     """
 
     def __init__(self, parent, year, rows, on_done=None, app=None):
-        import tkinter as tk
+        tk = importlib.import_module("tkinter")
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
         self._close_screen = None  # set by show_screen()
@@ -284,10 +288,16 @@ class LotteryRevealView(_LotteryRevealViewBase):
         # components (ctk_theme). No emoji headings, no double-dash,
         # body text at the 12px floor through ui_scale.
         # (customtkinter is imported at module level.)
-        from ctk_theme import (init_ctk_theme, heading, body, primary_button,
-                               secondary_button, wire_focus_ring,
-                               PANEL, BORDER, GOLD)
-        from ui_scale import scaled
+        init_ctk_theme = importlib.import_module("ctk_theme").init_ctk_theme
+        heading = importlib.import_module("ctk_theme").heading
+        body = importlib.import_module("ctk_theme").body
+        primary_button = importlib.import_module("ctk_theme").primary_button
+        secondary_button = importlib.import_module("ctk_theme").secondary_button
+        wire_focus_ring = importlib.import_module("ctk_theme").wire_focus_ring
+        PANEL = importlib.import_module("ctk_theme").PANEL
+        BORDER = importlib.import_module("ctk_theme").BORDER
+        GOLD = importlib.import_module("ctk_theme").GOLD
+        scaled = importlib.import_module("ui_scale").scaled
         init_ctk_theme()
         self.configure(fg_color="transparent")
 
@@ -350,7 +360,7 @@ class LotteryRevealView(_LotteryRevealViewBase):
     # -- Tier-B session ---------------------------------------------------
     def _write_session(self, complete=False):
         try:
-            from popup_system import get_pending_session
+            get_pending_session = importlib.import_module("popup_system").get_pending_session
             sess = get_pending_session(self.app, self._session_id)
             if sess is not None:
                 sess.update(
@@ -400,7 +410,12 @@ class LotteryRevealView(_LotteryRevealViewBase):
     def _board_append(self, row):
         # One house-grammar row per revealed pick: gold pick number, team,
         # and a signed movement figure -- never color alone.
-        from ctk_theme import heading, body, GOLD, GREEN, RED, TEXT_DIM
+        heading = importlib.import_module("ctk_theme").heading
+        body = importlib.import_module("ctk_theme").body
+        GOLD = importlib.import_module("ctk_theme").GOLD
+        GREEN = importlib.import_module("ctk_theme").GREEN
+        RED = importlib.import_module("ctk_theme").RED
+        TEXT_DIM = importlib.import_module("ctk_theme").TEXT_DIM
         mv = row["movement"]
         if mv > 0:
             mv_txt, mv_color = f"+{mv}", GREEN
