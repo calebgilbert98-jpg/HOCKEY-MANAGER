@@ -1,0 +1,28 @@
+# Puck Dynasty — pinned dependency lockfile (R20)
+#
+# Every installable dependency pinned to an EXACT version. CI installs ONLY
+# from this file (never loose specifiers like "Flask>=3.0.0" and never inline
+# pins like `pip install "PySide6==6.12.0"`); a "Verify lockfile is current"
+# step in every workflow plus tests/test_r20_lockfile_current.py enforce it.
+#
+# Build environment: CPython 3.11 (pinned in .github/workflows via
+# actions/setup-python). Wheels below exist for both 3.11 (CI, Windows) and
+# 3.12 (this dev VM, Linux).
+#
+# REGENERATION: after editing requirements.txt, re-resolve each loose
+# specifier against PyPI (e.g. `pip install --dry-run "Flask>=3.0.0"`), update
+# the == pin below, then re-run:
+#     python -m pytest tests/test_r20_lockfile_current.py
+#     python tests/test_r20_lockfile_current.py   # same check, stdlib only (CI uses this)
+#
+# Runtime (mirrors requirements.txt)
+PySide6==6.12.0        # native Qt UI launcher; was already inline-pinned in CI
+Pillow==11.0.0         # icons/graphics; was already inline-pinned in CI
+customtkinter==5.2.2   # legacy Tk windows (calendar_window.py etc.); latest 5.x --
+                       # 6.0.0 exists on PyPI but is untested against the legacy
+                       # windows, so the lock stays on the proven 5.x line
+Flask==3.1.3           # latest 3.x (web_ui/ was archived in R17; kept because
+                       # requirements.txt still names it)
+# Build / test tooling (previously inline-pinned or unpinned in workflows)
+pyinstaller==6.22.3    # bundle builder; was already inline-pinned in CI
+pytest==9.1.1          # CI test runner; was `pip install pytest` (unpinned)
