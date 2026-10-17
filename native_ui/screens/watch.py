@@ -217,7 +217,7 @@ def _team_name(t):
 
 def _abbr(name):
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from native_ui.utils import TEAM_ABBR
         hit = TEAM_ABBR.get(name)
         if hit:
             return hit

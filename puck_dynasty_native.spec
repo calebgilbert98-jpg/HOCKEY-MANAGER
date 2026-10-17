@@ -76,6 +76,9 @@ a = Analysis(
         'native_ui.widgets.attribute_bar',
         # Explicit: dialog modules. Some are imported inside functions
         # (deferred), which PyInstaller's static analysis can miss.
+        # R17: native_ui/utils.py is only imported inside functions too
+        # (to_web_team / TEAM_ABBR / _clean_position), so force it here.
+        'native_ui.utils',
         'native_ui.dialogs', 'native_ui.dialogs.modal',
         'native_ui.dialogs.sim_progress', 'native_ui.dialogs.daily_results',
         'native_ui.dialogs.boxscore', 'native_ui.dialogs.recall_picker',

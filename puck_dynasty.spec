@@ -28,22 +28,16 @@ a = Analysis(
         ('*.png', '.'),
         ('icons', 'icons'),
         ('assets', 'assets'),
-        ('web_ui/templates', 'web_ui/templates'),
-        ('web_ui/static', 'web_ui/static'),
+        # R17 (2026-10-16): web_ui/ archived as dead code (see
+        # archive/dead_2026-10-16/). main.py degrades gracefully without it
+        # (try/except ImportError -> _direct_launch()), so its templates,
+        # static assets, and Flask server are no longer bundled.
     ],
     hiddenimports=[
         'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
         'PIL.ImageFont', 'PIL.ImageOps',
         'customtkinter',
-        'flask', 'werkzeug',
-        'web_ui', 'web_ui.bridge', 'web_ui.shell',
-    ] + _first_party + [
-        # Auto-discover web UI screens: bridge.py loads them dynamically
-        # via importlib, so they must be force-included here.
-        'web_ui.screens.' + _f[:-3]
-        for _f in _os.listdir(_os.path.join(_spec_dir, 'web_ui', 'screens'))
-        if _f.endswith('.py') and _f != '__init__.py'
-    ],
+    ] + _first_party,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

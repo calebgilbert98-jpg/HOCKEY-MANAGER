@@ -39,7 +39,7 @@ def _resolve_gm(game):
 
 def _abbr(team):
     try:
-        from web_ui.bridge import to_web_team
+        from native_ui.utils import to_web_team
         t = to_web_team(team)
         return safe_call(lambda: t.get("abbr") or t.get("name"), "?", context="playoffs/_abbr") or "?"
     except Exception:
