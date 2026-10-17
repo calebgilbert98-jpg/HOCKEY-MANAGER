@@ -7,6 +7,11 @@ asserts the total count of >200-line methods never grows again.
 Baseline (2026-10-17, after the _process_single_game_result snapshot-preamble
 extraction): game_manager.py has 10 methods >200 lines, simulation.py has 6.
 Update the pinned baselines as further R21 chunks land.
+Chunk 5 (2026-10-17): five simulate_day pre-game helpers extracted
+(_sim_check_advance_gates, _sim_tick_deadline_clock,
+_sim_handle_phase_or_season_end, _sim_collect_todays_games,
+_sim_run_pregame_setup); simulate_day 699 -> 397 (still >200, so the
+over-200 counts are unchanged at 10/6).
 """
 import ast
 from pathlib import Path
@@ -20,7 +25,12 @@ COMPLETED = {
                         "_apply_game_result_body",
                         "_rollback_game_result_snapshots",
                         "_process_single_game_result",
-                        "_snapshot_game_result_state"],
+                        "_snapshot_game_result_state",
+                        "_sim_check_advance_gates",
+                        "_sim_tick_deadline_clock",
+                        "_sim_handle_phase_or_season_end",
+                        "_sim_collect_todays_games",
+                        "_sim_run_pregame_setup"],
     "simulation.py": [],
 }
 

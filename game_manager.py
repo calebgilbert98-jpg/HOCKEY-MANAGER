@@ -4079,8 +4079,14 @@ NHL League Office""",
         except Exception:
             pass
 
-    def simulate_day(self):
-        """Completely reworked daily simulation that properly handles all scenarios"""
+    def _sim_check_advance_gates(self):
+        """Pre-advance gates for simulate_day (R21 chunk 5).
+
+        Pure move: multiplayer advance gates, continue-state
+        blockers (headless auto-resolve, MP ready rescind),
+        and the double-click guard.
+        Returns True when the day must NOT advance.
+        """
         # MULTIPLAYER (Phase 2) advance gate: in host mode the day advances
         # ONLY through the EHM ready gate (_mp_fire_authorized_advance sets
         # _mp_advance_authorized). Any other path into here becomes a ready
@@ -4089,13 +4095,13 @@ NHL League Office""",
                 and not getattr(self, '_mp_advance_authorized', False):
             self._mp_toggle_host_ready()
             self._sim_early_return("mp-host-not-authorized: converted to ready vote")
-            return
+            return True
         if getattr(self, 'mp_client', None) is not None \
                 and getattr(self, 'mp_host', None) is None:
             self._mp_toast("Only the host advances days -- "
                            "use Ready to vote for the advance.")
             self._sim_early_return("mp-client: only host advances")
-            return
+            return True
         # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
         # be completed before the day advances. Show what is blocking and
         # offer a jump to it -- never silently do nothing.
@@ -4122,7 +4128,7 @@ NHL League Office""",
             except Exception:
                 _bids = ['?']
             self._sim_early_return(f"blockers-present: {','.join(_bids)}")
-            return
+            return True
 
         # Prevent double-clicks: the dashboard helper also paints
         # "Processing..." BEFORE the heavy work starts.
@@ -4130,9 +4136,15 @@ NHL League Office""",
         if (dashboard is not None
                 and getattr(getattr(dashboard, 'continue_btn', None), '_enabled', True) is False):
             self._sim_early_return("already-processing: continue button disabled")
-            return  # Already processing, ignore this click
-        self._set_continue_feedback(True, "Starting simulation...")
+            return True  # Already processing, ignore this click
 
+    def _sim_tick_deadline_clock(self):
+        """Trade-deadline clock tick for simulate_day (R21 chunk 5).
+
+        Pure move: the 30-minute deadline-day clock increment
+        (AI answers, countdown, MP sync).
+        Returns True when a tick ran (date held).
+        """
         # TRADE DEADLINE DAY: the day runs on a 30-minute game clock
         # (9:00 AM -> 3:00 PM ET) instead of a full-day sim. Each press of
         # Continue advances the clock one increment: AI GMs answer trade
@@ -4148,6 +4160,289 @@ NHL League Office""",
                     and getattr(self, '_mp_advance_authorized', False):
                 self._mp_after_deadline_tick()
             self._sim_early_return("deadline-clock-tick: 30-min increment, date held")
+            return True
+
+    def _sim_handle_phase_or_season_end(self):
+        """Season-phase routing for simulate_day (R21 chunk 5).
+
+        Pure move: playoff-day path, season-complete check,
+        and the last-game-date safety net.
+        Returns True when the day ended here.
+        """
+        # PLAYOFF PHASE (date-driven): once the bracket is alive, the
+        # date keeps advancing -- each Next Day sims that day's
+        # scheduled playoff games through the bracket. Bracket
+        # controls keep working: either path driving first wins
+        # (exactly-once is enforced in try_play_scheduled_game).
+        if self._playoffs_in_progress():
+            self._simulate_playoff_day()
+            self._sim_early_return("playoff-day: bracket path advanced the date")
+            return True
+
+        # Check for season end by games completed (primary trigger).
+        # The date cutoff is only a safety net set AFTER the last scheduled
+        # game, since the generated schedule can run past April 15.
+        season_complete = self._check_season_complete()
+
+        if season_complete:
+            self.end_of_season()
+            self._set_continue_feedback(False)
+            self._sim_early_return("season-complete: end_of_season ran")
+            return True
+
+        last_game_date = getattr(self, '_season_last_game_date', None)
+        if last_game_date is None:
+            try:
+                game_dates = [e.get('date') for e in self.league.schedule
+                              if isinstance(e, dict) and e.get('date')]
+                if game_dates:
+                    last_game_date = max(game_dates)
+            except Exception:
+                last_game_date = None
+            self._season_last_game_date = last_game_date
+        if last_game_date and self.current_date > last_game_date + timedelta(days=7):
+            self.end_of_season()
+            self._set_continue_feedback(False)
+            self._sim_early_return("past-last-game-plus-7: end_of_season ran")
+            return True
+
+    def _sim_collect_todays_games(self):
+        """Today's-games collection for simulate_day (R21 chunk 5).
+
+        Pure move: schedule scan with per-date cache,
+        tuple/dict formats, NHL-only filtering, playoff and
+        NHL_EVENT exclusions.
+        Returns the todays_games list.
+        """
+        # Get today's games - OPTIMIZED with early break and caching
+        todays_games = []
+            
+        # Use cached result if available (cache for current date)
+        cache_key = f"games_{self.current_date.isoformat()}"
+        if hasattr(self, '_schedule_cache') and cache_key in self._schedule_cache:
+            todays_games = self._schedule_cache[cache_key]
+        else:
+            # Create cache if it doesn't exist
+            if not hasattr(self, '_schedule_cache'):
+                self._schedule_cache = {}
+                
+            # Process schedule with early termination
+            games_found = 0
+            max_games_per_day = 16  # NHL typically has max 16 games per day
+                
+            for item in self.league.schedule:
+                # Early termination if we found enough games or past today's date
+                if games_found >= max_games_per_day:
+                    break
+                        
+                try:
+                    # Handle tuple format: (date, home_team, away_team) or (date, event_type, event_data)
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        item_date = item[0]
+                        # Skip if date is past today (schedule is sorted)
+                        if hasattr(item_date, 'year') and item_date > self.current_date:
+                            break
+                        # Process if date matches today
+                        if item_date == self.current_date:
+                            # Only add if it's a game (not an NHL event)
+                            if len(item) >= 3 and item[1] != 'NHL_EVENT':
+                                # Convert tuple to standardized dictionary format
+                                game_dict = {
+                                    'date': item[0],
+                                    'home_team': item[1],
+                                    'away_team': item[2],
+                                    'event_type': 'GAME'
+                                }
+                                todays_games.append(game_dict)
+                                games_found += 1
+                    # Handle dictionary format
+                    elif isinstance(item, dict):
+                        item_date = item.get('date')
+                        # Skip if date is past today
+                        if item_date and item_date > self.current_date:
+                            break
+                        # AHL (and any non-NHL league) games live on the
+                        # same schedule list but are NEVER day-simmed --
+                        # the minors get a lightweight generated ledger
+                        # (ahl_system), not game sims. Letting them into
+                        # todays_games burned the 16-game daily budget and
+                        # silently dropped real NHL games from the sim.
+                        if item.get('league', 'NHL') != 'NHL':
+                            continue
+                        # Playoff games live on the schedule for display
+                        # but are simmed through the playoff bracket --
+                        # never double-sim them here.
+                        if item.get('playoff'):
+                            continue
+                        # Process if date matches today
+                        if item_date == self.current_date and item.get('event_type') != 'NHL_EVENT':
+                            todays_games.append(item)
+                            games_found += 1
+                except (AttributeError, TypeError, IndexError) as e:
+                    # Skip malformed schedule items
+                    continue
+                
+            # Cache the result for potential future use
+            self._schedule_cache[cache_key] = todays_games
+                
+            # Clean old cache entries to prevent memory bloat
+            if len(self._schedule_cache) > 7:  # Keep only last week
+                oldest_key = min(self._schedule_cache.keys())
+                del self._schedule_cache[oldest_key]
+        return todays_games
+
+    def _sim_run_pregame_setup(self, todays_games, _resuming_after_bundle):
+        """Pre-game setup for simulate_day (R21 chunk 5).
+
+        Pure move: game-day inbox bundle gate, opening-night
+        captaincy checks plus jersey-number finalization
+        (immortality), and the D5 staff-renewal resolution.
+        Returns True when the bundle opened (the day waits
+        for the user's Watch/Quick pick).
+        """
+            
+        # Game-day inbox bundle: pre-match presser + team talk +
+        # Watch/Quick choice as one interactive inbox message instead
+        # of modals. When it opens, the day waits for the user's pick.
+        # Preseason exhibitions skip the bundle -- they're quick-simmed
+        # quietly, like the real league treats September hockey.
+        _all_preseason = bool(todays_games) and all(
+            isinstance(g, dict) and g.get('preseason')
+            for g in todays_games)
+        if (not _resuming_after_bundle and not _all_preseason
+                and self._maybe_open_game_day_bundle(todays_games)):
+            # Bundle opened: the day waits for the user's Watch/Quick
+            # pick. Dismiss the loading overlay so they can interact.
+            self._set_continue_feedback(False)
+            self._sim_early_return("game-day-bundle: waiting for user Watch/Quick pick")
+            return True
+
+        # NHL Rule 6.1: every club must have 1C+2As before opening night.
+        # Runs once per phase -- at the first preseason game day AND the
+        # first regular-season game day. Preseason: AI clubs auto-repair,
+        # human club gets a non-blocking reminder. Regular season: the
+        # mandatory picker blocks the human GM until captains are named.
+        # A valid existing captain is never overwritten.
+        if todays_games:
+            _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+            _phase = "preseason" if _all_preseason else "regular"
+            if (_sy is not None
+                    and getattr(self, '_captaincy_checked_phase', None)
+                    != (_sy, _phase)):
+                self._captaincy_checked_phase = (_sy, _phase)
+                _ut = getattr(self, 'user_team', None)
+                # Fantasy-draft deferral ends here: the first game day
+                # of preseason (or the regular season, if preseason was
+                # skipped) is when captains get set.
+                try:
+                    _dgm = getattr(self, 'game_manager', None)
+                    if _dgm is not None:
+                        _dgm._fantasy_draft_captaincy_deferred = False
+                        # Tell the captaincy check which phase we're in
+                        # so it knows whether to remind or block.
+                        _dgm._captaincy_check_phase = _phase
+                except Exception:
+                    pass
+                # NOTE (Item 7): the captaincy helpers live on
+                # GameManager, but this is a HockeyManagerGUI method --
+                # the old self._ensure_captaincy call here was dead
+                # (AttributeError, swallowed by the except below), so
+                # the opening-night check never ran. Route via the
+                # game manager to make both paths live.
+                _gm = getattr(self, 'game_manager', None)
+                for _t in (getattr(getattr(self, 'league', None),
+                                   'teams', None) or []):
+                    try:
+                        if _gm is not None:
+                            _nc = _gm._opening_night_captaincy_check(
+                                _t, _ut)
+                        else:
+                            _nc = None
+                        if _nc and _t is _ut:
+                            self.add_news(
+                                f"© {_nc} has been named captain of the "
+                                f"{getattr(_t, 'team_name', 'club')}.")
+                    except Exception:
+                        pass
+                # Preseason reminder: if the human club still needs
+                # captains, post a non-blocking inbox task. The
+                # regular-season phase will enforce it with the picker.
+                # Preseason reminder with visible timeline: the user sees
+                # exactly how long they have before the picker blocks
+                # at opening night.
+                try:
+                    if (_phase == "preseason" and _gm is not None
+                            and getattr(_gm, "_captaincy_choice_pending",
+                                        False)):
+                        _days, _ddl = _gm.get_captaincy_deadline_info()
+                        if _days is not None and _ddl is not None:
+                            _when = (f"Opening night is in {_days} day"
+                                     f"{'s' if _days != 1 else ''} "
+                                     f"({_ddl.strftime('%b %d')})")
+                        else:
+                            _when = "before opening night"
+                        self.add_news(
+                            f"Ⓒ Preseason tasks: name your captain (C) and "
+                            f"two alternates (A) {_when}. "
+                            f"Open the roster to choose -- the picker "
+                            f"will block you at opening night if "
+                            f"it's still not done. You can also assign "
+                            f"jersey numbers from the roster.")
+                except Exception:
+                    pass
+                # Numbers finalized with the captaincy: freed favorites
+                # get claimed unless the player started a legacy with
+                # his current number. Old saves backfill retired
+                # numbers first so nothing legal gets repaired away.
+                try:
+                    import immortality as _im2
+                    for _t in (getattr(getattr(self, 'league', None),
+                                       'teams', None) or []):
+                        try:
+                            if (getattr(_t, 'league_name', '')
+                                    != "National Hockey League"):
+                                continue
+                            _im2.seed_retired_numbers(_t)
+                            for _sw in _im2.finalize_team_numbers(_t, _sy):
+                                if _t is _ut and _sw.get("reason") == "favorite":
+                                    _p = _sw.get("player")
+                                    self.add_news(
+                                        f"{getattr(_p, 'full_name', 'A player')} "
+                                        f"switches from No. {_sw.get('old')} to "
+                                        f"No. {_sw.get('new')} -- his favorite "
+                                        f"number freed up.")
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+        # D5 follow-up: undecided staff renewal offers lapse at the
+        # first game day of the season (preseason or regular) -- the
+        # staffer walks to the free-agent pool. Once per season.
+        try:
+            _rsy = getattr(getattr(self, 'league', None),
+                           'season_year', None)
+            if (_rsy is not None
+                    and getattr(self, '_renewals_resolved_year', None)
+                    != _rsy):
+                self._renewals_resolved_year = _rsy
+                import staff_renewals as _srr
+                for _rl in (_srr.resolve_pending_renewals(
+                        self.league) or []):
+                    try:
+                        self.add_news("🧑‍💼 " + str(_rl))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def simulate_day(self):
+        """Completely reworked daily simulation that properly handles all scenarios"""
+        if self._sim_check_advance_gates():
+            return
+        self._set_continue_feedback(True, "Starting simulation...")
+
+        if self._sim_tick_deadline_clock():
             return
 
         # Resuming after the game-day inbox bundle: daily maintenance
@@ -4158,41 +4453,7 @@ NHL League Office""",
             self._continue_after_bundle = False
 
         try:
-            # PLAYOFF PHASE (date-driven): once the bracket is alive, the
-            # date keeps advancing -- each Next Day sims that day's
-            # scheduled playoff games through the bracket. Bracket
-            # controls keep working: either path driving first wins
-            # (exactly-once is enforced in try_play_scheduled_game).
-            if self._playoffs_in_progress():
-                self._simulate_playoff_day()
-                self._sim_early_return("playoff-day: bracket path advanced the date")
-                return
-
-            # Check for season end by games completed (primary trigger).
-            # The date cutoff is only a safety net set AFTER the last scheduled
-            # game, since the generated schedule can run past April 15.
-            season_complete = self._check_season_complete()
-
-            if season_complete:
-                self.end_of_season()
-                self._set_continue_feedback(False)
-                self._sim_early_return("season-complete: end_of_season ran")
-                return
-
-            last_game_date = getattr(self, '_season_last_game_date', None)
-            if last_game_date is None:
-                try:
-                    game_dates = [e.get('date') for e in self.league.schedule
-                                  if isinstance(e, dict) and e.get('date')]
-                    if game_dates:
-                        last_game_date = max(game_dates)
-                except Exception:
-                    last_game_date = None
-                self._season_last_game_date = last_game_date
-            if last_game_date and self.current_date > last_game_date + timedelta(days=7):
-                self.end_of_season()
-                self._set_continue_feedback(False)
-                self._sim_early_return("past-last-game-plus-7: end_of_season ran")
+            if self._sim_handle_phase_or_season_end():
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
@@ -4200,216 +4461,10 @@ NHL League Office""",
                 self._set_continue_feedback(True, "Processing daily tasks...")
                 self._process_daily_maintenance()
             
-            # Get today's games - OPTIMIZED with early break and caching
-            todays_games = []
-            
-            # Use cached result if available (cache for current date)
-            cache_key = f"games_{self.current_date.isoformat()}"
-            if hasattr(self, '_schedule_cache') and cache_key in self._schedule_cache:
-                todays_games = self._schedule_cache[cache_key]
-            else:
-                # Create cache if it doesn't exist
-                if not hasattr(self, '_schedule_cache'):
-                    self._schedule_cache = {}
-                
-                # Process schedule with early termination
-                games_found = 0
-                max_games_per_day = 16  # NHL typically has max 16 games per day
-                
-                for item in self.league.schedule:
-                    # Early termination if we found enough games or past today's date
-                    if games_found >= max_games_per_day:
-                        break
-                        
-                    try:
-                        # Handle tuple format: (date, home_team, away_team) or (date, event_type, event_data)
-                        if isinstance(item, tuple) and len(item) >= 2:
-                            item_date = item[0]
-                            # Skip if date is past today (schedule is sorted)
-                            if hasattr(item_date, 'year') and item_date > self.current_date:
-                                break
-                            # Process if date matches today
-                            if item_date == self.current_date:
-                                # Only add if it's a game (not an NHL event)
-                                if len(item) >= 3 and item[1] != 'NHL_EVENT':
-                                    # Convert tuple to standardized dictionary format
-                                    game_dict = {
-                                        'date': item[0],
-                                        'home_team': item[1],
-                                        'away_team': item[2],
-                                        'event_type': 'GAME'
-                                    }
-                                    todays_games.append(game_dict)
-                                    games_found += 1
-                        # Handle dictionary format
-                        elif isinstance(item, dict):
-                            item_date = item.get('date')
-                            # Skip if date is past today
-                            if item_date and item_date > self.current_date:
-                                break
-                            # AHL (and any non-NHL league) games live on the
-                            # same schedule list but are NEVER day-simmed --
-                            # the minors get a lightweight generated ledger
-                            # (ahl_system), not game sims. Letting them into
-                            # todays_games burned the 16-game daily budget and
-                            # silently dropped real NHL games from the sim.
-                            if item.get('league', 'NHL') != 'NHL':
-                                continue
-                            # Playoff games live on the schedule for display
-                            # but are simmed through the playoff bracket --
-                            # never double-sim them here.
-                            if item.get('playoff'):
-                                continue
-                            # Process if date matches today
-                            if item_date == self.current_date and item.get('event_type') != 'NHL_EVENT':
-                                todays_games.append(item)
-                                games_found += 1
-                    except (AttributeError, TypeError, IndexError) as e:
-                        # Skip malformed schedule items
-                        continue
-                
-                # Cache the result for potential future use
-                self._schedule_cache[cache_key] = todays_games
-                
-                # Clean old cache entries to prevent memory bloat
-                if len(self._schedule_cache) > 7:  # Keep only last week
-                    oldest_key = min(self._schedule_cache.keys())
-                    del self._schedule_cache[oldest_key]
-            
-            # Game-day inbox bundle: pre-match presser + team talk +
-            # Watch/Quick choice as one interactive inbox message instead
-            # of modals. When it opens, the day waits for the user's pick.
-            # Preseason exhibitions skip the bundle -- they're quick-simmed
-            # quietly, like the real league treats September hockey.
-            _all_preseason = bool(todays_games) and all(
-                isinstance(g, dict) and g.get('preseason')
-                for g in todays_games)
-            if (not _resuming_after_bundle and not _all_preseason
-                    and self._maybe_open_game_day_bundle(todays_games)):
-                # Bundle opened: the day waits for the user's Watch/Quick
-                # pick. Dismiss the loading overlay so they can interact.
-                self._set_continue_feedback(False)
-                self._sim_early_return("game-day-bundle: waiting for user Watch/Quick pick")
+            todays_games = self._sim_collect_todays_games()
+            if self._sim_run_pregame_setup(todays_games,
+                                           _resuming_after_bundle):
                 return
-
-            # NHL Rule 6.1: every club must have 1C+2As before opening night.
-            # Runs once per phase -- at the first preseason game day AND the
-            # first regular-season game day. Preseason: AI clubs auto-repair,
-            # human club gets a non-blocking reminder. Regular season: the
-            # mandatory picker blocks the human GM until captains are named.
-            # A valid existing captain is never overwritten.
-            if todays_games:
-                _sy = getattr(getattr(self, 'league', None), 'season_year', None)
-                _phase = "preseason" if _all_preseason else "regular"
-                if (_sy is not None
-                        and getattr(self, '_captaincy_checked_phase', None)
-                        != (_sy, _phase)):
-                    self._captaincy_checked_phase = (_sy, _phase)
-                    _ut = getattr(self, 'user_team', None)
-                    # Fantasy-draft deferral ends here: the first game day
-                    # of preseason (or the regular season, if preseason was
-                    # skipped) is when captains get set.
-                    try:
-                        _dgm = getattr(self, 'game_manager', None)
-                        if _dgm is not None:
-                            _dgm._fantasy_draft_captaincy_deferred = False
-                            # Tell the captaincy check which phase we're in
-                            # so it knows whether to remind or block.
-                            _dgm._captaincy_check_phase = _phase
-                    except Exception:
-                        pass
-                    # NOTE (Item 7): the captaincy helpers live on
-                    # GameManager, but this is a HockeyManagerGUI method --
-                    # the old self._ensure_captaincy call here was dead
-                    # (AttributeError, swallowed by the except below), so
-                    # the opening-night check never ran. Route via the
-                    # game manager to make both paths live.
-                    _gm = getattr(self, 'game_manager', None)
-                    for _t in (getattr(getattr(self, 'league', None),
-                                       'teams', None) or []):
-                        try:
-                            if _gm is not None:
-                                _nc = _gm._opening_night_captaincy_check(
-                                    _t, _ut)
-                            else:
-                                _nc = None
-                            if _nc and _t is _ut:
-                                self.add_news(
-                                    f"© {_nc} has been named captain of the "
-                                    f"{getattr(_t, 'team_name', 'club')}.")
-                        except Exception:
-                            pass
-                    # Preseason reminder: if the human club still needs
-                    # captains, post a non-blocking inbox task. The
-                    # regular-season phase will enforce it with the picker.
-                    # Preseason reminder with visible timeline: the user sees
-                    # exactly how long they have before the picker blocks
-                    # at opening night.
-                    try:
-                        if (_phase == "preseason" and _gm is not None
-                                and getattr(_gm, "_captaincy_choice_pending",
-                                            False)):
-                            _days, _ddl = _gm.get_captaincy_deadline_info()
-                            if _days is not None and _ddl is not None:
-                                _when = (f"Opening night is in {_days} day"
-                                         f"{'s' if _days != 1 else ''} "
-                                         f"({_ddl.strftime('%b %d')})")
-                            else:
-                                _when = "before opening night"
-                            self.add_news(
-                                f"Ⓒ Preseason tasks: name your captain (C) and "
-                                f"two alternates (A) {_when}. "
-                                f"Open the roster to choose -- the picker "
-                                f"will block you at opening night if "
-                                f"it's still not done. You can also assign "
-                                f"jersey numbers from the roster.")
-                    except Exception:
-                        pass
-                    # Numbers finalized with the captaincy: freed favorites
-                    # get claimed unless the player started a legacy with
-                    # his current number. Old saves backfill retired
-                    # numbers first so nothing legal gets repaired away.
-                    try:
-                        import immortality as _im2
-                        for _t in (getattr(getattr(self, 'league', None),
-                                           'teams', None) or []):
-                            try:
-                                if (getattr(_t, 'league_name', '')
-                                        != "National Hockey League"):
-                                    continue
-                                _im2.seed_retired_numbers(_t)
-                                for _sw in _im2.finalize_team_numbers(_t, _sy):
-                                    if _t is _ut and _sw.get("reason") == "favorite":
-                                        _p = _sw.get("player")
-                                        self.add_news(
-                                            f"{getattr(_p, 'full_name', 'A player')} "
-                                            f"switches from No. {_sw.get('old')} to "
-                                            f"No. {_sw.get('new')} -- his favorite "
-                                            f"number freed up.")
-                            except Exception:
-                                continue
-                    except Exception:
-                        pass
-
-            # D5 follow-up: undecided staff renewal offers lapse at the
-            # first game day of the season (preseason or regular) -- the
-            # staffer walks to the free-agent pool. Once per season.
-            try:
-                _rsy = getattr(getattr(self, 'league', None),
-                               'season_year', None)
-                if (_rsy is not None
-                        and getattr(self, '_renewals_resolved_year', None)
-                        != _rsy):
-                    self._renewals_resolved_year = _rsy
-                    import staff_renewals as _srr
-                    for _rl in (_srr.resolve_pending_renewals(
-                            self.league) or []):
-                        try:
-                            self.add_news("🧑‍💼 " + str(_rl))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
 
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
