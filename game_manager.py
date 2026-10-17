@@ -8158,179 +8158,10 @@ NHL League Office""",
             # interpretable data -- drop them up front so every downstream
             # consumer can rely on the dict shape instead of each guarding
             # separately.
-            if notable_events is None:
-                notable_events = []
-            else:
-                notable_events = [e for e in notable_events
-                                  if isinstance(e, dict)]
-
-            # Snapshot everything the body below can mutate. If anything fails,
-            # the except restores every snapshot in place and re-raises, so
-            # the game is left in a clean re-processable state -- never a
-            # partial write (standings up, stats lost) that re-processing
-            # would double-count.
-            #
-            # Covered: league.standings rows (a body-created phantom row is
-            # deleted, not kept); the Team record mirrors; every rostered
-            # player's season stat sheet; the three-star player attributes
-            # stars.record_game_stars bumps (game_stars, playoff_stars,
-            # game7_stars, career_moments -- these live on the Player, not
-            # the stat sheet); media_system.media_events; news_log + the
-            # news_stories mirror; _record_game_result's game_results append,
-            # date/matchup index entries, and team.recent_results; and
-            # _grudge_marketed membership.
-            # The append-list/set snapshots below are unconditional:
-            # _record_game_result, media, news and grudge grading also run
-            # for preseason games, while standings/records/stat sheets/star
-            # attributes never change there.
-            _ABSENT = object()  # standings-row absent marker (phantom-row fix)
-            _MISSING = object()  # player-attr absent marker (star-attr fix)
-            _standings_snap = {}
-            _teamrec_snap = {}
-            _statline_snap = {}
-            _starattr_snap = {}
-            if not preseason:
-                for _st in (home_team, away_team):
-                    _srow = self.league.standings.get(_st.team_name, _ABSENT)
-                    if _srow is _ABSENT:
-                        # No row pre-call: if the body creates one via the
-                        # ensure-exists block, the rollback must delete it --
-                        # otherwise the phantom row survives and a re-process
-                        # double-counts the standings.
-                        _standings_snap[_st.team_name] = _ABSENT
-                    elif isinstance(_srow, dict):
-                        _standings_snap[_st.team_name] = dict(_srow)
-                    _teamrec_snap[_st.team_name] = {
-                        a: getattr(_st, a, 0) for a in (
-                            "wins", "losses", "ties", "ot_losses",
-                            "games_played", "win_streak",
-                            "longest_win_streak", "goals_for",
-                            "goals_against")}
-                for _st in (home_team, away_team):
-                    for _pl in getattr(_st, 'roster', []) or []:
-                        _pso = getattr(_pl, 'stats', None)
-                        if _pso is not None:
-                            try:
-                                _statline_snap[id(_pl)] = (
-                                    _pso, dict(vars(_pso)))
-                            except Exception:
-                                pass
-                        # Three-star counters live on the Player, not the stat
-                        # sheet -- and record_game_stars bumps them even for
-                        # players without a stat object -- so they get their
-                        # own snapshot (dict/list copied, scalars as-is, with
-                        # an absent marker so a body-created attr is deleted
-                        # on rollback rather than left behind).
-                        try:
-                            _sattrs = {}
-                            for _an in ("game_stars", "playoff_stars",
-                                        "game7_stars", "career_moments"):
-                                _v = getattr(_pl, _an, _MISSING)
-                                if _v is _MISSING:
-                                    _sattrs[_an] = (False, None)
-                                elif isinstance(_v, dict):
-                                    _sattrs[_an] = (True, dict(_v))
-                                elif isinstance(_v, list):
-                                    _sattrs[_an] = (True, list(_v))
-                                else:
-                                    _sattrs[_an] = (True, _v)
-                            _starattr_snap[id(_pl)] = (_pl, _sattrs)
-                        except Exception:
-                            pass
-            # -- append-list / set snapshots (preseason included; see above) --
-            _media_snap = None
-            try:
-                _ms = getattr(self, 'media_system', None)
-                _me = getattr(_ms, 'media_events', None)
-                if _ms is not None and isinstance(_me, list):
-                    _media_snap = (_me, len(_me))
-            except Exception:
-                _media_snap = None
-            _newslog_snap = None
-            try:
-                _nl = getattr(self, 'news_log', None)
-                if isinstance(_nl, list):
-                    # Full copy, not just a length: add_news front-trims the
-                    # log at NEWS_LOG_CAP, so a length alone cannot restore
-                    # the evicted head on rollback (same shape as the
-                    # news_stories mirror hole this backstop already fixed).
-                    _newslog_snap = (True, _nl, list(_nl))
-                else:
-                    _newslog_snap = (False, None, None)
-            except Exception:
-                _newslog_snap = None
-            _newsstories_snap = None
-            try:
-                _gm_ns = getattr(self, 'game_manager', None)
-                _nst = getattr(_gm_ns, 'news_stories', None)
-                if isinstance(_nst, list):
-                    # Full copy, not just a length: add_news front-trims the
-                    # mirror at NEWS_LOG_CAP, so a length alone cannot
-                    # restore the evicted head on rollback.
-                    _newsstories_snap = (True, _nst, list(_nst))
-                else:
-                    _newsstories_snap = (False, None, None)
-            except Exception:
-                _newsstories_snap = None
-            _gameresults_snap = None
-            _rbd_snap = None
-            _rbm_snap = None
-            try:
-                _grl = getattr(self, 'game_results', None)
-                if isinstance(_grl, list):
-                    _gameresults_snap = (_grl, len(_grl))
-                _rby_date = getattr(self, '_results_by_date', None)
-                _rby_match = getattr(self, '_results_by_matchup', None)
-                _idx_on = (isinstance(_grl, list)
-                           and isinstance(_rby_date, dict)
-                           and isinstance(_rby_match, dict)
-                           and getattr(self, '_results_index_src', None)
-                           is _grl)
-                if _idx_on:
-                    _rkey = self._result_date_key(game_date)
-                    _blen = None
-                    if _rkey is not None:
-                        _bkt = _rby_date.get(_rkey)
-                        if isinstance(_bkt, list):
-                            _blen = len(_bkt)
-                    # _blen None: no bucket pre-call, the body may create one.
-                    _rbd_snap = (_rkey, _blen)
-                    _mkey = (_rkey, id(home_team), id(away_team))
-                    if _mkey in _rby_match:
-                        _rbm_snap = (_mkey, True, _rby_match[_mkey])
-                    else:
-                        _rbm_snap = (_mkey, False, None)
-            except Exception:
-                _gameresults_snap = None
-                _rbd_snap = None
-                _rbm_snap = None
-            _recent_snap = {}
-            try:
-                for _st in (home_team, away_team):
-                    try:
-                        _rr = getattr(_st, 'recent_results', None)
-                        _recent_snap[getattr(_st, 'team_name', None)] = (
-                            _st, _rr if isinstance(_rr, list) else None,
-                            # Full copy, not just a length:
-                            # _record_game_result front-trims at 30 entries
-                            # (del rr[:-30]), so a length alone cannot
-                            # restore the evicted head on rollback once a
-                            # team has 30 entries.
-                            list(_rr) if isinstance(_rr, list) else None)
-                    except Exception:
-                        pass
-            except Exception:
-                _recent_snap = {}
-            _grudge_snap = None
-            try:
-                _gmset = getattr(self, '_grudge_marketed', None)
-                if isinstance(_gmset, set):
-                    _gkey = (getattr(home_team, 'team_name', None),
-                             getattr(away_team, 'team_name', None),
-                             str(game_date))
-                    _grudge_snap = (_gmset, _gkey, _gkey in _gmset)
-            except Exception:
-                _grudge_snap = None
+            (notable_events, _ABSENT, _MISSING, _standings_snap, _teamrec_snap,
+             _statline_snap, _starattr_snap, _media_snap, _newslog_snap, _newsstories_snap,
+             _gameresults_snap, _rbd_snap, _rbm_snap, _recent_snap, _grudge_snap) = self._snapshot_game_result_state(
+                game_date, home_team, away_team, notable_events, preseason)
 
             try:
                 # Update league standings (safely) -- never for preseason.
@@ -8378,6 +8209,192 @@ NHL League Office""",
                       f"{game_date}: {_psr_e}")
                 _tb_psr.print_exc()
                 raise
+
+    def _snapshot_game_result_state(self, game_date, home_team, away_team, notable_events, preseason):
+        """Snapshot all mutable state the result body can touch.
+
+        Pure move from _process_single_game_result (R21 chunk 4): normalizes notable_events, then snapshots standings
+        rows, team records, player stat sheets, three-star attributes,
+        media/news append-lists, the game-result index and the grudge set.
+        Returns (notable_events, _ABSENT, _MISSING, <12 snapshots>).
+        """
+        if notable_events is None:
+            notable_events = []
+        else:
+            notable_events = [e for e in notable_events
+                              if isinstance(e, dict)]
+
+        # Snapshot everything the body below can mutate. If anything fails,
+        # the except restores every snapshot in place and re-raises, so
+        # the game is left in a clean re-processable state -- never a
+        # partial write (standings up, stats lost) that re-processing
+        # would double-count.
+        #
+        # Covered: league.standings rows (a body-created phantom row is
+        # deleted, not kept); the Team record mirrors; every rostered
+        # player's season stat sheet; the three-star player attributes
+        # stars.record_game_stars bumps (game_stars, playoff_stars,
+        # game7_stars, career_moments -- these live on the Player, not
+        # the stat sheet); media_system.media_events; news_log + the
+        # news_stories mirror; _record_game_result's game_results append,
+        # date/matchup index entries, and team.recent_results; and
+        # _grudge_marketed membership.
+        # The append-list/set snapshots below are unconditional:
+        # _record_game_result, media, news and grudge grading also run
+        # for preseason games, while standings/records/stat sheets/star
+        # attributes never change there.
+        _ABSENT = object()  # standings-row absent marker (phantom-row fix)
+        _MISSING = object()  # player-attr absent marker (star-attr fix)
+        _standings_snap = {}
+        _teamrec_snap = {}
+        _statline_snap = {}
+        _starattr_snap = {}
+        if not preseason:
+            for _st in (home_team, away_team):
+                _srow = self.league.standings.get(_st.team_name, _ABSENT)
+                if _srow is _ABSENT:
+                    # No row pre-call: if the body creates one via the
+                    # ensure-exists block, the rollback must delete it --
+                    # otherwise the phantom row survives and a re-process
+                    # double-counts the standings.
+                    _standings_snap[_st.team_name] = _ABSENT
+                elif isinstance(_srow, dict):
+                    _standings_snap[_st.team_name] = dict(_srow)
+                _teamrec_snap[_st.team_name] = {
+                    a: getattr(_st, a, 0) for a in (
+                        "wins", "losses", "ties", "ot_losses",
+                        "games_played", "win_streak",
+                        "longest_win_streak", "goals_for",
+                        "goals_against")}
+            for _st in (home_team, away_team):
+                for _pl in getattr(_st, 'roster', []) or []:
+                    _pso = getattr(_pl, 'stats', None)
+                    if _pso is not None:
+                        try:
+                            _statline_snap[id(_pl)] = (
+                                _pso, dict(vars(_pso)))
+                        except Exception:
+                            pass
+                    # Three-star counters live on the Player, not the stat
+                    # sheet -- and record_game_stars bumps them even for
+                    # players without a stat object -- so they get their
+                    # own snapshot (dict/list copied, scalars as-is, with
+                    # an absent marker so a body-created attr is deleted
+                    # on rollback rather than left behind).
+                    try:
+                        _sattrs = {}
+                        for _an in ("game_stars", "playoff_stars",
+                                    "game7_stars", "career_moments"):
+                            _v = getattr(_pl, _an, _MISSING)
+                            if _v is _MISSING:
+                                _sattrs[_an] = (False, None)
+                            elif isinstance(_v, dict):
+                                _sattrs[_an] = (True, dict(_v))
+                            elif isinstance(_v, list):
+                                _sattrs[_an] = (True, list(_v))
+                            else:
+                                _sattrs[_an] = (True, _v)
+                        _starattr_snap[id(_pl)] = (_pl, _sattrs)
+                    except Exception:
+                        pass
+        # -- append-list / set snapshots (preseason included; see above) --
+        _media_snap = None
+        try:
+            _ms = getattr(self, 'media_system', None)
+            _me = getattr(_ms, 'media_events', None)
+            if _ms is not None and isinstance(_me, list):
+                _media_snap = (_me, len(_me))
+        except Exception:
+            _media_snap = None
+        _newslog_snap = None
+        try:
+            _nl = getattr(self, 'news_log', None)
+            if isinstance(_nl, list):
+                # Full copy, not just a length: add_news front-trims the
+                # log at NEWS_LOG_CAP, so a length alone cannot restore
+                # the evicted head on rollback (same shape as the
+                # news_stories mirror hole this backstop already fixed).
+                _newslog_snap = (True, _nl, list(_nl))
+            else:
+                _newslog_snap = (False, None, None)
+        except Exception:
+            _newslog_snap = None
+        _newsstories_snap = None
+        try:
+            _gm_ns = getattr(self, 'game_manager', None)
+            _nst = getattr(_gm_ns, 'news_stories', None)
+            if isinstance(_nst, list):
+                # Full copy, not just a length: add_news front-trims the
+                # mirror at NEWS_LOG_CAP, so a length alone cannot
+                # restore the evicted head on rollback.
+                _newsstories_snap = (True, _nst, list(_nst))
+            else:
+                _newsstories_snap = (False, None, None)
+        except Exception:
+            _newsstories_snap = None
+        _gameresults_snap = None
+        _rbd_snap = None
+        _rbm_snap = None
+        try:
+            _grl = getattr(self, 'game_results', None)
+            if isinstance(_grl, list):
+                _gameresults_snap = (_grl, len(_grl))
+            _rby_date = getattr(self, '_results_by_date', None)
+            _rby_match = getattr(self, '_results_by_matchup', None)
+            _idx_on = (isinstance(_grl, list)
+                       and isinstance(_rby_date, dict)
+                       and isinstance(_rby_match, dict)
+                       and getattr(self, '_results_index_src', None)
+                       is _grl)
+            if _idx_on:
+                _rkey = self._result_date_key(game_date)
+                _blen = None
+                if _rkey is not None:
+                    _bkt = _rby_date.get(_rkey)
+                    if isinstance(_bkt, list):
+                        _blen = len(_bkt)
+                # _blen None: no bucket pre-call, the body may create one.
+                _rbd_snap = (_rkey, _blen)
+                _mkey = (_rkey, id(home_team), id(away_team))
+                if _mkey in _rby_match:
+                    _rbm_snap = (_mkey, True, _rby_match[_mkey])
+                else:
+                    _rbm_snap = (_mkey, False, None)
+        except Exception:
+            _gameresults_snap = None
+            _rbd_snap = None
+            _rbm_snap = None
+        _recent_snap = {}
+        try:
+            for _st in (home_team, away_team):
+                try:
+                    _rr = getattr(_st, 'recent_results', None)
+                    _recent_snap[getattr(_st, 'team_name', None)] = (
+                        _st, _rr if isinstance(_rr, list) else None,
+                        # Full copy, not just a length:
+                        # _record_game_result front-trims at 30 entries
+                        # (del rr[:-30]), so a length alone cannot
+                        # restore the evicted head on rollback once a
+                        # team has 30 entries.
+                        list(_rr) if isinstance(_rr, list) else None)
+                except Exception:
+                    pass
+        except Exception:
+            _recent_snap = {}
+        _grudge_snap = None
+        try:
+            _gmset = getattr(self, '_grudge_marketed', None)
+            if isinstance(_gmset, set):
+                _gkey = (getattr(home_team, 'team_name', None),
+                         getattr(away_team, 'team_name', None),
+                         str(game_date))
+                _grudge_snap = (_gmset, _gkey, _gkey in _gmset)
+        except Exception:
+            _grudge_snap = None
+        return (notable_events, _ABSENT, _MISSING, _standings_snap,
+                _teamrec_snap, _statline_snap, _starattr_snap, _media_snap,
+                _newslog_snap, _newsstories_snap, _gameresults_snap, _rbd_snap,
+                _rbm_snap, _recent_snap, _grudge_snap)
 
     def _apply_game_result_body(self, game_date, home_team, away_team,
                                   winner, loser, scores, events,
