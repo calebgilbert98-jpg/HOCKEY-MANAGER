@@ -115,9 +115,13 @@ def _is_goalie(p):
 
 
 def _portrait_path(player_id):
-    """md5(player id) -> portrait file in web_ui/static/img/portraits."""
+    """md5(player id) -> portrait file in assets/web_portraits/.
+
+    (R17 2026-10-16: moved from web_ui/static/img/portraits/ when the dead
+    web_ui tree was archived; assets/ is bundled by puck_dynasty_native.spec
+    so portraits now work in the shipped build too.)"""
     try:
-        d = os.path.join(_REPO_ROOT, "web_ui", "static", "img", "portraits")
+        d = os.path.join(_REPO_ROOT, "assets", "web_portraits")
         files = sorted(
             f for f in os.listdir(d)
             if f.lower().endswith((".webp", ".png", ".jpg", ".jpeg")))

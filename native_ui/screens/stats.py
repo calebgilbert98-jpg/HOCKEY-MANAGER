@@ -37,7 +37,7 @@ def _league(game):
 
 def _clean_position(pos):
     try:
-        from web_ui.bridge import _clean_position as _cp
+        from native_ui.utils import _clean_position as _cp
         return _cp(pos)
     except Exception:
         pass
