@@ -4778,6 +4778,68 @@ NHL League Office""",
                 self.refresh_next_day_button()
             except Exception:
                 pass
+    def _decide_contract_offer(self, person, asking_price, extension, notify,
+        _clause_kind, _clause_size, _effective_salary):
+        """Accept / counter / reject decision for a contract offer.
+        
+        Extracted from handle_contract_offer (R21 god-object split);
+        behavior is intentionally unchanged. Every branch returns, so the
+        caller simply returns this helper's result."""
+        if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
+            # UFA consideration period (Muck 2026-10-02): no more instant
+            # signings. A qualifying UFA offer becomes a BID -- the player
+            # fields offers from every club for 3-7 days, then signs with
+            # the most appealing one per contract_appeal(). Extensions keep
+            # the instant path (they're re-signings, not market bids).
+            if not extension:
+                try:
+                    import ufa_consideration as _uc
+                    _cons = _uc.submit_ufa_offer(
+                        self, getattr(self, "league", None), person,
+                        getattr(self, "user_team", None),
+                        person.salary, person.contract_years,
+                        is_user=True,
+                        clause_kind=_clause_kind,
+                        clause_size=_clause_size)
+                    if _cons is not None:
+                        _uc.notify_consideration_started(
+                            self, person, person.salary,
+                            person.contract_years,
+                            int(_cons.get("days_left", 4) or 4))
+                        self._clear_offered_clause(person)
+                        return "consideration"
+                except Exception:
+                    pass
+            self._finalize_contract_signing(person, person.salary,
+                                            person.contract_years,
+                                            asking_price, extension)
+            self._ui_notify("contract_result", "accepted", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify,
+                                         clause_kind=_clause_kind,
+                                         clause_list_size=_clause_size)
+            self._clear_offered_clause(person)
+            return True
+        elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
+            # The clause offer travels WITH the counter: capture the staged
+            # terms into the inbox action and clear them here, so they stay
+            # single-use and can't leak into an unrelated later deal.
+            _ck, _cs = _clause_kind, _clause_size
+            self._clear_offered_clause(person)
+            self._ui_notify("contract_result", "counter", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify,
+                                         clause_kind=_ck,
+                                         clause_list_size=_cs)
+            return False
+        else: # Rejects if below 70%
+            self._ui_notify("contract_result", "rejected", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            self._clear_offered_clause(person)
+            return False
+
+
     def handle_contract_offer(self, person, extension=False, notify="popup"):
         # CBA: player bought out cannot re-sign with same team for 1 year
         if not extension:
@@ -4950,59 +5012,9 @@ NHL League Office""",
         if _demand >= 0.65 and _clause_kind == "none":
             asking_price = int(asking_price * 1.08)
 
-        if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
-            # UFA consideration period (Muck 2026-10-02): no more instant
-            # signings. A qualifying UFA offer becomes a BID -- the player
-            # fields offers from every club for 3-7 days, then signs with
-            # the most appealing one per contract_appeal(). Extensions keep
-            # the instant path (they're re-signings, not market bids).
-            if not extension:
-                try:
-                    import ufa_consideration as _uc
-                    _cons = _uc.submit_ufa_offer(
-                        self, getattr(self, "league", None), person,
-                        getattr(self, "user_team", None),
-                        person.salary, person.contract_years,
-                        is_user=True,
-                        clause_kind=_clause_kind,
-                        clause_size=_clause_size)
-                    if _cons is not None:
-                        _uc.notify_consideration_started(
-                            self, person, person.salary,
-                            person.contract_years,
-                            int(_cons.get("days_left", 4) or 4))
-                        self._clear_offered_clause(person)
-                        return "consideration"
-                except Exception:
-                    pass
-            self._finalize_contract_signing(person, person.salary,
-                                            person.contract_years,
-                                            asking_price, extension)
-            self._ui_notify("contract_result", "accepted", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify,
-                                         clause_kind=_clause_kind,
-                                         clause_list_size=_clause_size)
-            self._clear_offered_clause(person)
-            return True
-        elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
-            # The clause offer travels WITH the counter: capture the staged
-            # terms into the inbox action and clear them here, so they stay
-            # single-use and can't leak into an unrelated later deal.
-            _ck, _cs = _clause_kind, _clause_size
-            self._clear_offered_clause(person)
-            self._ui_notify("contract_result", "counter", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify,
-                                         clause_kind=_ck,
-                                         clause_list_size=_cs)
-            return False
-        else: # Rejects if below 70%
-            self._ui_notify("contract_result", "rejected", person, person.salary,
-                                         person.contract_years, asking_price,
-                                         extension, notify)
-            self._clear_offered_clause(person)
-            return False
+        return self._decide_contract_offer(
+            person, asking_price, extension, notify,
+            _clause_kind, _clause_size, _effective_salary)
 
 
     def _finalize_contract_signing(self, person, salary, years, asking_price,
@@ -6367,6 +6379,114 @@ NHL League Office""",
         except Exception:
             return False
 
+    def _handle_season_end_reentry(self, season_year):
+        """Season-end re-entry: the once-per-season guard already fired
+        this season year. Re-present the playoffs-mode choice card or
+        drive the playoff bracket (headless / bulk-sim paths), mirroring
+        the first-entry flow.
+        
+        Extracted from end_of_season (R21 god-object split);
+        behavior is intentionally unchanged."""
+        if self._playoffs_complete():
+            self._start_offseason()
+        elif getattr(self, '_headless_sim', False) and not getattr(
+                self, '_bulk_simming', False):
+            # Headless re-entry (Bot 1 Finding 2): the first-entry path
+            # parks the playoffs_mode card for a real user to answer,
+            # but a headless sim has no user -- re-presenting the card
+            # just re-parks it and the day never advances (11-day
+            # silent freeze). Drive the bracket to completion instead,
+            # mirroring the bulk-sim path, then roll to the offseason.
+            try:
+                self._simulate_playoffs_headless()
+            except Exception:
+                pass
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+            if self._playoffs_complete():
+                self._start_offseason()
+            else:
+                try:
+                    self.add_news(
+                        "Playoff bracket could not complete headless; "
+                        "day advance gated until resolved.")
+                except Exception:
+                    pass
+        elif getattr(self, '_bulk_simming', False):
+            # Bulk sim: drive the bracket to completion automatically.
+            self.open_playoffs_window()
+            w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            try:
+                if w is not None and w.winfo_exists():
+                    if not getattr(w, 'playoff_bracket', None):
+                        w._generate_bracket()
+                    w._simulate_all_playoffs()
+                else:
+                    # No GUI window (headless bulk sim): drive the
+                    # bracket directly. Added 2026-10-01 (playthrough
+                    # B2): without this the try block silently skipped,
+                    # _playoffs_complete() stayed False, and the season
+                    # stalled forever. Mirrors
+                    # PlayoffView._generate_bracket (league-attached
+                    # bracket) + the headless _run_games loop.
+                    self._simulate_playoffs_headless()
+                # Cup decided in bulk: send the awarding recap now.
+                try:
+                    self._maybe_send_cup_recap()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            if self._playoffs_complete():
+                self._start_offseason()
+        else:
+            # Re-entry with the choice deferred: re-present the card
+            # rather than opening the bracket (the user never chose).
+            # Playoffs actually in progress: focus the bracket.
+            _parked = False
+            try:
+                _sess = (getattr(self, "pending_sessions", None) or {}).get(
+                    "playoffs_mode") or {}
+                _dlg = (_sess.get("dialogs") or {}).get(
+                    "playoffs_mode_card") or {}
+                _parked = bool(_dlg.get("parked")) and not _dlg.get(
+                    "answered")
+            except Exception:
+                _parked = False
+            if _parked:
+                try:
+                    represent_dialog = importlib.import_module("popup_system").represent_dialog
+                    represent_dialog("playoffs_mode", "playoffs_mode_card",
+                                     parent=self)
+                except Exception:
+                    pass
+            elif getattr(self, '_playoffs_mode_deferred_year',
+                         None) == season_year:
+                # Native-UI defer (Dev 2): the user dismissed the
+                # synchronous choice dialog. Re-ask now rather than
+                # opening the bracket unanswered -- mirrors the Tk
+                # _parked re-present path above.
+                try:
+                    self._playoffs_mode_deferred_year = None
+                except Exception:
+                    pass
+                _interactive = self._ask_playoffs_mode_dialog()
+                if _interactive is None:
+                    try:
+                        self._playoffs_mode_deferred_year = season_year
+                    except Exception:
+                        pass
+                else:
+                    _playoffs_mode_answer(
+                        "playoffs_mode", "playoffs_mode_card",
+                        bool(_interactive), season_year=season_year)
+            else:
+                self.open_playoffs_window()
+        return
+
+
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
         # SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005): audit the
@@ -6385,103 +6505,7 @@ NHL League Office""",
         # completed playoff bracket to the offseason (soft-lock).
         season_year = getattr(getattr(self, 'league', None), 'season_year', None)
         if getattr(self, '_season_end_handled_year', None) == season_year:
-            if self._playoffs_complete():
-                self._start_offseason()
-            elif getattr(self, '_headless_sim', False) and not getattr(
-                    self, '_bulk_simming', False):
-                # Headless re-entry (Bot 1 Finding 2): the first-entry path
-                # parks the playoffs_mode card for a real user to answer,
-                # but a headless sim has no user -- re-presenting the card
-                # just re-parks it and the day never advances (11-day
-                # silent freeze). Drive the bracket to completion instead,
-                # mirroring the bulk-sim path, then roll to the offseason.
-                try:
-                    self._simulate_playoffs_headless()
-                except Exception:
-                    pass
-                try:
-                    self._maybe_send_cup_recap()
-                except Exception:
-                    pass
-                if self._playoffs_complete():
-                    self._start_offseason()
-                else:
-                    try:
-                        self.add_news(
-                            "Playoff bracket could not complete headless; "
-                            "day advance gated until resolved.")
-                    except Exception:
-                        pass
-            elif getattr(self, '_bulk_simming', False):
-                # Bulk sim: drive the bracket to completion automatically.
-                self.open_playoffs_window()
-                w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
-                try:
-                    if w is not None and w.winfo_exists():
-                        if not getattr(w, 'playoff_bracket', None):
-                            w._generate_bracket()
-                        w._simulate_all_playoffs()
-                    else:
-                        # No GUI window (headless bulk sim): drive the
-                        # bracket directly. Added 2026-10-01 (playthrough
-                        # B2): without this the try block silently skipped,
-                        # _playoffs_complete() stayed False, and the season
-                        # stalled forever. Mirrors
-                        # PlayoffView._generate_bracket (league-attached
-                        # bracket) + the headless _run_games loop.
-                        self._simulate_playoffs_headless()
-                    # Cup decided in bulk: send the awarding recap now.
-                    try:
-                        self._maybe_send_cup_recap()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                if self._playoffs_complete():
-                    self._start_offseason()
-            else:
-                # Re-entry with the choice deferred: re-present the card
-                # rather than opening the bracket (the user never chose).
-                # Playoffs actually in progress: focus the bracket.
-                _parked = False
-                try:
-                    _sess = (getattr(self, "pending_sessions", None) or {}).get(
-                        "playoffs_mode") or {}
-                    _dlg = (_sess.get("dialogs") or {}).get(
-                        "playoffs_mode_card") or {}
-                    _parked = bool(_dlg.get("parked")) and not _dlg.get(
-                        "answered")
-                except Exception:
-                    _parked = False
-                if _parked:
-                    try:
-                        represent_dialog = importlib.import_module("popup_system").represent_dialog
-                        represent_dialog("playoffs_mode", "playoffs_mode_card",
-                                         parent=self)
-                    except Exception:
-                        pass
-                elif getattr(self, '_playoffs_mode_deferred_year',
-                             None) == season_year:
-                    # Native-UI defer (Dev 2): the user dismissed the
-                    # synchronous choice dialog. Re-ask now rather than
-                    # opening the bracket unanswered -- mirrors the Tk
-                    # _parked re-present path above.
-                    try:
-                        self._playoffs_mode_deferred_year = None
-                    except Exception:
-                        pass
-                    _interactive = self._ask_playoffs_mode_dialog()
-                    if _interactive is None:
-                        try:
-                            self._playoffs_mode_deferred_year = season_year
-                        except Exception:
-                            pass
-                    else:
-                        _playoffs_mode_answer(
-                            "playoffs_mode", "playoffs_mode_card",
-                            bool(_interactive), season_year=season_year)
-                else:
-                    self.open_playoffs_window()
+            self._handle_season_end_reentry(season_year)
             return
         self._season_end_handled_year = season_year
 
