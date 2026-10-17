@@ -220,7 +220,7 @@ def _alumni_game(league: Any, home_name: str, away_name: str,
 def schedule_outdoor_games(league: Any, season_year: Optional[int] = None,
                            rng: Optional[random.Random] = None) -> List[Dict[str, Any]]:
     """Pick and stamp this season's outdoor games. Returns the infos."""
-    rng = rng or random.Random()
+    rng = rng or random
     try:
         if season_year is None:
             season_year = int(getattr(league, "season_year", date.today().year))

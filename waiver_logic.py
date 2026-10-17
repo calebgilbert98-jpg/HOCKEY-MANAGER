@@ -314,7 +314,7 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
     every AI roster to 23 (early October): exempt kids go straight to the
     AHL, eligible veterans go through the wire.
     """
-    r = rng or random.Random()
+    r = rng or random
     summary = {"waived": [], "assigned": [], "camp_cuts": bool(camp_cuts)}
 
     # The wire is closed in the June dead month -- one rulebook.
