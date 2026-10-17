@@ -38,12 +38,18 @@ jobs:
         # f-strings) fail to compile on the runner's 3.11, so PyInstaller's
         # modulegraph marks them "invalid" and silently drops them from the
         # bundle. This fails fast with the exact file and line instead.
+        # Scopes: native_ui/ + multiplayer/ (deferred imports in
+        # game_manager.py and native_ui/screens/multiplayer.py are bundled --
+        # R19) + root *.py.
         shell: bash
         run: |
           python - << 'PYEOF'
           import ast, glob, sys
           bad = []
-          for path in glob.glob('native_ui/**/*.py', recursive=True) + glob.glob('*.py'):
+          scanned = (glob.glob('native_ui/**/*.py', recursive=True)
+                     + glob.glob('multiplayer/**/*.py', recursive=True)
+                     + glob.glob('*.py'))
+          for path in scanned:
               src = open(path, encoding='utf-8').read()
               try:
                   compile(src, path, 'exec', ast.PyCF_ONLY_AST, True)
@@ -54,7 +60,7 @@ jobs:
               for b in bad:
                   print(f"::error::  {b}")
               sys.exit(1)
-          print(f"Python 3.11 syntax check passed.")
+          print(f"Python 3.11 syntax check passed ({len(scanned)} files).")
           PYEOF
 
       - name: Install dependencies
