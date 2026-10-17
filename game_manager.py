@@ -8334,160 +8334,10 @@ NHL League Office""",
 
             try:
                 # Update league standings (safely) -- never for preseason.
-                home_score, away_score = scores
-
-                if not preseason:
-                    # Ensure teams exist in standings
-                    if home_team.team_name not in self.league.standings:
-                        self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-                    if away_team.team_name not in self.league.standings:
-                        self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-
-                # Detect if game went to overtime/shootout (for OTL point)
-                # NHL rule: loser in OT/SO gets 1 point (OTL)
-                # Use sim_engine.period (notable_events dicts don't have 'period' key)
-                try:
-                    went_to_ot = sim_engine is not None and int(getattr(sim_engine, 'period', 3) or 3) > 3
-                except Exception:
-                    went_to_ot = False
-
-                # Grudge-week report card: marketed hard and fizzled gets called out.
-                try:
-                    _ufights = 0
-                    if sim_engine is not None:
-                        _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
-                    self._grudge_week_grade(game_date, home_team, away_team,
-                                            home_score, away_score, went_to_ot,
-                                            fights=_ufights)
-                except Exception:
-                    pass
-
-                # Winner gets 2 points (regular season only -- preseason
-                # exhibitions never touch the table).
-                if not preseason:
-                    self.league.standings[winner.team_name]['W'] += 1
-                    self.league.standings[winner.team_name]['Points'] += 2
-
-                    # Loser: OTL point if game went to OT/SO, else regulation loss
-                    if went_to_ot:
-                        self.league.standings[loser.team_name]['OTL'] += 1
-                        self.league.standings[loser.team_name]['Points'] += 1
-                    else:
-                        self.league.standings[loser.team_name]['L'] += 1
-
-                    # Sync the Team objects too (the dashboard, standings window,
-                    # and season-review builder read team.wins/losses/ot_losses/
-                    # games_played/goals_for/goals_against -- not league.standings).
-                    # The canonical Team.update_record() keeps streaks consistent.
-                    try:
-                        _wl, _ll = (home_team, away_team) if winner == home_team \
-                            else (away_team, home_team)
-                        _wl.update_record("WIN")
-                        _ll.update_record("LOSS", overtime=went_to_ot)
-                        home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
-                        home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
-                        away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
-                        away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
-                    except Exception:
-                        pass
-
-                # Store game result for later viewing
-                player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
-                game_stats = getattr(sim_engine, 'game_stats', None) or {}
-                game_result_team_stats = None
-                game_result_team_stats = self._build_game_stats_fallback(
-                    sim_engine, home_team, away_team, stats_from_events, game_stats)
-                game_result = {
-                    'date': game_date,
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'home_score': home_score,
-                    'away_score': away_score,
-                    'winner': winner,
-                    'events': events,
-                    'notable_events': notable_events,
-                    'player_ratings': player_ratings,
-                    'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
-                    'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
-                    # Per-team game stats: AdvGS has none of its own, so use the
-                    # aggregates built from the flattened per-player stats above.
-                    'team_stats': (game_result_team_stats
-                                   if game_result_team_stats
-                                   else getattr(sim_engine, 'team_stats', {})),
-                    'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
-                    'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
-                    # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
-                    'lines': self._snapshot_game_lines(home_team, away_team),
-                }
-                # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
-                # the game (integration read; missing data stays missing).
-                try:
-                    _toi, _fat = self._snapshot_game_toi_fatigue(
-                        sim_engine, home_team, away_team)
-                    game_result['player_toi'] = _toi
-                    game_result['player_fatigue'] = _fat
-                except Exception:
-                    pass
-
-                self._record_game_result(game_result)
-
-                # Three stars of the game (NHL media criteria) -- stamped on the
-                # result and recorded onto the players. Preseason names no stars.
-                try:
-                    import stars as _stars_mod
-                    _stars_mod.record_game_stars(game_result, home_team, away_team,
-                                                preseason=preseason,
-                                                game_date=game_date)
-                except Exception as _se:
-                    print(f"Three-stars error (non-fatal): {_se}")
-
-                # Generate media events for the game (if media system enabled).
-                # Best-effort: a plugin failure must never abort (or partially
-                # roll back) an already-decided game.
-                if hasattr(self, 'media_system') and self.media_system:
-                    try:
-                        self.media_system.process_game_result(game_result)
-                    except Exception as _ms_e:
-                        print(f"Media system error (non-fatal, game kept): {_ms_e}")
-
-                # Update player stats from game events
-                # Records: goals, assists, shots, saves, PIM
-                # (Skipped when the sim engine already updated player.stats itself.)
-                self._apply_stats_from_events(
-                    notable_events, home_team, away_team, sim_engine,
-                    stats_from_events, game_stats, winner, home_score,
-                    away_score, preseason)
-
-                # Strip the internal _def_roll bookkeeping (used above to sync
-                # season totals with the per-game box score) before storing.
-                try:
-                    for _gs in game_stats.values():
-                        if isinstance(_gs, dict):
-                            _gs.pop("_def_roll", None)
-                except Exception:
-                    pass
-
-                # Update news log for user team games
-                if self.user_team in (home_team, away_team):
-                    opponent = away_team if self.user_team == home_team else home_team
-                    result = "won" if (winner == self.user_team) else "lost"
-                    # Format score from user team perspective (user score first)
-                    if self.user_team == home_team:
-                        user_score = home_score
-                        opp_score = away_score
-                    else:
-                        user_score = away_score
-                        opp_score = home_score
-
-                    self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
-
-                    # Generate post-game emails for user team games
-                    # Post-game emails are best-effort: a failure here must never
-                    # unwind an already-recorded game.
-                    try:
-                        self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
-                    except Exception as _pge_e:
-                        print(f"Post-game emails error (non-fatal, game kept): {_pge_e}")
+                self._apply_game_result_body(
+                    game_date, home_team, away_team, winner, loser, scores,
+                    events, notable_events, sim_engine, stats_from_events,
+                    preseason)
 
             except Exception as _psr_e:
                 # Roll back every mutation the body above can make, in place
@@ -8514,183 +8364,12 @@ NHL League Office""",
                 # step, so no later failure can orphan them. In-body
                 # best-effort blocks (stars/media/emails) that fail on their
                 # own never trigger this rollback by design.
-                try:
-                    for _tn, _srow in _standings_snap.items():
-                        if _srow is _ABSENT:
-                            # Phantom row: the body created it via the
-                            # ensure-exists block; delete it so a re-process
-                            # starts from no row (never double-counts).
-                            try:
-                                if isinstance(
-                                        self.league.standings.get(_tn), dict):
-                                    del self.league.standings[_tn]
-                            except Exception:
-                                pass
-                        elif isinstance(_srow, dict):
-                            _live = self.league.standings.get(_tn)
-                            if isinstance(_live, dict):
-                                _live.clear()
-                                _live.update(_srow)
-                    for _tn, _rec in _teamrec_snap.items():
-                        _tm = (home_team if
-                               getattr(home_team, 'team_name', None) == _tn
-                               else away_team)
-                        for _a, _v in _rec.items():
-                            try:
-                                setattr(_tm, _a, _v)
-                            except Exception:
-                                pass
-                    for _pso, _sv in _statline_snap.values():
-                        try:
-                            vars(_pso).clear()
-                            vars(_pso).update(_sv)
-                        except Exception:
-                            pass
-                    for _pl, _sattrs in _starattr_snap.values():
-                        for _an, (_present, _val) in _sattrs.items():
-                            try:
-                                if not _present:
-                                    # Created by the failed body: remove it.
-                                    try:
-                                        delattr(_pl, _an)
-                                    except Exception:
-                                        pass
-                                else:
-                                    _cur = getattr(_pl, _an, _MISSING)
-                                    if isinstance(_val, dict) and isinstance(
-                                            _cur, dict):
-                                        _cur.clear()
-                                        _cur.update(_val)
-                                    elif isinstance(_val, list) and isinstance(
-                                            _cur, list):
-                                        _cur[:] = _val
-                                    else:
-                                        setattr(_pl, _an, _val)
-                            except Exception:
-                                pass
-                    if _media_snap is not None:
-                        try:
-                            _me, _melen = _media_snap
-                            _ms_live = getattr(self, 'media_system', None)
-                            _me_live = getattr(_ms_live, 'media_events', None)
-                            if not isinstance(_me_live, list):
-                                _me_live = _me
-                            del _me_live[_melen:]
-                        except Exception:
-                            pass
-                    if _newslog_snap is not None:
-                        try:
-                            _nl_had, _nl, _nl_copy = _newslog_snap
-                            _nl_live = getattr(self, 'news_log', None)
-                            if _nl_had and isinstance(_nl_live, list):
-                                # Slice-restore, not length-truncate: the
-                                # failed body may have front-trimmed the log
-                                # at NEWS_LOG_CAP, so a length alone cannot
-                                # restore the evicted head. Slice assignment
-                                # keeps the list's object identity for
-                                # aliases.
-                                _nl_live[:] = _nl_copy
-                            elif not _nl_had:
-                                # The failed body created the log: remove it
-                                # so no phantom list survives.
-                                try:
-                                    if isinstance(getattr(
-                                            self, 'news_log', None), list):
-                                        delattr(self, 'news_log')
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    if _newsstories_snap is not None:
-                        try:
-                            _ns_had, _nst, _ns_copy = _newsstories_snap
-                            _gm_live = getattr(self, 'game_manager', None)
-                            _nst_live = getattr(
-                                _gm_live, 'news_stories', None)
-                            if _ns_had and isinstance(_nst_live, list):
-                                _nst_live[:] = _ns_copy
-                            elif not _ns_had and _gm_live is not None:
-                                # The failed body created the mirror: remove
-                                # it so no phantom list survives.
-                                try:
-                                    if isinstance(getattr(
-                                            _gm_live, 'news_stories', None),
-                                            list):
-                                        delattr(_gm_live, 'news_stories')
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    if _gameresults_snap is not None:
-                        try:
-                            _grl, _grlen = _gameresults_snap
-                            _grl_live = getattr(self, 'game_results', None)
-                            if not isinstance(_grl_live, list):
-                                _grl_live = _grl
-                            del _grl_live[_grlen:]
-                        except Exception:
-                            pass
-                    if _rbd_snap is not None:
-                        try:
-                            _rbk, _rblen = _rbd_snap
-                            _rbd_live = getattr(
-                                self, '_results_by_date', None)
-                            if isinstance(_rbd_live, dict) \
-                                    and _rbk is not None:
-                                if _rblen is None:
-                                    # No bucket pre-call: drop the body-made one.
-                                    _rbd_live.pop(_rbk, None)
-                                else:
-                                    _bkt_live = _rbd_live.get(_rbk)
-                                    if isinstance(_bkt_live, list):
-                                        del _bkt_live[_rblen:]
-                        except Exception:
-                            pass
-                    if _rbm_snap is not None:
-                        try:
-                            _mbk, _mb_had, _mb_old = _rbm_snap
-                            _rbm_live = getattr(
-                                self, '_results_by_matchup', None)
-                            if isinstance(_rbm_live, dict):
-                                if _mb_had:
-                                    _rbm_live[_mbk] = _mb_old
-                                else:
-                                    _rbm_live.pop(_mbk, None)
-                        except Exception:
-                            pass
-                    for _tn, _rrt in _recent_snap.items():
-                        try:
-                            _tm, _rr, _rrcopy = _rrt
-                            _rr_live = getattr(_tm, 'recent_results', None)
-                            if _rr is None:
-                                # No list pre-call: drop any list the body made.
-                                if isinstance(_rr_live, list):
-                                    try:
-                                        delattr(_tm, 'recent_results')
-                                    except Exception:
-                                        pass
-                            elif isinstance(_rr_live, list):
-                                # Slice-restore, not length-truncate: the
-                                # failed body may have front-trimmed at 30
-                                # entries, so a length alone cannot restore
-                                # the evicted head. Slice assignment keeps
-                                # the list's object identity for aliases.
-                                _rr_live[:] = _rrcopy
-                        except Exception:
-                            pass
-                    if _grudge_snap is not None:
-                        try:
-                            _gs, _gk, _ghad = _grudge_snap
-                            _gs_live = getattr(self, '_grudge_marketed', None)
-                            if _gs_live is _gs and isinstance(_gs_live, set):
-                                if _ghad:
-                                    _gs_live.add(_gk)
-                                else:
-                                    _gs_live.discard(_gk)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                self._rollback_game_result_snapshots(
+                    home_team, away_team, _ABSENT, _MISSING, _standings_snap,
+                    _teamrec_snap, _statline_snap, _starattr_snap,
+                    _media_snap, _newslog_snap, _newsstories_snap,
+                    _gameresults_snap, _rbd_snap, _rbm_snap, _recent_snap,
+                    _grudge_snap)
                 import traceback as _tb_psr
                 print(f"CRITICAL: _process_single_game_result failed; "
                       f"standings/stats rolled back for "
@@ -8699,6 +8378,364 @@ NHL League Office""",
                       f"{game_date}: {_psr_e}")
                 _tb_psr.print_exc()
                 raise
+
+    def _apply_game_result_body(self, game_date, home_team, away_team,
+                                  winner, loser, scores, events,
+                                  notable_events, sim_engine,
+                                  stats_from_events, preseason):
+        """Apply the body of a single game result (R21 split).
+
+        Pure move of the outer try body out of
+        _process_single_game_result: standings update / OT detection /
+        grudge grading / team record sync / game_result dict build /
+        TOI-fatigue snapshot / _record_game_result / three stars / media
+        system / _apply_stats_from_events call / _def_roll strip /
+        user-team news + post-game emails. All writes are in-place;
+        no return value.
+        """
+        home_score, away_score = scores
+
+        if not preseason:
+            # Ensure teams exist in standings
+            if home_team.team_name not in self.league.standings:
+                self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+            if away_team.team_name not in self.league.standings:
+                self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+
+        # Detect if game went to overtime/shootout (for OTL point)
+        # NHL rule: loser in OT/SO gets 1 point (OTL)
+        # Use sim_engine.period (notable_events dicts don't have 'period' key)
+        try:
+            went_to_ot = sim_engine is not None and int(getattr(sim_engine, 'period', 3) or 3) > 3
+        except Exception:
+            went_to_ot = False
+
+        # Grudge-week report card: marketed hard and fizzled gets called out.
+        try:
+            _ufights = 0
+            if sim_engine is not None:
+                _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
+            self._grudge_week_grade(game_date, home_team, away_team,
+                                    home_score, away_score, went_to_ot,
+                                    fights=_ufights)
+        except Exception:
+            pass
+
+        # Winner gets 2 points (regular season only -- preseason
+        # exhibitions never touch the table).
+        if not preseason:
+            self.league.standings[winner.team_name]['W'] += 1
+            self.league.standings[winner.team_name]['Points'] += 2
+
+            # Loser: OTL point if game went to OT/SO, else regulation loss
+            if went_to_ot:
+                self.league.standings[loser.team_name]['OTL'] += 1
+                self.league.standings[loser.team_name]['Points'] += 1
+            else:
+                self.league.standings[loser.team_name]['L'] += 1
+
+            # Sync the Team objects too (the dashboard, standings window,
+            # and season-review builder read team.wins/losses/ot_losses/
+            # games_played/goals_for/goals_against -- not league.standings).
+            # The canonical Team.update_record() keeps streaks consistent.
+            try:
+                _wl, _ll = (home_team, away_team) if winner == home_team \
+                    else (away_team, home_team)
+                _wl.update_record("WIN")
+                _ll.update_record("LOSS", overtime=went_to_ot)
+                home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+                home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+                away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+                away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+            except Exception:
+                pass
+
+        # Store game result for later viewing
+        player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
+        game_stats = getattr(sim_engine, 'game_stats', None) or {}
+        game_result_team_stats = None
+        game_result_team_stats = self._build_game_stats_fallback(
+            sim_engine, home_team, away_team, stats_from_events, game_stats)
+        game_result = {
+            'date': game_date,
+            'home_team': home_team,
+            'away_team': away_team,
+            'home_score': home_score,
+            'away_score': away_score,
+            'winner': winner,
+            'events': events,
+            'notable_events': notable_events,
+            'player_ratings': player_ratings,
+            'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
+            'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
+            # Per-team game stats: AdvGS has none of its own, so use the
+            # aggregates built from the flattened per-player stats above.
+            'team_stats': (game_result_team_stats
+                           if game_result_team_stats
+                           else getattr(sim_engine, 'team_stats', {})),
+            'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
+            'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
+            # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
+            'lines': self._snapshot_game_lines(home_team, away_team),
+        }
+        # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
+        # the game (integration read; missing data stays missing).
+        try:
+            _toi, _fat = self._snapshot_game_toi_fatigue(
+                sim_engine, home_team, away_team)
+            game_result['player_toi'] = _toi
+            game_result['player_fatigue'] = _fat
+        except Exception:
+            pass
+
+        self._record_game_result(game_result)
+
+        # Three stars of the game (NHL media criteria) -- stamped on the
+        # result and recorded onto the players. Preseason names no stars.
+        try:
+            import stars as _stars_mod
+            _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                        preseason=preseason,
+                                        game_date=game_date)
+        except Exception as _se:
+            print(f"Three-stars error (non-fatal): {_se}")
+
+        # Generate media events for the game (if media system enabled).
+        # Best-effort: a plugin failure must never abort (or partially
+        # roll back) an already-decided game.
+        if hasattr(self, 'media_system') and self.media_system:
+            try:
+                self.media_system.process_game_result(game_result)
+            except Exception as _ms_e:
+                print(f"Media system error (non-fatal, game kept): {_ms_e}")
+
+        # Update player stats from game events
+        # Records: goals, assists, shots, saves, PIM
+        # (Skipped when the sim engine already updated player.stats itself.)
+        self._apply_stats_from_events(
+            notable_events, home_team, away_team, sim_engine,
+            stats_from_events, game_stats, winner, home_score,
+            away_score, preseason)
+
+        # Strip the internal _def_roll bookkeeping (used above to sync
+        # season totals with the per-game box score) before storing.
+        try:
+            for _gs in game_stats.values():
+                if isinstance(_gs, dict):
+                    _gs.pop("_def_roll", None)
+        except Exception:
+            pass
+
+        # Update news log for user team games
+        if self.user_team in (home_team, away_team):
+            opponent = away_team if self.user_team == home_team else home_team
+            result = "won" if (winner == self.user_team) else "lost"
+            # Format score from user team perspective (user score first)
+            if self.user_team == home_team:
+                user_score = home_score
+                opp_score = away_score
+            else:
+                user_score = away_score
+                opp_score = home_score
+
+            self.add_news(f"Your team {result} {user_score}-{opp_score} against {opponent.team_name}.")
+
+            # Generate post-game emails for user team games
+            # Post-game emails are best-effort: a failure here must never
+            # unwind an already-recorded game.
+            try:
+                self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
+            except Exception as _pge_e:
+                print(f"Post-game emails error (non-fatal, game kept): {_pge_e}")
+
+    def _rollback_game_result_snapshots(self, home_team, away_team,
+                                          _ABSENT, _MISSING,
+                                          _standings_snap, _teamrec_snap,
+                                          _statline_snap, _starattr_snap,
+                                          _media_snap, _newslog_snap,
+                                          _newsstories_snap,
+                                          _gameresults_snap, _rbd_snap,
+                                          _rbm_snap, _recent_snap,
+                                          _grudge_snap):
+        """Roll back game-result mutations in place (R21 split)."""
+        try:
+            for _tn, _srow in _standings_snap.items():
+                if _srow is _ABSENT:
+                    # Phantom row: the body created it via the
+                    # ensure-exists block; delete it so a re-process
+                    # starts from no row (never double-counts).
+                    try:
+                        if isinstance(
+                                self.league.standings.get(_tn), dict):
+                            del self.league.standings[_tn]
+                    except Exception:
+                        pass
+                elif isinstance(_srow, dict):
+                    _live = self.league.standings.get(_tn)
+                    if isinstance(_live, dict):
+                        _live.clear()
+                        _live.update(_srow)
+            for _tn, _rec in _teamrec_snap.items():
+                _tm = (home_team if
+                       getattr(home_team, 'team_name', None) == _tn
+                       else away_team)
+                for _a, _v in _rec.items():
+                    try:
+                        setattr(_tm, _a, _v)
+                    except Exception:
+                        pass
+            for _pso, _sv in _statline_snap.values():
+                try:
+                    vars(_pso).clear()
+                    vars(_pso).update(_sv)
+                except Exception:
+                    pass
+            for _pl, _sattrs in _starattr_snap.values():
+                for _an, (_present, _val) in _sattrs.items():
+                    try:
+                        if not _present:
+                            # Created by the failed body: remove it.
+                            try:
+                                delattr(_pl, _an)
+                            except Exception:
+                                pass
+                        else:
+                            _cur = getattr(_pl, _an, _MISSING)
+                            if isinstance(_val, dict) and isinstance(
+                                    _cur, dict):
+                                _cur.clear()
+                                _cur.update(_val)
+                            elif isinstance(_val, list) and isinstance(
+                                    _cur, list):
+                                _cur[:] = _val
+                            else:
+                                setattr(_pl, _an, _val)
+                    except Exception:
+                        pass
+            if _media_snap is not None:
+                try:
+                    _me, _melen = _media_snap
+                    _ms_live = getattr(self, 'media_system', None)
+                    _me_live = getattr(_ms_live, 'media_events', None)
+                    if not isinstance(_me_live, list):
+                        _me_live = _me
+                    del _me_live[_melen:]
+                except Exception:
+                    pass
+            if _newslog_snap is not None:
+                try:
+                    _nl_had, _nl, _nl_copy = _newslog_snap
+                    _nl_live = getattr(self, 'news_log', None)
+                    if _nl_had and isinstance(_nl_live, list):
+                        # Slice-restore, not length-truncate: the
+                        # failed body may have front-trimmed the log
+                        # at NEWS_LOG_CAP, so a length alone cannot
+                        # restore the evicted head. Slice assignment
+                        # keeps the list's object identity for
+                        # aliases.
+                        _nl_live[:] = _nl_copy
+                    elif not _nl_had:
+                        # The failed body created the log: remove it
+                        # so no phantom list survives.
+                        try:
+                            if isinstance(getattr(
+                                    self, 'news_log', None), list):
+                                delattr(self, 'news_log')
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if _newsstories_snap is not None:
+                try:
+                    _ns_had, _nst, _ns_copy = _newsstories_snap
+                    _gm_live = getattr(self, 'game_manager', None)
+                    _nst_live = getattr(
+                        _gm_live, 'news_stories', None)
+                    if _ns_had and isinstance(_nst_live, list):
+                        _nst_live[:] = _ns_copy
+                    elif not _ns_had and _gm_live is not None:
+                        # The failed body created the mirror: remove
+                        # it so no phantom list survives.
+                        try:
+                            if isinstance(getattr(
+                                    _gm_live, 'news_stories', None),
+                                    list):
+                                delattr(_gm_live, 'news_stories')
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if _gameresults_snap is not None:
+                try:
+                    _grl, _grlen = _gameresults_snap
+                    _grl_live = getattr(self, 'game_results', None)
+                    if not isinstance(_grl_live, list):
+                        _grl_live = _grl
+                    del _grl_live[_grlen:]
+                except Exception:
+                    pass
+            if _rbd_snap is not None:
+                try:
+                    _rbk, _rblen = _rbd_snap
+                    _rbd_live = getattr(
+                        self, '_results_by_date', None)
+                    if isinstance(_rbd_live, dict) \
+                            and _rbk is not None:
+                        if _rblen is None:
+                            # No bucket pre-call: drop the body-made one.
+                            _rbd_live.pop(_rbk, None)
+                        else:
+                            _bkt_live = _rbd_live.get(_rbk)
+                            if isinstance(_bkt_live, list):
+                                del _bkt_live[_rblen:]
+                except Exception:
+                    pass
+            if _rbm_snap is not None:
+                try:
+                    _mbk, _mb_had, _mb_old = _rbm_snap
+                    _rbm_live = getattr(
+                        self, '_results_by_matchup', None)
+                    if isinstance(_rbm_live, dict):
+                        if _mb_had:
+                            _rbm_live[_mbk] = _mb_old
+                        else:
+                            _rbm_live.pop(_mbk, None)
+                except Exception:
+                    pass
+            for _tn, _rrt in _recent_snap.items():
+                try:
+                    _tm, _rr, _rrcopy = _rrt
+                    _rr_live = getattr(_tm, 'recent_results', None)
+                    if _rr is None:
+                        # No list pre-call: drop any list the body made.
+                        if isinstance(_rr_live, list):
+                            try:
+                                delattr(_tm, 'recent_results')
+                            except Exception:
+                                pass
+                    elif isinstance(_rr_live, list):
+                        # Slice-restore, not length-truncate: the
+                        # failed body may have front-trimmed at 30
+                        # entries, so a length alone cannot restore
+                        # the evicted head. Slice assignment keeps
+                        # the list's object identity for aliases.
+                        _rr_live[:] = _rrcopy
+                except Exception:
+                    pass
+            if _grudge_snap is not None:
+                try:
+                    _gs, _gk, _ghad = _grudge_snap
+                    _gs_live = getattr(self, '_grudge_marketed', None)
+                    if _gs_live is _gs and isinstance(_gs_live, set):
+                        if _ghad:
+                            _gs_live.add(_gk)
+                        else:
+                            _gs_live.discard(_gk)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 
     def _build_game_stats_fallback(self, sim_engine, home_team, away_team,
                                      stats_from_events, game_stats):

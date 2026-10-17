@@ -16,7 +16,9 @@ REPO = Path(__file__).resolve().parent.parent
 # Methods already split by R21 chunks; each must stay at/below 200 lines.
 COMPLETED = {
     "game_manager.py": ["end_of_season", "handle_contract_offer",
-                        "_build_game_stats_fallback", "_apply_stats_from_events"],
+                        "_build_game_stats_fallback", "_apply_stats_from_events",
+                        "_apply_game_result_body",
+                        "_rollback_game_result_snapshots"],
     "simulation.py": [],
 }
 
