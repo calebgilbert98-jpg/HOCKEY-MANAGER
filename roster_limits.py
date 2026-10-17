@@ -705,7 +705,7 @@ def make_emergency_filler(position, rng=None, team=None):
     construction; never a backdoor for cheap talent. When `team` is
     given, the filler is assigned to it (team back-pointer guaranteed)."""
     from game_classes import Player, PlayerPosition, Contract
-    rng = rng or random.Random()
+    rng = rng or random
     pos = position
     if isinstance(position, str):
         try:
@@ -754,7 +754,7 @@ def summon_emergency_fillers(team, rng=None):
     summoned. Safe to call when there's no shortfall (no-op)."""
     summoned = []
     try:
-        rng = rng or random.Random()
+        rng = rng or random
         sk_need, go_need = lineup_shortfall(team)
         if sk_need <= 0 and go_need <= 0:
             return summoned
@@ -1269,7 +1269,7 @@ def ai_roster_compliance(team, league=None, rng=None):
     unneeded fillers. Never raises; returns a dict of what it did."""
     done = {"demoted": 0, "summoned": 0, "released": 0}
     try:
-        rng = rng or random.Random()
+        rng = rng or random
         roster = getattr(team, "roster", None)
         ahl = getattr(team, "ahl_roster", None)
         if roster is None or ahl is None:

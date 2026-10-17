@@ -71,6 +71,18 @@ def _boot_and_digest(seed):
         _np.random.seed(seed)
     except Exception:
         pass
+    # Serial-boot isolation: the module-level player_id_counter is NOT
+    # reset by reseeding, so a second boot in the same process would hand
+    # out different ids. Player.__hash__/__eq__ are id-based, so id shifts
+    # can reorder hash-ordered iteration and perturb RNG consumption
+    # (proven: day-7 RNG diverged without this reset, matched with it).
+    # Each boot is an independent world: restart ids from 0.
+    try:
+        import itertools as _it
+        import game_classes as _gc
+        _gc.player_id_counter = _it.count()
+    except Exception:
+        pass
     from game_manager import GameManager
 
     buf = io.StringIO()
@@ -100,12 +112,6 @@ def _boot_and_digest(seed):
     return hashlib.sha256(blob.encode()).hexdigest(), final_date, team_games
 
 
-@pytest.mark.skip(
-    reason="BLOCKED: engine sim-day nondeterminism -- two identical seeded "
-    "boots produce different standings after the first regular-season games "
-    "(days 21-25). DB generation and fantasy draft are deterministic (verified "
-    "via checkpoint digests); the divergence is in game simulation. See "
-    "pipeline log 2026-10-16. Unskip when the engine is fixed.")
 def test_sim_day_determinism_fixed_seed_identical_standings_digest():
     """I1 'sim-day determinism': fixed seed -> identical standings digest."""
     d1, date1, games1 = _boot_and_digest(_R16B_SEED)
