@@ -4,8 +4,8 @@ As R21 extracts helpers out of the god methods in game_manager.py /
 simulation.py, this test pins the completed methods at <=200 lines and
 asserts the total count of >200-line methods never grows again.
 
-Baseline (2026-10-17, after the end_of_season + handle_contract_offer
-extractions): game_manager.py has 11 methods >200 lines, simulation.py has 6.
+Baseline (2026-10-17, after the _process_single_game_result snapshot-preamble
+extraction): game_manager.py has 10 methods >200 lines, simulation.py has 6.
 Update the pinned baselines as further R21 chunks land.
 """
 import ast
@@ -18,13 +18,15 @@ COMPLETED = {
     "game_manager.py": ["end_of_season", "handle_contract_offer",
                         "_build_game_stats_fallback", "_apply_stats_from_events",
                         "_apply_game_result_body",
-                        "_rollback_game_result_snapshots"],
+                        "_rollback_game_result_snapshots",
+                        "_process_single_game_result",
+                        "_snapshot_game_result_state"],
     "simulation.py": [],
 }
 
 # Pinned counts of methods still >200 lines (shrink as R21 progresses).
 BASELINE_OVER_200 = {
-    "game_manager.py": 11,
+    "game_manager.py": 10,
     "simulation.py": 6,
 }
 
